@@ -45,16 +45,24 @@ export interface ContributionRecord {
 
 export interface CashBoxRecord {
   id?: string;
+  categoryId?: string;
   name: string;
   type: string;
+  initialBalance?: number;
   currentBalance: number;
+  totalContributions?: number;
+  totalWithdrawals?: number;
+  totalYield?: number;
   cdiPercentage: number;
+  annualRateOverride?: number;
+  lastYieldCalculationAt?: string;
   createdAt: string;
+  updatedAt?: string;
   active: boolean;
   movements?: CashBoxMovementRecord[];
 }
 
-export type CashBoxMovementType = "DEPOSITO" | "RESGATE" | "RENDIMENTO";
+export type CashBoxMovementType = "DEPOSITO" | "RESGATE" | "RENDIMENTO" | "contribution" | "withdrawal" | "yield" | "adjustment";
 
 export interface CashBoxMovementRecord {
   id?: string;

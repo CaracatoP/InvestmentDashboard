@@ -10,6 +10,8 @@ import { goalsRoutes } from "./goals.routes";
 import { historyRoutes } from "./history.routes";
 import { projectionsRoutes } from "./projections.routes";
 import { settingsRoutes } from "./settings.routes";
+import { marketRoutes } from "./market.routes";
+import { cdiRoutes } from "./cdi.routes";
 
 export const apiRoutes = Router();
 
@@ -19,8 +21,11 @@ apiRoutes.use("/operations", operationsRoutes);
 apiRoutes.use("/dividends", dividendsRoutes);
 apiRoutes.use("/contributions", contributionsRoutes);
 apiRoutes.use("/cash-boxes", cashBoxesRoutes);
+apiRoutes.use("/cashboxes", cashBoxesRoutes);
 apiRoutes.use("/goals", goalsRoutes);
 apiRoutes.use("/projections", projectionsRoutes);
 apiRoutes.use("/calendar", calendarRoutes);
 apiRoutes.use("/history", historyRoutes);
 apiRoutes.use("/settings", settingsRoutes);
+apiRoutes.use("/market", marketRoutes);
+apiRoutes.use("/cdi", cdiRoutes);

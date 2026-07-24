@@ -8,6 +8,10 @@ export interface AssetRecord {
   currency: string;
   active: boolean;
   createdAt?: string | Date;
+  lastPrice?: number;
+  lastPriceAt?: string | Date;
+  priceSource?: string;
+  priceStatus?: string;
 }
 
 export interface OperationRecord {
@@ -27,10 +31,43 @@ export interface DividendRecord {
   id?: string;
   assetId?: string;
   assetTicker?: string;
+  category?: string;
+  type?: "dividendo" | "jcp" | "rendimento" | "amortizacao" | "outro" | string;
   totalValue: number;
   valuePerShare: number;
+  amountPerShare?: number;
+  quantityEligible?: number;
+  grossAmount?: number;
+  netAmount?: number;
   baseDate?: string | Date;
+  exDate?: string | Date;
   paymentDate: string | Date;
+  referenceMonth?: string;
+  status?: "announced" | "expected" | "received" | "cancelled" | string;
+  source?: string;
+  notes?: string;
+}
+
+export interface MarketQuoteRecord {
+  id?: string;
+  ticker: string;
+  price?: number | null;
+  quotedAt: string | Date;
+  source: string;
+  currency: string;
+  status: "success" | "failed" | "updated" | "stale" | "unavailable" | "unsupported" | "error";
+  errorMessage?: string;
+  providerSymbol?: string;
+  market?: string;
+  assetKind?: string;
+}
+
+export interface PriceHistoryRecord {
+  id?: string;
+  ticker: string;
+  price: number;
+  capturedAt: string | Date;
+  source: string;
 }
 
 export interface ContributionRecord {
@@ -74,21 +111,52 @@ export interface SnapshotRecord {
 
 export interface CashBoxRecord {
   id?: string;
+  categoryId?: string;
   name: string;
   type: string;
+  initialBalance?: number;
   currentBalance: number;
+  totalContributions?: number;
+  totalWithdrawals?: number;
+  totalYield?: number;
   cdiPercentage: number;
+  annualRateOverride?: number;
+  lastYieldCalculationAt?: string | Date;
   createdAt: string | Date;
+  updatedAt?: string | Date;
   active: boolean;
   movements?: CashBoxMovementRecord[];
 }
 
 export interface CashBoxMovementRecord {
   id?: string;
-  type: "DEPOSITO" | "RESGATE" | "RENDIMENTO";
+  type: "DEPOSITO" | "RESGATE" | "RENDIMENTO" | "contribution" | "withdrawal" | "yield" | "adjustment";
   value: number;
   date: string | Date;
   description?: string;
+}
+
+export interface CdiRateRecord {
+  id?: string;
+  annualCdiRate: number;
+  dailyCdiRate: number;
+  referenceDate: string;
+  source: string;
+  fetchedAt: string | Date;
+}
+
+export interface CashBoxYieldRecord {
+  id?: string;
+  cashBoxId: string;
+  referenceDate: string;
+  openingBalance: number;
+  yieldValue: number;
+  closingBalance: number;
+  annualCdiRate: number;
+  dailyCdiRate: number;
+  cdiPercentage: number;
+  source: string;
+  calculatedAt: string | Date;
 }
 
 export interface SettingsRecord {

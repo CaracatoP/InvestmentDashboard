@@ -2,6 +2,7 @@ import { Command, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { navigationItems } from "../../constants/navigation";
+import { refreshMarketData } from "../../services/api";
 import { useInvestmentStore } from "../../stores/useInvestmentStore";
 
 interface AppLayoutProps {
@@ -12,6 +13,11 @@ export function AppLayout({ children }: AppLayoutProps) {
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const isLoading = useInvestmentStore((state) => state.isLoading);
   const error = useInvestmentStore((state) => state.error);
+
+  async function handleRefresh() {
+    await refreshMarketData();
+    await loadWorkspace();
+  }
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
@@ -53,11 +59,11 @@ export function AppLayout({ children }: AppLayoutProps) {
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-line bg-canvas/90 px-4 backdrop-blur md:px-8">
           <div>
             <p className="text-sm text-muted">Dashboard de investimentos</p>
-            <p className="text-xs text-muted/70">Atualizado com dados locais e MongoDB-ready</p>
+            <p className="text-xs text-muted/70">{error ? "Falha ao sincronizar" : "MongoDB conectado e dados sincronizados"}</p>
           </div>
           <button
             type="button"
-            onClick={() => void loadWorkspace()}
+            onClick={() => void handleRefresh()}
             className="grid h-9 w-9 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-accent/50 hover:text-ink"
             title="Atualizar dados"
           >

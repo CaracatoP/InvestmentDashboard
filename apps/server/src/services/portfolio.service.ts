@@ -5,16 +5,21 @@ import {
   listAllocations,
   listAssets,
   listCashBoxes,
+  listCdiRates,
   listContributions,
   listDividends,
   listGoals,
+  listMarketQuotes,
   listOperations,
+  listPriceHistory,
   replaceAllocations,
   updateSettingsRecord
 } from "../repositories/investment.repository";
-import type { AssetRecord, CashBoxRecord, ContributionRecord, DividendRecord, GoalRecord, OperationRecord } from "../types/investment";
+import type { AssetRecord, CashBoxRecord, ContributionRecord, DividendRecord, GoalRecord, MarketQuoteRecord, OperationRecord, PriceHistoryRecord } from "../types/investment";
+import { buildAllocationSummary, type AllocationSummary } from "./allocation.service";
+import { calculateCashBoxTotals, getCashBoxMovementLabel, isCashBoxContribution, isCashBoxWithdrawal, isCashBoxYield, toCashBoxContributionType } from "./cash-box.service";
 import { calculateProjection } from "./projection.service";
-import { getContributionRecommendation } from "./recommendation.service";
+import { normalizeTicker } from "./ticker.service";
 
 const monthLabels = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
@@ -23,7 +28,17 @@ const categoryLabels: Record<string, string> = {
   ACAO: "Acoes Brasileiras",
   ETF: "ETFs",
   CRIPTO: "Bitcoin",
-  RENDA_FIXA: "Renda Fixa"
+  RENDA_FIXA: "Renda Fixa",
+  cash: "Caixinha"
+};
+
+const categoryColors: Record<string, string> = {
+  FIIs: "#22c55e",
+  "Acoes Brasileiras": "#38bdf8",
+  ETFs: "#a78bfa",
+  Bitcoin: "#f59e0b",
+  "Renda Fixa": "#fb7185",
+  Caixinha: "#14b8a6"
 };
 
 function dateFrom(value: string | Date) {
@@ -44,6 +59,10 @@ function yearKey(value: string | Date) {
 
 function sum(values: number[]) {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function safeNumber(value: number | null | undefined) {
+  return Number.isFinite(value) ? Number(value) : 0;
 }
 
 function sumDatedAmountByPeriod(items: Array<{ date: string | Date; amount: number }>, period: string) {
@@ -93,31 +112,95 @@ function normalizeContribution(contribution: ContributionRecord) {
 }
 
 function normalizeDividend(dividend: DividendRecord) {
+  const amountPerShare = dividend.amountPerShare ?? dividend.valuePerShare;
+  const amount = dividend.netAmount ?? dividend.totalValue;
+
   return {
     assetTicker: dividend.assetTicker ?? "",
+    category: dividend.category ?? "",
+    type: dividend.type ?? "dividendo",
     date: dividend.paymentDate,
-    amount: dividend.totalValue,
-    shares: dividend.valuePerShare > 0 ? Math.round(dividend.totalValue / dividend.valuePerShare) : 0
+    amount,
+    amountPerShare,
+    shares: dividend.quantityEligible ?? (amountPerShare > 0 ? Math.round(amount / amountPerShare) : 0),
+    status: dividend.status ?? "received",
+    source: dividend.source ?? "manual",
+    notes: dividend.notes ?? ""
   };
 }
 
+function isReceivedDividend(dividend: DividendRecord) {
+  return (dividend.status ?? "received") === "received";
+}
+
+function dividendAmount(dividend: DividendRecord) {
+  return dividend.netAmount ?? dividend.totalValue;
+}
+
 function assetMatchesOperation(asset: AssetRecord, operation: OperationRecord) {
-  return operation.assetTicker === asset.ticker || String(operation.assetId ?? "") === String(asset.id ?? "");
+  return normalizeTicker(operation.assetTicker ?? "") === normalizeTicker(asset.ticker) || String(operation.assetId ?? "") === String(asset.id ?? "");
 }
 
 function assetMatchesDividend(asset: AssetRecord, dividend: DividendRecord) {
-  return dividend.assetTicker === asset.ticker || String(dividend.assetId ?? "") === String(asset.id ?? "");
+  return normalizeTicker(dividend.assetTicker ?? "") === normalizeTicker(asset.ticker) || String(dividend.assetId ?? "") === String(asset.id ?? "");
 }
 
-function getCurrentPrice(operations: OperationRecord[]) {
-  const pricedOperation = operations
-    .filter((operation) => operation.price > 0)
-    .sort((left, right) => dateFrom(right.date).getTime() - dateFrom(left.date).getTime())[0];
-
-  return pricedOperation?.price ?? 0;
+function hasValidPrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function calculateAssetPosition(asset: AssetRecord, operations: OperationRecord[], dividends: DividendRecord[], portfolioValue: number) {
+function quoteHasValidPrice(quote?: MarketQuoteRecord) {
+  return Boolean(quote && hasValidPrice(quote.price) && ["success", "updated", "stale"].includes(quote.status));
+}
+
+export function resolveCurrentPrice(asset: AssetRecord, quote?: MarketQuoteRecord, priceHistory: PriceHistoryRecord[] = []) {
+  if (quoteHasValidPrice(quote)) {
+    return {
+      currentPrice: Number(quote?.price),
+      lastPriceAt: quote?.quotedAt ?? null,
+      priceSource: quote?.source ?? "MarketQuote",
+      priceStatus: quote?.status === "success" ? "updated" : quote?.status
+    };
+  }
+
+  const latestHistory = [...priceHistory]
+    .filter((item) => normalizeTicker(item.ticker) === normalizeTicker(asset.ticker) && hasValidPrice(item.price))
+    .sort((left, right) => dateFrom(right.capturedAt).getTime() - dateFrom(left.capturedAt).getTime())[0];
+
+  if (latestHistory) {
+    return {
+      currentPrice: latestHistory.price,
+      lastPriceAt: latestHistory.capturedAt,
+      priceSource: latestHistory.source,
+      priceStatus: "stale"
+    };
+  }
+
+  if (hasValidPrice(asset.lastPrice)) {
+    return {
+      currentPrice: asset.lastPrice,
+      lastPriceAt: asset.lastPriceAt ?? null,
+      priceSource: asset.priceSource ?? "asset",
+      priceStatus: asset.priceStatus ?? "stale"
+    };
+  }
+
+  return {
+    currentPrice: null,
+    lastPriceAt: null,
+    priceSource: quote?.source ?? asset.priceSource ?? "",
+    priceStatus: quote?.status ?? "unavailable"
+  };
+}
+
+function calculateAssetPosition(
+  asset: AssetRecord,
+  operations: OperationRecord[],
+  dividends: DividendRecord[],
+  portfolioValue: number,
+  quote?: MarketQuoteRecord,
+  priceHistory: PriceHistoryRecord[] = []
+) {
   const assetOperations = operations.filter((operation) => assetMatchesOperation(asset, operation));
   const assetDividends = dividends.filter((dividend) => assetMatchesDividend(asset, dividend));
   let quantity = 0;
@@ -144,36 +227,118 @@ function calculateAssetPosition(asset: AssetRecord, operations: OperationRecord[
     }
   }
 
-  const currentPrice = getCurrentPrice(assetOperations);
-  const currentValue = quantity * currentPrice;
-  const dividendsReceived = sum(assetDividends.map((dividend) => dividend.totalValue));
+  const price = resolveCurrentPrice(asset, quote, priceHistory);
+  const currentPrice = price.currentPrice;
+  const hasPosition = quantity > 0;
+  const currentValue = hasValidPrice(currentPrice) ? quantity * currentPrice : null;
+  const receivedDividends = assetDividends.filter(isReceivedDividend);
+  const dividendsReceived = sum(receivedDividends.map(dividendAmount));
   const averagePrice = quantity > 0 ? investedValue / quantity : 0;
-  const profit = currentValue - investedValue;
+  const profit = currentValue !== null ? currentValue - investedValue : null;
+  const dividendYield = currentValue && currentValue > 0 ? (dividendsReceived / currentValue) * 100 : 0;
+  const yieldOnCost = investedValue > 0 ? (dividendsReceived / investedValue) * 100 : 0;
+  const returnPercentage = profit !== null && investedValue > 0 ? (profit / investedValue) * 100 : null;
 
   return {
+    assetId: asset.id,
     name: asset.name,
-    ticker: asset.ticker,
+    ticker: normalizeTicker(asset.ticker),
+    categoryId: asset.category,
+    categoryLabel: categoryLabels[asset.category] ?? asset.category,
     category: categoryLabels[asset.category] ?? asset.category,
     quantity,
     averagePrice,
     currentPrice,
-    dividendYield: currentValue > 0 ? (dividendsReceived / currentValue) * 100 : 0,
+    lastPriceAt: price.lastPriceAt,
+    priceSource: price.priceSource,
+    priceStatus: price.priceStatus,
+    dividendYield,
+    yieldOnCost,
     dividendsReceived,
     objectiveQuantity: quantity,
     currency: asset.currency,
+    totalInvested: investedValue,
     investedValue,
+    unrealizedProfit: profit,
     currentValue,
     profit,
-    returnPercentage: investedValue > 0 ? (profit / investedValue) * 100 : 0,
-    portfolioWeight: portfolioValue > 0 ? (currentValue / portfolioValue) * 100 : 0
+    profitabilityPercent: returnPercentage,
+    returnPercentage,
+    weightPercent: portfolioValue > 0 && currentValue !== null ? (currentValue / portfolioValue) * 100 : 0,
+    portfolioWeight: portfolioValue > 0 && currentValue !== null ? (currentValue / portfolioValue) * 100 : 0,
+    hasPosition
   };
 }
 
 async function getCalculatedPortfolio() {
-  const [assets, operations, dividends] = await Promise.all([listAssets(), listOperations(), listDividends()]);
-  const preliminary = assets.map((asset) => calculateAssetPosition(asset, operations, dividends, 0));
-  const assetsValue = sum(preliminary.map((asset) => asset.currentValue));
-  return assets.map((asset) => calculateAssetPosition(asset, operations, dividends, assetsValue));
+  const [assets, operations, dividends, quotes, priceHistory] = await Promise.all([listAssets(), listOperations(), listDividends(), listMarketQuotes(), listPriceHistory()]);
+  const quoteByTicker = new Map(quotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
+  const historyByTicker = new Map<string, PriceHistoryRecord[]>();
+  for (const history of priceHistory) {
+    const ticker = normalizeTicker(history.ticker);
+    historyByTicker.set(ticker, [...(historyByTicker.get(ticker) ?? []), history]);
+  }
+
+  const preliminary = assets.map((asset) => calculateAssetPosition(asset, operations, dividends, 0, quoteByTicker.get(normalizeTicker(asset.ticker)), historyByTicker.get(normalizeTicker(asset.ticker)) ?? []));
+  const assetsValue = sum(preliminary.filter((asset) => asset.hasPosition).map((asset) => safeNumber(asset.currentValue)));
+  return assets.map((asset) => calculateAssetPosition(asset, operations, dividends, assetsValue, quoteByTicker.get(normalizeTicker(asset.ticker)), historyByTicker.get(normalizeTicker(asset.ticker)) ?? []));
+}
+
+function buildAllocationValues(portfolioAssets: Awaited<ReturnType<typeof getCalculatedPortfolio>>, cashBoxes: CashBoxRecord[]) {
+  return [
+    ...portfolioAssets
+      .filter((asset) => asset.hasPosition && asset.currentValue !== null && hasValidPrice(asset.currentPrice))
+      .map((asset) => ({
+        categoryId: asset.categoryId,
+        label: asset.category,
+        value: safeNumber(asset.currentValue),
+        ticker: asset.ticker,
+        assetId: asset.assetId
+      })),
+    ...cashBoxes.map((cashBox) => ({
+      categoryId: cashBox.categoryId ?? "cash",
+      label: "Caixinha",
+      value: calculateCashBoxTotals(cashBox).currentBalance,
+      cashBoxId: cashBox.id
+    }))
+  ];
+}
+
+function toLegacyComparison(summary: AllocationSummary) {
+  return summary.categories.map((category) => ({
+    category: category.label,
+    categoryId: category.categoryId,
+    targetPercentage: category.targetPercent,
+    currentPercentage: category.currentPercent,
+    difference: category.currentPercent - category.targetPercent,
+    differenceValue: category.differenceValue,
+    differencePercent: category.differencePercent,
+    status: category.status,
+    value: category.currentValue,
+    targetValue: category.idealValue,
+    missingValue: category.amountNeeded,
+    color: categoryColors[category.label] ?? "#14b8a6"
+  }));
+}
+
+function toLegacyRecommendation(summary: AllocationSummary) {
+  const comparison = toLegacyComparison(summary);
+  const recommended = summary.recommendation;
+  const target = summary.largestDeficit;
+
+  return {
+    ticker: recommended.ticker ?? (recommended.cashBoxId ? "Caixinha" : ""),
+    name: recommended.ticker ?? recommended.label,
+    category: recommended.label,
+    reason: target
+      ? `${recommended.reason} Falta ${recommended.amountNeeded.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} para aproximar do alvo.`
+      : recommended.reason,
+    action: target
+      ? `Proximo aporte recomendado: ${recommended.label}${recommended.ticker ? ` (${recommended.ticker})` : ""}`
+      : "Sua carteira esta proxima da alocacao ideal.",
+    comparison,
+    allocation: summary
+  };
 }
 
 function getOperationTypeLabel(type: string) {
@@ -189,20 +354,15 @@ function getOperationTypeLabel(type: string) {
 }
 
 function getCashBoxMovementTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    DEPOSITO: "Movimentacao das Caixinhas",
-    RESGATE: "Resgate",
-    RENDIMENTO: "Movimentacao das Caixinhas"
-  };
-
-  return labels[type] ?? "Movimentacao das Caixinhas";
+  return getCashBoxMovementLabel(type);
 }
 
 function getCashBoxMovementDescription(type: string, description?: string) {
   if (description) return description;
-  if (type === "DEPOSITO") return "Deposito na reserva Nubank";
-  if (type === "RESGATE") return "Resgate da reserva Nubank";
-  if (type === "RENDIMENTO") return "Rendimento da reserva Nubank";
+  const normalizedType = toCashBoxContributionType(type);
+  if (normalizedType === "contribution") return "Deposito na reserva Nubank";
+  if (normalizedType === "withdrawal") return "Resgate da reserva Nubank";
+  if (normalizedType === "yield") return "Rendimento da reserva Nubank";
   return "Movimentacao da reserva Nubank";
 }
 
@@ -225,13 +385,13 @@ function buildMovements(
     amount: operation.totalValue
   }));
 
-  const dividendEvents = dividends.map((dividend) => ({
+  const dividendEvents = dividends.filter(isReceivedDividend).map((dividend) => ({
     id: dividend.id ?? `dividend-${dividend.assetTicker}-${dividend.paymentDate}`,
     date: dividend.paymentDate,
     type: "Dividendo",
     title: dividend.assetTicker ?? "Dividendo",
     description: "Recebimento de dividendos",
-    amount: dividend.totalValue
+    amount: dividendAmount(dividend)
   }));
 
   const contributionEvents = contributions.map((contribution) => ({
@@ -261,68 +421,152 @@ function buildMovements(
 }
 
 export async function getDashboard() {
-  const [portfolioAssets, dividends, contributions, allocations, operations, cashBoxes] = await Promise.all([
+  const [portfolioAssets, dividends, contributions, allocations, operations, cashBoxes, quotes, cdiRates] = await Promise.all([
     getCalculatedPortfolio(),
     listDividends(),
     listContributions(),
     listAllocations(),
     listOperations(),
-    listCashBoxes()
+    listCashBoxes(),
+    listMarketQuotes(),
+    listCdiRates(1)
   ]);
-  const investedValue = sum(portfolioAssets.map((asset) => asset.investedValue));
-  const assetsCurrentValue = sum(portfolioAssets.map((asset) => asset.currentValue));
-  const cashBoxValue = sum(cashBoxes.map((cashBox) => cashBox.currentBalance));
-  const currentValue = assetsCurrentValue + cashBoxValue;
-  const profit = currentValue - investedValue;
-  const dividendAmounts = dividends.map((dividend) => ({ date: dividend.paymentDate, amount: dividend.totalValue }));
+  const allocationSummary = buildAllocationSummary(buildAllocationValues(portfolioAssets, cashBoxes), allocations);
+  const recommendation = toLegacyRecommendation(allocationSummary);
+  const portfolioPositions = portfolioAssets.filter((asset) => asset.hasPosition);
+  const marketInvestedCapital = sum(portfolioPositions.map((asset) => asset.investedValue));
+  const marketAssetsValue = sum(portfolioPositions.map((asset) => safeNumber(asset.currentValue)));
+  const cashBoxStats = cashBoxes.map(calculateCashBoxTotals);
+  const cashboxesBalance = sum(cashBoxStats.map((cashBox) => cashBox.currentBalance));
+  const cashboxesNetContributions = sum(cashBoxStats.map((cashBox) => cashBox.totalContributions - cashBox.totalWithdrawals));
+  const cashboxesYield = sum(cashBoxStats.map((cashBox) => cashBox.totalYield));
+  const investedCapital = marketInvestedCapital + cashboxesNetContributions;
+  const totalEquity = marketAssetsValue + cashboxesBalance;
+  const unrealizedMarketProfit = marketAssetsValue - marketInvestedCapital;
+  const receivedDividends = dividends.filter(isReceivedDividend);
+  const dividendAmounts = receivedDividends.map((dividend) => ({ date: dividend.paymentDate, amount: dividendAmount(dividend) }));
   const contributionAmounts = contributions.map((contribution) => ({ date: contribution.date, amount: contribution.value }));
+  const cashBoxMovements = cashBoxes.flatMap((cashBox) => cashBox.movements ?? []);
+  const cashboxContributionAmounts = cashBoxMovements
+    .filter((movement) => isCashBoxContribution(toCashBoxContributionType(movement.type)))
+    .map((movement) => ({ date: movement.date, amount: movement.value }));
+  const cashboxWithdrawalAmounts = cashBoxMovements
+    .filter((movement) => isCashBoxWithdrawal(toCashBoxContributionType(movement.type)))
+    .map((movement) => ({ date: movement.date, amount: movement.value }));
+  const cashboxYieldAmounts = cashBoxMovements
+    .filter((movement) => isCashBoxYield(toCashBoxContributionType(movement.type)))
+    .map((movement) => ({ date: movement.date, amount: movement.value }));
   const now = new Date();
   const currentMonth = now.toISOString().slice(0, 7);
   const currentYear = now.getFullYear().toString();
-  const recommendation = getContributionRecommendation(portfolioAssets, allocations);
+  const receivedDividendsTotal = sum(dividendAmounts.map((dividend) => dividend.amount));
+  const totalProfit = unrealizedMarketProfit + cashboxesYield + receivedDividendsTotal;
+  const monthlyContributions = sumDatedAmountByPeriod(contributionAmounts, currentMonth);
+  const yearlyContributions = sumDatedAmountByPeriod(contributionAmounts, currentYear);
+  const monthlyCashBoxContributions = sumDatedAmountByPeriod(cashboxContributionAmounts, currentMonth);
+  const yearlyCashBoxContributions = sumDatedAmountByPeriod(cashboxContributionAmounts, currentYear);
+  const monthlyCashBoxWithdrawals = sumDatedAmountByPeriod(cashboxWithdrawalAmounts, currentMonth);
+  const monthlyCashBoxYield = sumDatedAmountByPeriod(cashboxYieldAmounts, currentMonth);
+  const totalMonthlyContributions = monthlyContributions + monthlyCashBoxContributions;
+  const totalYearlyContributions = yearlyContributions + yearlyCashBoxContributions;
+  const lastMarketRefreshAt = [...quotes].sort((left, right) => new Date(right.quotedAt).getTime() - new Date(left.quotedAt).getTime())[0]?.quotedAt ?? null;
+  const lastCdiRefreshAt = cdiRates[0]?.fetchedAt ?? null;
 
   return {
     metrics: {
-      totalWealth: currentValue,
-      totalProfit: profit,
-      returnPercentage: investedValue > 0 ? (profit / investedValue) * 100 : 0,
+      totalEquity,
+      marketAssetsValue,
+      cashboxesBalance,
+      investedCapital,
+      marketInvestedCapital,
+      cashboxesNetContributions,
+      unrealizedMarketProfit,
+      cashboxesYield,
+      receivedDividends: receivedDividendsTotal,
+      totalProfit,
+      totalReturnPercent: investedCapital > 0 ? (totalProfit / investedCapital) * 100 : 0,
+      assetCount: portfolioPositions.length,
+      cashboxCount: cashBoxes.length,
+      positionCount: portfolioPositions.length,
+      dividendsThisMonth: sumDatedAmountByPeriod(dividendAmounts, currentMonth),
+      dividendsThisYear: sumDatedAmountByPeriod(dividendAmounts, currentYear),
+      contributionsThisMonth: totalMonthlyContributions,
+      withdrawalsThisMonth: monthlyCashBoxWithdrawals,
+      cashboxYieldThisMonth: monthlyCashBoxYield,
+      nextContributionRecommendation: allocationSummary.recommendation,
+      allocationByCategory: allocationSummary.categories,
+      targetAllocation: allocationSummary.categories.map((category) => ({
+        categoryId: category.categoryId,
+        label: category.label,
+        targetPercent: category.targetPercent,
+        idealValue: category.idealValue
+      })),
+      allocationDifference: allocationSummary.categories.map((category) => ({
+        categoryId: category.categoryId,
+        label: category.label,
+        differenceValue: category.differenceValue,
+        differencePercent: category.differencePercent,
+        status: category.status
+      })),
+      lastMarketRefreshAt,
+      lastCdiRefreshAt,
+      lastDashboardCalculationAt: now,
+      totalWealth: totalEquity,
+      returnPercentage: investedCapital > 0 ? (totalProfit / investedCapital) * 100 : 0,
       monthlyDividends: sumDatedAmountByPeriod(dividendAmounts, currentMonth),
       yearlyDividends: sumDatedAmountByPeriod(dividendAmounts, currentYear),
-      monthlyContributions: sumDatedAmountByPeriod(contributionAmounts, currentMonth),
-      yearlyContributions: sumDatedAmountByPeriod(contributionAmounts, currentYear),
-      assetCount: portfolioAssets.length,
-      investedValue,
-      currentValue,
-      netProfit: profit + sum(dividendAmounts.map((dividend) => dividend.amount)),
-      cashBoxValue
+      monthlyContributions: totalMonthlyContributions,
+      yearlyContributions: totalYearlyContributions,
+      investedValue: investedCapital,
+      currentValue: totalEquity,
+      netProfit: totalProfit,
+      cashBoxValue: cashboxesBalance
     },
     wealthEvolution: buildWealthEvolution(operations, dividends, contributions, cashBoxes),
-    categoryAllocation: recommendation.comparison.map((allocation) => ({
-      ...allocation,
-      value: allocation.value ?? 0,
-      color:
-        {
-          FIIs: "#22c55e",
-          "Acoes Brasileiras": "#38bdf8",
-          ETFs: "#a78bfa",
-          Bitcoin: "#f59e0b",
-          "Renda Fixa": "#fb7185"
-        }[allocation.category] ?? "#14b8a6"
-    })),
+    portfolioHistory: buildWealthEvolution(operations, dividends, contributions, cashBoxes),
+    categoryAllocation: recommendation.comparison,
     monthlyDividends: groupDatedAmounts(dividendAmounts),
-    monthlyContributions: groupDatedAmounts(contributionAmounts),
+    monthlyContributions: groupDatedAmounts([...contributionAmounts, ...cashboxContributionAmounts]),
+    monthlyWithdrawals: groupDatedAmounts(cashboxWithdrawalAmounts),
+    monthlyCashBoxYield: groupDatedAmounts(cashboxYieldAmounts),
     recommendation,
+    allocation: allocationSummary,
     recentMovements: buildMovements(operations, dividends, contributions, cashBoxes, 10)
   };
 }
 
 function buildCashBoxBalanceAt(cashBoxes: CashBoxRecord[], key: string) {
   return sum(
-    cashBoxes.flatMap((cashBox) =>
-      (cashBox.movements ?? [])
-        .filter((movement) => dateIsBeforeOrSameMonth(movement.date, key))
-        .map((movement) => (movement.type === "RESGATE" ? -movement.value : movement.value))
-    )
+    cashBoxes.map((cashBox) => {
+      const initialBalance = cashBox.initialBalance ?? 0;
+      const movementsBalance = sum(
+        (cashBox.movements ?? [])
+          .filter((movement) => dateIsBeforeOrSameMonth(movement.date, key))
+          .map((movement) => (isCashBoxWithdrawal(toCashBoxContributionType(movement.type)) ? -movement.value : movement.value))
+      );
+
+      return Math.max(initialBalance + movementsBalance, 0);
+    })
+  );
+}
+
+function buildCashBoxNetContributionAt(cashBoxes: CashBoxRecord[], key: string) {
+  return sum(
+    cashBoxes.map((cashBox) => {
+      const initialBalance = cashBox.initialBalance ?? 0;
+      const movementsCapital = sum(
+        (cashBox.movements ?? [])
+          .filter((movement) => dateIsBeforeOrSameMonth(movement.date, key))
+          .map((movement) => {
+            const type = toCashBoxContributionType(movement.type);
+            if (isCashBoxContribution(type)) return movement.value;
+            if (isCashBoxWithdrawal(type)) return -movement.value;
+            return 0;
+          })
+      );
+
+      return Math.max(initialBalance + movementsCapital, 0);
+    })
   );
 }
 
@@ -383,13 +627,14 @@ function buildWealthEvolution(operations: OperationRecord[], dividends: Dividend
 
   return [...months].sort().map((key) => {
     const position = buildOperationPositionAt(operations, key);
-    const receivedDividends = sum(dividends.filter((dividend) => dateIsBeforeOrSameMonth(dividend.paymentDate, key)).map((dividend) => dividend.totalValue));
+    const receivedDividends = sum(dividends.filter((dividend) => isReceivedDividend(dividend) && dateIsBeforeOrSameMonth(dividend.paymentDate, key)).map(dividendAmount));
     const contributed = sum(contributions.filter((contribution) => dateIsBeforeOrSameMonth(contribution.date, key)).map((contribution) => contribution.value));
     const cashBoxBalance = buildCashBoxBalanceAt(cashBoxes, key);
+    const cashBoxNetContribution = buildCashBoxNetContributionAt(cashBoxes, key);
 
     return {
       month: monthLabels[Number(key.slice(5, 7)) - 1],
-      invested: position.invested + contributed + cashBoxBalance,
+      invested: position.invested + contributed + cashBoxNetContribution,
       current: position.current + cashBoxBalance,
       dividends: receivedDividends,
       contributions: contributed
@@ -398,19 +643,22 @@ function buildWealthEvolution(operations: OperationRecord[], dividends: Dividend
 }
 
 export async function getPortfolio() {
-  const [assets, allocations] = await Promise.all([getCalculatedPortfolio(), listAllocations()]);
-  const recommendation = getContributionRecommendation(assets, allocations);
+  const [assets, allocations, cashBoxes] = await Promise.all([getCalculatedPortfolio(), listAllocations(), listCashBoxes()]);
+  const allocationSummary = buildAllocationSummary(buildAllocationValues(assets, cashBoxes), allocations);
+  const recommendation = toLegacyRecommendation(allocationSummary);
 
   return {
     assets,
     allocationComparison: recommendation.comparison,
-    recommendation
+    recommendation,
+    allocation: allocationSummary
   };
 }
 
 export async function getAssetDetails(ticker: string) {
+  const canonicalTicker = normalizeTicker(ticker);
   const [asset, portfolio, operations, dividends] = await Promise.all([
-    listAssets().then((assets) => assets.find((item) => item.ticker === ticker.toUpperCase())),
+    listAssets().then((assets) => assets.find((item) => normalizeTicker(item.ticker) === canonicalTicker)),
     getPortfolio(),
     listOperations(),
     listDividends()
@@ -418,7 +666,7 @@ export async function getAssetDetails(ticker: string) {
 
   if (!asset) return null;
 
-  const enrichedAsset = portfolio.assets.find((item) => item.ticker === asset.ticker);
+  const enrichedAsset = portfolio.assets.find((item) => normalizeTicker(item.ticker) === normalizeTicker(asset.ticker));
   if (!enrichedAsset) return null;
 
   const assetOperations = operations.filter((operation) => assetMatchesOperation(asset, operation));
@@ -426,10 +674,14 @@ export async function getAssetDetails(ticker: string) {
 
   return {
     ...enrichedAsset,
-    priceHistory: assetOperations
-      .filter((operation) => operation.price > 0)
-      .sort((left, right) => dateFrom(left.date).getTime() - dateFrom(right.date).getTime())
-      .map((operation) => ({ month: monthName(operation.date), price: operation.price })),
+    priceHistory: await listPriceHistory(asset.ticker).then((history) =>
+      history.length > 0
+        ? history.map((item) => ({ month: monthName(item.capturedAt), price: item.price }))
+        : assetOperations
+            .filter((operation) => operation.price > 0)
+            .sort((left, right) => dateFrom(left.date).getTime() - dateFrom(right.date).getTime())
+            .map((operation) => ({ month: monthName(operation.date), price: operation.price }))
+    ),
     dividends: assetDividends.map(normalizeDividend),
     operations: assetOperations.map((operation) => ({
       assetTicker: operation.assetTicker ?? asset.ticker,
@@ -445,7 +697,8 @@ export async function getAssetDetails(ticker: string) {
 
 export async function getDividendsOverview() {
   const [dividends, assets] = await Promise.all([listDividends(), listAssets()]);
-  const dividendAmounts = dividends.map((dividend) => ({ date: dividend.paymentDate, amount: dividend.totalValue }));
+  const receivedDividends = dividends.filter(isReceivedDividend);
+  const dividendAmounts = receivedDividends.map((dividend) => ({ date: dividend.paymentDate, amount: dividendAmount(dividend) }));
   const total = sum(dividendAmounts.map((dividend) => dividend.amount));
   const currentMonth = new Date().toISOString().slice(0, 7);
   const currentYear = new Date().getFullYear().toString();
@@ -463,7 +716,7 @@ export async function getDividendsOverview() {
     annual: groupDatedAmountsByYear(dividendAmounts),
     byAsset: assets.map((asset) => ({
       ticker: asset.ticker,
-      value: sum(dividends.filter((dividend) => assetMatchesDividend(asset, dividend)).map((dividend) => dividend.totalValue))
+      value: sum(receivedDividends.filter((dividend) => assetMatchesDividend(asset, dividend)).map(dividendAmount))
     })),
     calendar: dividends.map(normalizeDividend)
   };
@@ -496,7 +749,8 @@ export async function registerContribution(input: { date: string; amount: number
 
 export async function getGoalsOverview() {
   const [goals, dashboard, portfolio, dividends] = await Promise.all([listGoals(), getDashboard(), getPortfolio(), listDividends()]);
-  const monthlyDividendAverage = sum(dividends.map((dividend) => dividend.totalValue)) / Math.max(new Set(dividends.map((dividend) => monthKey(dividend.paymentDate))).size, 1);
+  const receivedDividends = dividends.filter(isReceivedDividend);
+  const monthlyDividendAverage = sum(receivedDividends.map(dividendAmount)) / Math.max(new Set(receivedDividends.map((dividend) => monthKey(dividend.paymentDate))).size, 1);
 
   return goals.map((goal) => {
     const current =
@@ -577,7 +831,8 @@ export async function getSettings() {
           ACAO: "#38bdf8",
           ETF: "#a78bfa",
           CRIPTO: "#f59e0b",
-          RENDA_FIXA: "#fb7185"
+          RENDA_FIXA: "#fb7185",
+          cash: "#14b8a6"
         }[allocation.category] ?? "#14b8a6",
       targetPercentage: allocation.targetPercentage
     })),

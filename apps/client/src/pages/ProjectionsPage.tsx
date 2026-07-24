@@ -19,7 +19,7 @@ const initialProjection: ProjectionInput = {
   currentAge: 0,
   targetAge: 1,
   reinvestDividends: true,
-  monthlyDividendYield: 0
+  annualDividendYield: 0
 };
 
 function getGoalTarget(goal: Goal) {
@@ -75,7 +75,7 @@ export function ProjectionsPage() {
       currentAge,
       targetAge: targetAge > currentAge ? targetAge : currentAge + 1,
       reinvestDividends: true,
-      monthlyDividendYield: dashboard.metrics.currentValue > 0 ? ((dividends?.totals.monthlyAverage ?? 0) / dashboard.metrics.currentValue) * 100 : 0
+      annualDividendYield: dashboard.metrics.currentValue > 0 ? ((dividends?.totals.monthlyAverage ?? 0) * 12 / dashboard.metrics.currentValue) * 100 : 0
     });
     setHasLoadedDefaults(true);
   }, [contributions?.totals.monthlyAverage, dashboard, dividends?.totals.monthlyAverage, hasLoadedDefaults, settings]);
@@ -132,7 +132,7 @@ export function ProjectionsPage() {
               ["monthlyContribution", "Aporte mensal"],
               ["expectedReturn", "Rentabilidade esperada (%)"],
               ["inflation", "Inflacao (%)"],
-              ["monthlyDividendYield", "Dividend yield mensal (%)"],
+              ["annualDividendYield", "Dividend yield anual (%)"],
               ["currentAge", "Idade atual"],
               ["targetAge", "Idade objetivo"]
             ].map(([field, label]) => (
@@ -171,6 +171,7 @@ export function ProjectionsPage() {
               <StatCard label="Patrimonio futuro" value={formatCurrency(projection.summary.futureWealth)} icon={<TrendingUp size={18} />} />
               <StatCard label="Valor real" value={formatCurrency(projection.summary.realFutureWealth)} icon={<TrendingUp size={18} />} tone="blue" />
               <StatCard label="Dividendos futuros" value={formatCurrency(projection.summary.futureMonthlyDividends)} icon={<Coins size={18} />} tone="amber" />
+              <StatCard label="Dividendos acumulados" value={formatCurrency(projection.summary.accumulatedDividends)} icon={<Coins size={18} />} tone="amber" />
               <StatCard label="Tempo projetado" value={`${projection.summary.years} anos`} detail={`${projection.summary.months} meses`} icon={<Clock size={18} />} tone="violet" />
             </section>
           ) : null}
@@ -181,7 +182,8 @@ export function ProjectionsPage() {
               series={[
                 { dataKey: "wealth", name: "Nominal", color: "#22c55e" },
                 { dataKey: "realWealth", name: "Real", color: "#38bdf8" },
-                { dataKey: "projectedDividends", name: "Dividendos", color: "#f59e0b" }
+                { dataKey: "projectedDividends", name: "Dividendos", color: "#f59e0b" },
+                { dataKey: "accumulatedDividends", name: "Dividendos acumulados", color: "#a78bfa" }
               ]}
             />
           </ChartCard>

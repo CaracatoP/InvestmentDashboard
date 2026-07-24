@@ -17,13 +17,36 @@ export function RebalancingPage() {
     return <div className="rounded-lg border border-line bg-panel p-6 text-sm text-muted">Carregando rebalanceamento...</div>;
   }
 
-  const comparison = portfolio.allocationComparison.map((item, index) => ({
-    ...item,
-    value: item.value ?? 0,
-    color: item.color ?? allocationColors[index % allocationColors.length]
-  }));
-  const underAllocated = [...comparison].filter((item) => item.targetPercentage > 0).sort((left, right) => left.difference - right.difference)[0];
-  const overAllocated = [...comparison].sort((left, right) => right.difference - left.difference)[0];
+  const comparison = (portfolio.allocation?.categories ?? portfolio.allocationComparison).map((item, index) =>
+    "label" in item
+      ? {
+          categoryId: item.categoryId,
+          category: item.label,
+          targetPercentage: item.targetPercent,
+          currentPercentage: item.currentPercent,
+          difference: item.currentPercent - item.targetPercent,
+          differenceValue: item.differenceValue,
+          differencePercent: item.differencePercent,
+          status: item.status,
+          value: item.currentValue,
+          targetValue: item.idealValue,
+          missingValue: item.amountNeeded,
+          color: allocationColors[index % allocationColors.length]
+        }
+      : {
+          ...item,
+          value: item.value ?? 0,
+          color: item.color ?? allocationColors[index % allocationColors.length]
+        }
+  );
+  const underAllocated =
+    portfolio.allocation?.largestDeficit
+      ? comparison.find((item) => item.categoryId === portfolio.allocation?.largestDeficit?.categoryId)
+      : [...comparison].filter((item) => item.targetPercentage > 0 && (item.differenceValue ?? -item.difference) > 0).sort((left, right) => left.difference - right.difference)[0];
+  const overAllocated =
+    portfolio.allocation?.largestExcess
+      ? comparison.find((item) => item.categoryId === portfolio.allocation?.largestExcess?.categoryId)
+      : [...comparison].filter((item) => item.difference > 0).sort((left, right) => right.difference - left.difference)[0];
   const missingData = comparison.map((item) => ({
     month: item.category,
     value: item.missingValue ?? 0
@@ -35,7 +58,7 @@ export function RebalancingPage() {
   }));
   const differenceData = comparison.map((item) => ({
     month: item.category,
-    value: Math.abs((item.targetValue ?? 0) - (item.value ?? 0))
+    value: item.differenceValue ?? (item.targetValue ?? 0) - (item.value ?? 0)
   }));
 
   return (

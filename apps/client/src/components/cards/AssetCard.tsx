@@ -9,6 +9,8 @@ interface AssetCardProps {
 }
 
 export function AssetCard({ asset }: AssetCardProps) {
+  const currentValue = asset.currentValue !== null && asset.currentValue !== undefined ? formatCurrency(asset.currentValue) : "Indisponivel";
+
   return (
     <Link to={`/ativos/${asset.ticker}`} className="block rounded-lg border border-line bg-panel p-4 transition hover:border-accent/50 hover:bg-elevated">
       <div className="flex items-start justify-between gap-3">
@@ -21,7 +23,7 @@ export function AssetCard({ asset }: AssetCardProps) {
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <p className="text-muted">Valor atual</p>
-          <p className="font-medium text-ink">{formatCurrency(asset.currentValue)}</p>
+          <p className="font-medium text-ink">{currentValue}</p>
         </div>
         <div>
           <p className="text-muted">Peso</p>

@@ -40,6 +40,27 @@ interface CashBoxesOverview {
   evolution: Array<{ month: string; value: number }>;
 }
 
+function normalizeMovementType(type: CashBoxMovementType) {
+  if (type === "DEPOSITO") return "contribution";
+  if (type === "RESGATE") return "withdrawal";
+  if (type === "RENDIMENTO") return "yield";
+  return type;
+}
+
+function getMovementLabel(type: CashBoxMovementType) {
+  const labels: Record<CashBoxMovementType, string> = {
+    DEPOSITO: "Aporte",
+    contribution: "Aporte",
+    RESGATE: "Resgate",
+    withdrawal: "Resgate",
+    RENDIMENTO: "Rendimento",
+    yield: "Rendimento",
+    adjustment: "Ajuste"
+  };
+
+  return labels[type] ?? "Movimentacao";
+}
+
 export function CashBoxesPage() {
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [overview, setOverview] = useState<CashBoxesOverview | null>(null);
@@ -103,12 +124,14 @@ export function CashBoxesPage() {
   async function handleMovementSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!movementTarget?.id) return;
-    const movements = [...(movementTarget.movements ?? []), movementForm];
-    const balanceDelta = movementForm.type === "RESGATE" ? -movementForm.value : movementForm.value;
-    await cashBoxRecordsApi.update(movementTarget.id, {
-      movements,
-      currentBalance: Math.max(movementTarget.currentBalance + balanceDelta, 0)
-    });
+    const payload = {
+      value: movementForm.value,
+      date: movementForm.date,
+      description: movementForm.description
+    };
+    const type = normalizeMovementType(movementForm.type);
+    if (type === "withdrawal") await cashBoxRecordsApi.withdrawal(movementTarget.id, payload);
+    else await cashBoxRecordsApi.contribution(movementTarget.id, payload);
     setIsMovementModalOpen(false);
     setMovementTarget(null);
     await Promise.all([loadCashBoxes(), loadWorkspace()]);
@@ -148,10 +171,10 @@ export function CashBoxesPage() {
                 <div>
                   <p className="font-medium text-ink">{movement.cashBoxName}</p>
                   <p className="text-xs text-muted">
-                    {movement.type} - {new Date(movement.date).toLocaleDateString("pt-BR")}
+                    {getMovementLabel(movement.type)} - {new Date(movement.date).toLocaleDateString("pt-BR")}
                   </p>
                 </div>
-                <span className={movement.type === "RESGATE" ? "text-rose" : "text-accent"}>{formatCurrency(movement.value)}</span>
+                <span className={normalizeMovementType(movement.type) === "withdrawal" ? "text-rose" : "text-accent"}>{formatCurrency(movement.value)}</span>
               </div>
             ))}
           </div>
@@ -206,7 +229,6 @@ export function CashBoxesPage() {
         <select value={movementForm.type} onChange={(event) => setMovementForm((current) => ({ ...current, type: event.target.value as CashBoxMovementType }))} className={fieldClass}>
           <option value="DEPOSITO">Deposito</option>
           <option value="RESGATE">Resgate</option>
-          <option value="RENDIMENTO">Rendimento</option>
         </select>
         <input type="number" min="0" step="0.01" value={movementForm.value} onChange={(event) => setMovementForm((current) => ({ ...current, value: Number(event.target.value) }))} className={fieldClass} placeholder="Valor" />
         <input type="date" value={String(movementForm.date).slice(0, 10)} onChange={(event) => setMovementForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />

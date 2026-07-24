@@ -6,6 +6,7 @@ import type {
   DashboardResponse,
   DividendsResponse,
   Goal,
+  MarketRefreshResponse,
   Movement,
   PortfolioResponse,
   ProjectionInput,
@@ -97,6 +98,23 @@ export async function fetchSettings() {
   return unwrapData(data);
 }
 
+export async function fetchMarketStatus() {
+  const { data } = await api.get<ApiEnvelope<unknown>>("/market/status");
+  return unwrapData(data);
+}
+
+export async function refreshMarketData() {
+  const { data } = await api.post<ApiEnvelope<MarketRefreshResponse>>("/market/refresh");
+  invalidateWorkspaceCache();
+  return unwrapData(data);
+}
+
+export async function refreshCdiData() {
+  const { data } = await api.post<ApiEnvelope<unknown>>("/cdi/refresh");
+  invalidateWorkspaceCache();
+  return unwrapData(data);
+}
+
 export async function updateAllocations(allocations: SettingsResponse["allocations"]) {
   const { data } = await api.put<ApiEnvelope<unknown>>("/settings/allocations", { allocations });
   invalidateWorkspaceCache();
@@ -141,6 +159,11 @@ export const cashBoxRecordsApi = {
   overview: async () => unwrapData((await api.get<ApiEnvelope<{ totals: { currentBalance: number; deposited: number; withdrawn: number; yield: number; profitability: number }; cashBoxes: CashBoxRecord[]; history: CashBoxMovementRecord[]; evolution: Array<{ month: string; value: number }> }>>("/cash-boxes")).data),
   create: async (input: CashBoxRecord) => mutate(() => api.post<ApiEnvelope<CashBoxRecord>>("/cash-boxes", input)),
   update: async (id: string, input: Partial<CashBoxRecord>) => mutate(() => api.put<ApiEnvelope<CashBoxRecord>>(`/cash-boxes/${id}`, input)),
+  contribution: async (id: string, input: Pick<CashBoxMovementRecord, "value" | "date" | "description">) =>
+    mutate(() => api.post<ApiEnvelope<CashBoxRecord>>(`/cash-boxes/${id}/contributions`, input)),
+  withdrawal: async (id: string, input: Pick<CashBoxMovementRecord, "value" | "date" | "description">) =>
+    mutate(() => api.post<ApiEnvelope<CashBoxRecord>>(`/cash-boxes/${id}/withdrawals`, input)),
+  recalculate: async () => mutate(() => api.post<ApiEnvelope<unknown>>("/cash-boxes/recalculate", {})),
   remove: async (id: string) => mutate(() => api.delete(`/cash-boxes/${id}`))
 };
 

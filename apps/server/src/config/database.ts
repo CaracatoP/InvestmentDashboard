@@ -1,5 +1,8 @@
+import dns from "node:dns";
 import mongoose from "mongoose";
 import { env } from "./env";
+
+const forcedDnsServers = ["8.8.8.8", "1.1.1.1"];
 
 export async function connectDatabase(): Promise<boolean> {
   if (!env.mongodbUri) {
@@ -8,6 +11,7 @@ export async function connectDatabase(): Promise<boolean> {
   }
 
   try {
+    dns.setServers(forcedDnsServers);
     await mongoose.connect(env.mongodbUri);
     console.info("MongoDB connected.");
     return true;

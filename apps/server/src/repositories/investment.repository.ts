@@ -2,20 +2,29 @@ import { isDatabaseConnected } from "../config/database";
 import { randomUUID } from "crypto";
 import { AssetModel } from "../models/asset.model";
 import { CashBoxModel } from "../models/cash-box.model";
+import { CashBoxYieldModel } from "../models/cash-box-yield.model";
+import { CdiRateModel } from "../models/cdi-rate.model";
 import { ContributionModel } from "../models/contribution.model";
 import { DividendModel } from "../models/dividend.model";
 import { GoalModel } from "../models/goal.model";
+import { MarketQuoteModel } from "../models/market-quote.model";
 import { OperationModel } from "../models/operation.model";
+import { PriceHistoryModel } from "../models/price-history.model";
 import { SettingsModel } from "../models/settings.model";
 import { SnapshotModel } from "../models/snapshot.model";
+import { normalizeTicker } from "../services/ticker.service";
 import type {
   AllocationRecord,
   AssetRecord,
   CashBoxRecord,
+  CashBoxYieldRecord,
+  CdiRateRecord,
   ContributionRecord,
   DividendRecord,
   GoalRecord,
+  MarketQuoteRecord,
   OperationRecord,
+  PriceHistoryRecord,
   SettingsRecord,
   SnapshotRecord
 } from "../types/investment";
@@ -26,7 +35,8 @@ const baseAllocations: AllocationRecord[] = [
   { category: "FII", targetPercentage: 0, priority: 1 },
   { category: "ACAO", targetPercentage: 0, priority: 2 },
   { category: "ETF", targetPercentage: 0, priority: 3 },
-  { category: "CRIPTO", targetPercentage: 0, priority: 4 }
+  { category: "CRIPTO", targetPercentage: 0, priority: 4 },
+  { category: "cash", targetPercentage: 0, priority: 5 }
 ];
 
 function createEmptySettings(): SettingsRecord {
@@ -42,6 +52,18 @@ function createEmptySettings(): SettingsRecord {
   };
 }
 
+function withDefaultAllocations(settings: SettingsRecord): SettingsRecord {
+  const allocations = [...settings.allocations];
+
+  for (const allocation of baseAllocations) {
+    if (!allocations.some((item) => item.category === allocation.category)) {
+      allocations.push({ ...allocation, priority: allocations.length + 1 });
+    }
+  }
+
+  return { ...settings, allocations };
+}
+
 let localAssets: AssetRecord[] = [];
 let localOperations: OperationRecord[] = [];
 let localDividends: DividendRecord[] = [];
@@ -50,6 +72,10 @@ let localGoals: GoalRecord[] = [];
 let localCashBoxes: CashBoxRecord[] = [];
 let localSettings: SettingsRecord = createEmptySettings();
 let localSnapshots: SnapshotRecord[] = [];
+let localMarketQuotes: MarketQuoteRecord[] = [];
+let localPriceHistory: PriceHistoryRecord[] = [];
+let localCdiRates: CdiRateRecord[] = [];
+let localCashBoxYields: CashBoxYieldRecord[] = [];
 
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
@@ -65,6 +91,10 @@ function byDateDesc(left: { date?: string | Date; paymentDate?: string | Date },
   return new Date(rightDate).getTime() - new Date(leftDate).getTime();
 }
 
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
 export async function listAssets(): Promise<AssetRecord[]> {
   if (isDatabaseConnected()) {
     const assets = await AssetModel.find({ active: true }).sort({ ticker: 1 }).lean();
@@ -74,13 +104,169 @@ export async function listAssets(): Promise<AssetRecord[]> {
   return [...localAssets].sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
-export async function findAssetByTicker(ticker: string): Promise<AssetRecord | null> {
+export async function listMarketQuotes(): Promise<MarketQuoteRecord[]> {
   if (isDatabaseConnected()) {
-    const asset = await AssetModel.findOne({ ticker: ticker.toUpperCase(), active: true }).lean();
+    const quotes = await MarketQuoteModel.find().sort({ ticker: 1 }).lean();
+    return quotes.map((quote) => withId(quote)) as unknown as MarketQuoteRecord[];
+  }
+
+  return [...localMarketQuotes].sort((left, right) => left.ticker.localeCompare(right.ticker));
+}
+
+export async function findMarketQuoteByTicker(ticker: string): Promise<MarketQuoteRecord | null> {
+  const canonicalTicker = normalizeTicker(ticker);
+
+  if (isDatabaseConnected()) {
+    const quote = await MarketQuoteModel.findOne({ ticker: canonicalTicker }).lean();
+    return quote ? (withId(quote) as unknown as MarketQuoteRecord) : null;
+  }
+
+  return localMarketQuotes.find((quote) => quote.ticker === canonicalTicker) ?? null;
+}
+
+export async function upsertMarketQuote(input: Omit<MarketQuoteRecord, "id">): Promise<MarketQuoteRecord> {
+  const canonicalTicker = normalizeTicker(input.ticker);
+
+  if (isDatabaseConnected()) {
+    const quote = await MarketQuoteModel.findOneAndUpdate(
+      { ticker: canonicalTicker },
+      { ...input, ticker: canonicalTicker },
+      { new: true, upsert: true }
+    ).lean();
+    return withId(quote) as unknown as MarketQuoteRecord;
+  }
+
+  const index = localMarketQuotes.findIndex((quote) => quote.ticker === canonicalTicker);
+  const quote = { ...input, ticker: canonicalTicker, id: localMarketQuotes[index]?.id ?? randomUUID() };
+  if (index >= 0) localMarketQuotes[index] = quote;
+  else localMarketQuotes = [quote, ...localMarketQuotes];
+  return quote;
+}
+
+export async function createPriceHistory(input: Omit<PriceHistoryRecord, "id">): Promise<PriceHistoryRecord> {
+  const canonicalTicker = normalizeTicker(input.ticker);
+  if (!Number.isFinite(input.price) || input.price <= 0) {
+    throw new Error(`Invalid price history value for ${canonicalTicker}`);
+  }
+
+  if (isDatabaseConnected()) {
+    const history = await PriceHistoryModel.findOneAndUpdate(
+      { ticker: canonicalTicker, capturedAt: input.capturedAt, source: input.source },
+      { ...input, ticker: canonicalTicker },
+      { new: true, upsert: true }
+    ).lean();
+    return withId(history) as unknown as PriceHistoryRecord;
+  }
+
+  const exists = localPriceHistory.some(
+    (item) =>
+      item.ticker === canonicalTicker &&
+      new Date(item.capturedAt).getTime() === new Date(input.capturedAt).getTime() &&
+      item.source === input.source
+  );
+  if (exists) return localPriceHistory.find((item) => item.ticker === canonicalTicker && item.source === input.source) as PriceHistoryRecord;
+  const history = { ...input, ticker: canonicalTicker, id: randomUUID() };
+  localPriceHistory = [history, ...localPriceHistory];
+  return history;
+}
+
+export async function listPriceHistory(ticker?: string): Promise<PriceHistoryRecord[]> {
+  const canonicalTicker = ticker ? normalizeTicker(ticker) : undefined;
+
+  if (isDatabaseConnected()) {
+    const query = canonicalTicker ? { ticker: canonicalTicker } : {};
+    const history = await PriceHistoryModel.find(query).sort({ capturedAt: 1 }).lean();
+    return history.map((item) => withId(item)) as unknown as PriceHistoryRecord[];
+  }
+
+  return localPriceHistory
+    .filter((item) => !canonicalTicker || item.ticker === canonicalTicker)
+    .sort((left, right) => new Date(left.capturedAt).getTime() - new Date(right.capturedAt).getTime());
+}
+
+function normalizeCashBoxYield(record: unknown): CashBoxYieldRecord {
+  const plain = withId(record) as Record<string, unknown> & { cashBoxId?: { toString: () => string } };
+  return {
+    ...plain,
+    cashBoxId: plain.cashBoxId?.toString?.() ?? String(plain.cashBoxId ?? "")
+  } as unknown as CashBoxYieldRecord;
+}
+
+export async function listCdiRates(limit?: number): Promise<CdiRateRecord[]> {
+  if (isDatabaseConnected()) {
+    const query = CdiRateModel.find().sort({ referenceDate: -1 });
+    if (limit) query.limit(limit);
+    const rates = await query.lean();
+    return rates.map((rate) => withId(rate)) as unknown as CdiRateRecord[];
+  }
+
+  return [...localCdiRates].sort((left, right) => right.referenceDate.localeCompare(left.referenceDate)).slice(0, limit);
+}
+
+export async function getLatestCdiRate(): Promise<CdiRateRecord | null> {
+  return (await listCdiRates(1))[0] ?? null;
+}
+
+export async function upsertCdiRate(input: Omit<CdiRateRecord, "id">): Promise<CdiRateRecord> {
+  if (isDatabaseConnected()) {
+    const rate = await CdiRateModel.findOneAndUpdate({ referenceDate: input.referenceDate }, input, { new: true, upsert: true }).lean();
+    return withId(rate) as unknown as CdiRateRecord;
+  }
+
+  const index = localCdiRates.findIndex((rate) => rate.referenceDate === input.referenceDate);
+  const rate = { ...input, id: localCdiRates[index]?.id ?? randomUUID() };
+  if (index >= 0) localCdiRates[index] = rate;
+  else localCdiRates = [rate, ...localCdiRates];
+  return rate;
+}
+
+export async function findCashBoxYield(cashBoxId: string, referenceDate: string): Promise<CashBoxYieldRecord | null> {
+  if (isDatabaseConnected()) {
+    const yieldRecord = await CashBoxYieldModel.findOne({ cashBoxId, referenceDate }).lean();
+    return yieldRecord ? normalizeCashBoxYield(yieldRecord) : null;
+  }
+
+  return localCashBoxYields.find((yieldRecord) => yieldRecord.cashBoxId === cashBoxId && yieldRecord.referenceDate === referenceDate) ?? null;
+}
+
+export async function createCashBoxYield(input: Omit<CashBoxYieldRecord, "id">): Promise<CashBoxYieldRecord> {
+  if (isDatabaseConnected()) {
+    const yieldRecord = await CashBoxYieldModel.findOneAndUpdate(
+      { cashBoxId: input.cashBoxId, referenceDate: input.referenceDate },
+      input,
+      { new: true, upsert: true }
+    ).lean();
+    return normalizeCashBoxYield(yieldRecord);
+  }
+
+  const existing = await findCashBoxYield(input.cashBoxId, input.referenceDate);
+  if (existing) return existing;
+  const yieldRecord = { ...input, id: randomUUID() };
+  localCashBoxYields = [yieldRecord, ...localCashBoxYields];
+  return yieldRecord;
+}
+
+export async function listCashBoxYields(cashBoxId?: string): Promise<CashBoxYieldRecord[]> {
+  if (isDatabaseConnected()) {
+    const query = cashBoxId ? { cashBoxId } : {};
+    const yieldRecords = await CashBoxYieldModel.find(query).sort({ referenceDate: -1 }).lean();
+    return yieldRecords.map(normalizeCashBoxYield);
+  }
+
+  return localCashBoxYields
+    .filter((yieldRecord) => !cashBoxId || yieldRecord.cashBoxId === cashBoxId)
+    .sort((left, right) => right.referenceDate.localeCompare(left.referenceDate));
+}
+
+export async function findAssetByTicker(ticker: string): Promise<AssetRecord | null> {
+  const canonicalTicker = normalizeTicker(ticker);
+
+  if (isDatabaseConnected()) {
+    const asset = await AssetModel.findOne({ ticker: canonicalTicker, active: true }).lean();
     return asset ? (withId(asset) as unknown as AssetRecord) : null;
   }
 
-  return localAssets.find((asset) => asset.ticker === ticker.toUpperCase() && asset.active) ?? null;
+  return localAssets.find((asset) => asset.ticker === canonicalTicker && asset.active) ?? null;
 }
 
 export async function findAssetById(id: string): Promise<AssetRecord | null> {
@@ -93,41 +279,46 @@ export async function findAssetById(id: string): Promise<AssetRecord | null> {
 }
 
 export async function createAsset(input: Omit<AssetRecord, "id" | "createdAt">): Promise<AssetRecord> {
+  const normalizedInput = { ...input, ticker: normalizeTicker(input.ticker) };
+
   if (isDatabaseConnected()) {
-    return withId(await AssetModel.create(input).then((asset) => asset.toObject())) as unknown as AssetRecord;
+    return withId(await AssetModel.create(normalizedInput).then((asset) => asset.toObject())) as unknown as AssetRecord;
   }
 
-  const asset = { ...input, id: randomUUID(), createdAt: new Date().toISOString() };
+  const asset = { ...normalizedInput, id: randomUUID(), createdAt: new Date().toISOString() };
   localAssets = [asset, ...localAssets];
   return asset;
 }
 
 export async function updateAsset(ticker: string, input: Partial<Omit<AssetRecord, "id" | "createdAt">>): Promise<AssetRecord | null> {
   const isObjectId = /^[a-f\d]{24}$/i.test(ticker);
+  const canonicalTicker = normalizeTicker(ticker);
+  const normalizedInput = input.ticker ? { ...input, ticker: normalizeTicker(input.ticker) } : input;
 
   if (isDatabaseConnected()) {
-    const query = isObjectId ? { _id: ticker } : { ticker: ticker.toUpperCase() };
-    const asset = await AssetModel.findOneAndUpdate(query, input, { new: true }).lean();
+    const query = isObjectId ? { _id: ticker } : { ticker: canonicalTicker };
+    const asset = await AssetModel.findOneAndUpdate(query, normalizedInput, { new: true }).lean();
     return asset ? (withId(asset) as unknown as AssetRecord) : null;
   }
 
-  const index = localAssets.findIndex((asset) => asset.id === ticker || asset.ticker === ticker.toUpperCase());
+  const index = localAssets.findIndex((asset) => asset.id === ticker || asset.ticker === canonicalTicker);
   if (index < 0) return null;
-  localAssets[index] = { ...localAssets[index], ...input, ticker: input.ticker?.toUpperCase() ?? localAssets[index].ticker };
+  localAssets[index] = { ...localAssets[index], ...normalizedInput, ticker: normalizedInput.ticker ?? localAssets[index].ticker };
   return localAssets[index];
 }
 
 export async function deleteAsset(ticker: string): Promise<boolean> {
   const isObjectId = /^[a-f\d]{24}$/i.test(ticker);
+  const canonicalTicker = normalizeTicker(ticker);
 
   if (isDatabaseConnected()) {
-    const query = isObjectId ? { _id: ticker } : { ticker: ticker.toUpperCase() };
+    const query = isObjectId ? { _id: ticker } : { ticker: canonicalTicker };
     const result = await AssetModel.findOneAndUpdate(query, { active: false });
     return Boolean(result);
   }
 
   const before = localAssets.length;
-  localAssets = localAssets.map((asset) => (asset.id === ticker || asset.ticker === ticker.toUpperCase() ? { ...asset, active: false } : asset));
+  localAssets = localAssets.map((asset) => (asset.id === ticker || asset.ticker === canonicalTicker ? { ...asset, active: false } : asset));
   return localAssets.length === before;
 }
 
@@ -150,24 +341,28 @@ export async function findOperationById(id: string): Promise<OperationRecord | n
 }
 
 export async function createOperation(input: Omit<OperationRecord, "id">): Promise<OperationRecord> {
+  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+
   if (isDatabaseConnected()) {
-    return withId(await OperationModel.create(input).then((operation) => operation.toObject())) as unknown as OperationRecord;
+    return withId(await OperationModel.create(normalizedInput).then((operation) => operation.toObject())) as unknown as OperationRecord;
   }
 
-  const operation = { ...input, id: randomUUID() };
+  const operation = { ...normalizedInput, id: randomUUID() };
   localOperations = [operation, ...localOperations];
   return operation;
 }
 
 export async function updateOperation(id: string, input: Partial<Omit<OperationRecord, "id">>): Promise<OperationRecord | null> {
+  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+
   if (isDatabaseConnected()) {
-    const operation = await OperationModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const operation = await OperationModel.findByIdAndUpdate(id, normalizedInput, { new: true }).lean();
     return operation ? (withId(operation) as unknown as OperationRecord) : null;
   }
 
   const index = localOperations.findIndex((operation) => operation.id === id);
   if (index < 0) return null;
-  localOperations[index] = { ...localOperations[index], ...input };
+  localOperations[index] = { ...localOperations[index], ...normalizedInput };
   return localOperations[index];
 }
 
@@ -201,24 +396,28 @@ export async function findDividendById(id: string): Promise<DividendRecord | nul
 }
 
 export async function createDividend(input: Omit<DividendRecord, "id">): Promise<DividendRecord> {
+  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+
   if (isDatabaseConnected()) {
-    return withId(await DividendModel.create(input).then((dividend) => dividend.toObject())) as unknown as DividendRecord;
+    return withId(await DividendModel.create(normalizedInput).then((dividend) => dividend.toObject())) as unknown as DividendRecord;
   }
 
-  const dividend = { ...input, id: randomUUID() };
+  const dividend = { ...normalizedInput, id: randomUUID() };
   localDividends = [dividend, ...localDividends];
   return dividend;
 }
 
 export async function updateDividend(id: string, input: Partial<Omit<DividendRecord, "id">>): Promise<DividendRecord | null> {
+  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+
   if (isDatabaseConnected()) {
-    const dividend = await DividendModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const dividend = await DividendModel.findByIdAndUpdate(id, normalizedInput, { new: true }).lean();
     return dividend ? (withId(dividend) as unknown as DividendRecord) : null;
   }
 
   const index = localDividends.findIndex((dividend) => dividend.id === id);
   if (index < 0) return null;
-  localDividends[index] = { ...localDividends[index], ...input };
+  localDividends[index] = { ...localDividends[index], ...normalizedInput };
   return localDividends[index];
 }
 
@@ -386,13 +585,74 @@ export async function deleteCashBox(id: string): Promise<boolean> {
   return localCashBoxes.length === before;
 }
 
+function isContributionMovement(type: string) {
+  return type === "DEPOSITO" || type === "contribution";
+}
+
+function isWithdrawalMovement(type: string) {
+  return type === "RESGATE" || type === "withdrawal";
+}
+
+function isYieldMovement(type: string) {
+  return type === "RENDIMENTO" || type === "yield";
+}
+
+function deriveCashBoxFields(cashBox: CashBoxRecord) {
+  const movements = cashBox.movements ?? [];
+  const movementContributions = sum(movements.filter((movement) => isContributionMovement(movement.type)).map((movement) => movement.value));
+  const movementWithdrawals = sum(movements.filter((movement) => isWithdrawalMovement(movement.type)).map((movement) => movement.value));
+  const movementYield = sum(movements.filter((movement) => isYieldMovement(movement.type)).map((movement) => movement.value));
+  const initialBalance =
+    cashBox.initialBalance ??
+    Math.max((cashBox.currentBalance ?? 0) - movementContributions + movementWithdrawals - movementYield, 0);
+
+  return {
+    categoryId: cashBox.categoryId ?? "cash",
+    initialBalance,
+    totalContributions: cashBox.totalContributions ?? initialBalance + movementContributions,
+    totalWithdrawals: cashBox.totalWithdrawals ?? movementWithdrawals,
+    totalYield: cashBox.totalYield ?? movementYield,
+    currentBalance: cashBox.currentBalance ?? Math.max(initialBalance + movementContributions - movementWithdrawals + movementYield, 0),
+    lastYieldCalculationAt: cashBox.lastYieldCalculationAt ?? new Date()
+  };
+}
+
+export async function migrateCashBoxes(): Promise<{ updated: number }> {
+  const cashBoxes = await listCashBoxes();
+  let updated = 0;
+
+  for (const cashBox of cashBoxes) {
+    const derived = deriveCashBoxFields(cashBox);
+    const needsMigration =
+      cashBox.categoryId !== derived.categoryId ||
+      cashBox.initialBalance === undefined ||
+      cashBox.totalContributions === undefined ||
+      cashBox.totalWithdrawals === undefined ||
+      cashBox.totalYield === undefined ||
+      cashBox.lastYieldCalculationAt === undefined;
+
+    if (!needsMigration || !cashBox.id) continue;
+    await updateCashBox(cashBox.id, derived);
+    updated += 1;
+  }
+
+  return { updated };
+}
+
 export async function getSettingsRecord(): Promise<SettingsRecord> {
   if (isDatabaseConnected()) {
     const settings = await SettingsModel.findOne().lean();
-    if (settings) return withId(settings) as unknown as SettingsRecord;
+    if (settings) {
+      const normalized = withDefaultAllocations(withId(settings) as unknown as SettingsRecord);
+      if (normalized.allocations.length !== ((settings as unknown as SettingsRecord).allocations ?? []).length) {
+        await SettingsModel.findByIdAndUpdate(normalized.id, { allocations: normalized.allocations });
+      }
+      return normalized;
+    }
     return withId(await SettingsModel.create(createEmptySettings()).then((record) => record.toObject())) as unknown as SettingsRecord;
   }
 
+  localSettings = withDefaultAllocations(localSettings);
   return localSettings;
 }
 
@@ -448,7 +708,8 @@ export async function listCategories() {
         ACAO: "#38bdf8",
         ETF: "#a78bfa",
         CRIPTO: "#f59e0b",
-        RENDA_FIXA: "#fb7185"
+        RENDA_FIXA: "#fb7185",
+        cash: "#14b8a6"
       }[allocation.category] ?? "#14b8a6",
     targetPercentage: allocation.targetPercentage
   }));

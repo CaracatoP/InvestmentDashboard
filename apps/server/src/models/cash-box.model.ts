@@ -2,7 +2,11 @@ import { Schema, model, models, InferSchemaType } from "mongoose";
 
 const cashBoxMovementSchema = new Schema(
   {
-    type: { type: String, enum: ["DEPOSITO", "RESGATE", "RENDIMENTO"], required: true },
+    type: {
+      type: String,
+      enum: ["DEPOSITO", "RESGATE", "RENDIMENTO", "contribution", "withdrawal", "yield", "adjustment"],
+      required: true
+    },
     value: { type: Number, required: true, min: 0 },
     date: { type: Date, required: true },
     description: { type: String, default: "" }
@@ -12,10 +16,17 @@ const cashBoxMovementSchema = new Schema(
 
 const cashBoxSchema = new Schema(
   {
+    categoryId: { type: String, default: "cash", trim: true },
     name: { type: String, required: true, trim: true },
     type: { type: String, required: true, trim: true },
+    initialBalance: { type: Number, default: 0, min: 0 },
     currentBalance: { type: Number, required: true, min: 0 },
+    totalContributions: { type: Number, default: 0, min: 0 },
+    totalWithdrawals: { type: Number, default: 0, min: 0 },
+    totalYield: { type: Number, default: 0, min: 0 },
     cdiPercentage: { type: Number, required: true, min: 0 },
+    annualRateOverride: { type: Number, min: 0 },
+    lastYieldCalculationAt: { type: Date },
     createdAt: { type: Date, required: true, default: Date.now },
     active: { type: Boolean, default: true },
     movements: { type: [cashBoxMovementSchema], default: [] }
