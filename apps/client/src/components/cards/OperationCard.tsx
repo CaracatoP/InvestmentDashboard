@@ -11,20 +11,20 @@ interface OperationCardProps {
 
 export function OperationCard({ type, ticker, date, amount, description }: OperationCardProps) {
   return (
-    <article className="rounded-lg border border-line bg-panel p-4">
+    <article className="min-w-0 rounded-lg border border-line bg-panel p-4">
       <div className="flex items-center gap-3">
         <div className="grid h-9 w-9 place-items-center rounded-lg bg-aqua/10 text-aqua">
           <Repeat2 size={17} />
         </div>
         <div className="min-w-0">
-          <p className="font-medium text-ink">
+          <p className="break-words font-medium text-ink">
             {type} {ticker}
           </p>
           <p className="text-sm text-muted">{formatDate(date)}</p>
         </div>
       </div>
-      <p className="mt-3 text-sm text-muted">{description}</p>
-      <p className="mt-2 font-semibold text-ink">{formatCurrency(amount)}</p>
+      <p className="mt-3 break-words text-sm text-muted">{description}</p>
+      <p className="mt-2 break-words font-semibold text-ink [overflow-wrap:anywhere]">{formatCurrency(amount)}</p>
     </article>
   );
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { assetRecordsApi, operationRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AssetRecord, OperationRecord, OperationType } from "../types/management";
@@ -89,6 +90,41 @@ export function OperationsPage() {
         columns={["Data", "Tipo", "Ativo", "Quantidade", "Preco", "Taxas", "Total"]}
         rows={filtered}
         getKey={(operation) => operation.id ?? `${operation.type}-${operation.date}-${operation.assetTicker}`}
+        renderMobileCard={(operation) => (
+          <MobileDataCard
+            title={`${operation.type} ${operation.assetTicker}`}
+            subtitle={new Date(operation.date).toLocaleDateString("pt-BR")}
+            badge={<span className="text-accent">{formatCurrency(operation.totalValue)}</span>}
+          >
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Quantidade</p>
+                <p className="font-medium text-ink">{operation.quantity}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Preco</p>
+                <p className="font-medium text-ink">{formatCurrency(operation.price)}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Taxas</p>
+                <p className="font-medium text-ink">{formatCurrency(operation.fees)}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Total</p>
+                <p className="font-medium text-accent">{formatCurrency(operation.totalValue)}</p>
+              </div>
+            </div>
+            {operation.notes ? <p className="mt-3 break-words text-sm text-muted">{operation.notes}</p> : null}
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => openEdit(operation)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                Editar
+              </button>
+              <button type="button" onClick={() => setDeleteTarget(operation)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
+                Excluir
+              </button>
+            </div>
+          </MobileDataCard>
+        )}
         renderRow={(operation) => (
           <>
             <td className="py-3">{new Date(operation.date).toLocaleDateString("pt-BR")}</td>
@@ -115,7 +151,7 @@ export function OperationsPage() {
         <input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: Number(event.target.value) }))} className={fieldClass} placeholder="Preco" />
         <input type="number" min="0" step="0.01" value={form.fees} onChange={(event) => setForm((current) => ({ ...current, fees: Number(event.target.value) }))} className={fieldClass} placeholder="Taxas" />
         <input type="number" min="0" step="0.01" value={form.totalValue} readOnly className={fieldClass} placeholder="Valor total" />
-        <textarea value={form.notes ?? ""} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-24 rounded-lg border border-line bg-elevated px-3 py-2 text-sm text-ink outline-none focus:border-accent" placeholder="Observacao" />
+        <textarea value={form.notes ?? ""} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-24 w-full rounded-lg border border-line bg-elevated px-3 py-2 text-base text-ink outline-none focus:border-accent sm:text-sm" placeholder="Observacao" />
       </ManagementModal>
       <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir operacao ${deleteTarget?.type ?? ""}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />
     </div>

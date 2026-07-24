@@ -123,8 +123,8 @@ export function ProjectionsPage() {
         description="Projete patrimonio, renda futura, inflacao e reinvestimento de dividendos ate a idade objetivo."
       />
 
-      <section className="grid gap-4 xl:grid-cols-[0.78fr_1.22fr]">
-        <form onSubmit={(event) => event.preventDefault()} className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+      <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
+        <form onSubmit={(event) => event.preventDefault()} className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
           <h2 className="text-base font-semibold text-ink">Parametros</h2>
           <div className="mt-4 grid gap-3">
             {[
@@ -144,7 +144,7 @@ export function ProjectionsPage() {
                   onChange={(event) => updateField(field as keyof ProjectionInput, Number(event.target.value))}
                   min={field === "targetAge" ? form.currentAge + 1 : 0}
                   step={field === "currentAge" || field === "targetAge" ? "1" : "0.01"}
-                  className="h-10 rounded-lg border border-line bg-elevated px-3 text-sm text-ink outline-none focus:border-accent"
+                  className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none focus:border-accent sm:text-sm"
                 />
               </label>
             ))}
@@ -157,7 +157,7 @@ export function ProjectionsPage() {
                 className="h-4 w-4 accent-accent"
               />
             </label>
-            <div className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black">
+            <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black">
               <Calculator size={16} />
               Calculando em tempo real
             </div>
@@ -165,9 +165,9 @@ export function ProjectionsPage() {
           </div>
         </form>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {projection ? (
-            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard label="Patrimonio futuro" value={formatCurrency(projection.summary.futureWealth)} icon={<TrendingUp size={18} />} />
               <StatCard label="Valor real" value={formatCurrency(projection.summary.realFutureWealth)} icon={<TrendingUp size={18} />} tone="blue" />
               <StatCard label="Dividendos futuros" value={formatCurrency(projection.summary.futureMonthlyDividends)} icon={<Coins size={18} />} tone="amber" />
@@ -188,7 +188,7 @@ export function ProjectionsPage() {
             />
           </ChartCard>
 
-          <section className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <section className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-ink">Tempo ate atingir metas</h2>
               <Target size={18} className="text-muted" />
@@ -202,7 +202,7 @@ export function ProjectionsPage() {
                       <span className="text-muted">{timeLabel}</span>
                     </div>
                     <ProgressBar value={progress} tone={progress >= 100 ? "green" : "blue"} />
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 break-words text-xs text-muted">
                       <span>Projetado: {goal.type === "shares" ? projectedValue.toLocaleString("pt-BR") : formatCurrency(projectedValue)}</span>
                       <span>Meta: {goal.type === "shares" ? getGoalTarget(goal).toLocaleString("pt-BR") : formatCurrency(getGoalTarget(goal))}</span>
                       <span>{formatPercentage(progress)}</span>

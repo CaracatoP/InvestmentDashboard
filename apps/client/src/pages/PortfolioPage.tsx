@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { PieChart } from "../components/charts/PieChart";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
+import { EmptyState, MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
 import { refreshMarketData } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
@@ -61,6 +62,11 @@ function quoteStatusMatches(asset: Asset, filter: string) {
   if (filter === "Indisponivel") return ["unavailable", "unsupported"].includes(status) || !hasValidPrice(asset);
   if (filter === "Erro") return ["error", "failed"].includes(status);
   return true;
+}
+
+function quoteStatusClass(asset: Asset) {
+  if (hasValidPrice(asset)) return "text-accent";
+  return hasPosition(asset) ? "text-amber" : "text-muted";
 }
 
 export function PortfolioPage() {
@@ -169,7 +175,7 @@ export function PortfolioPage() {
         description="Pesos, rentabilidade, dividend yield, preco medio e exposicao por categoria em uma tabela filtravel."
       />
 
-      <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <section className="mb-4 grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <StatCard label="Valor investido" value={formatCurrency(summary.invested)} detail="Posicoes ativas" icon={<RefreshCw size={18} />} tone="violet" />
         <StatCard label="Valor atual" value={formatCurrency(summary.current)} detail="Somente cotacoes validas" icon={<RefreshCw size={18} />} />
         <StatCard label="Lucro nao realizado" value={formatCurrency(summary.profit)} detail="Sem dividendos" icon={<RefreshCw size={18} />} tone={summary.profit < 0 ? "rose" : "green"} />
@@ -178,8 +184,8 @@ export function PortfolioPage() {
         <StatCard label="Cotacoes indisponiveis" value={String(summary.unavailableCount)} detail="Requer refresh ou provider" icon={<RefreshCw size={18} />} tone={summary.unavailableCount > 0 ? "amber" : "green"} />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
-        <div className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+      <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.65fr)]">
+        <div className="min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
           <div className="mb-4 flex flex-col gap-3">
             <div className="flex flex-col gap-3 xl:flex-row">
               <label className="relative flex-1">
@@ -187,21 +193,21 @@ export function PortfolioPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="h-10 w-full rounded-lg border border-line bg-elevated pl-9 pr-3 text-sm text-ink outline-none transition focus:border-accent"
+                  className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm"
                   placeholder="Buscar por nome ou ticker"
                 />
               </label>
-              <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-10 rounded-lg border border-line bg-elevated px-3 text-sm text-ink outline-none transition focus:border-accent">
+              <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
                 {categories.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
               </select>
-              <select value={positionFilter} onChange={(event) => setPositionFilter(event.target.value)} className="h-10 rounded-lg border border-line bg-elevated px-3 text-sm text-ink outline-none transition focus:border-accent">
+              <select value={positionFilter} onChange={(event) => setPositionFilter(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
                 {positionFilters.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
               </select>
-              <select value={quoteStatusFilter} onChange={(event) => setQuoteStatusFilter(event.target.value)} className="h-10 rounded-lg border border-line bg-elevated px-3 text-sm text-ink outline-none transition focus:border-accent">
+              <select value={quoteStatusFilter} onChange={(event) => setQuoteStatusFilter(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
                 {quoteStatusFilters.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
@@ -210,7 +216,8 @@ export function PortfolioPage() {
                 type="button"
                 onClick={() => void handleRefresh()}
                 disabled={isRefreshing}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-ink transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-ink transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                aria-label="Atualizar cotacoes"
               >
                 <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
                 {isRefreshing ? "Atualizando" : "Atualizar"}
@@ -223,9 +230,96 @@ export function PortfolioPage() {
           </div>
 
           {filteredAssets.length === 0 ? (
-            <div className="rounded-lg border border-line bg-elevated p-6 text-sm text-muted">{emptyMessage}</div>
+            <EmptyState>{emptyMessage}</EmptyState>
           ) : (
-            <div className="scrollbar-thin max-h-[680px] overflow-auto">
+            <>
+              <div className="space-y-3 md:hidden">
+                {filteredAssets.map((asset) => {
+                  const quoteLabel = quoteStatusLabel(asset.priceStatus);
+                  const lastQuote = asset.lastPriceAt ? new Date(asset.lastPriceAt).toLocaleString("pt-BR") : "indisponivel";
+
+                  return (
+                    <MobileDataCard
+                      key={asset.ticker}
+                      title={
+                        <Link to={`/ativos/${asset.ticker}`} className="hover:text-accent">
+                          {asset.ticker}
+                        </Link>
+                      }
+                      subtitle={asset.name}
+                      badge={<span className={quoteStatusClass(asset)}>{quoteLabel}</span>}
+                    >
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Categoria</p>
+                          <p className="break-words font-medium text-ink">{asset.categoryLabel ?? asset.category}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Quantidade</p>
+                          <p className="font-medium text-ink">{asset.quantity}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Preco medio</p>
+                          <p className="font-medium text-ink">{formatCurrency(asset.averagePrice)}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Preco atual</p>
+                          <p className="font-medium text-ink">{hasValidPrice(asset) ? formatCurrency(asset.currentPrice ?? 0) : "Indisponivel"}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Investido</p>
+                          <p className="font-medium text-ink">{formatCurrency(asset.totalInvested ?? asset.investedValue)}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Valor atual</p>
+                          <p className="font-medium text-ink">{formatNullableCurrency(asset.currentValue)}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Lucro</p>
+                          <p className={`font-medium ${metricClass(asset.unrealizedProfit ?? asset.profit)}`}>{formatNullableCurrency(asset.unrealizedProfit ?? asset.profit)}</p>
+                        </div>
+                        <div className="rounded-lg bg-elevated px-3 py-2">
+                          <p className="text-xs text-muted">Rentabilidade</p>
+                          <p className={`font-medium ${metricClass(asset.profitabilityPercent ?? asset.returnPercentage)}`}>
+                            {formatNullablePercentage(asset.profitabilityPercent ?? asset.returnPercentage)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <details className="mt-3 rounded-lg bg-elevated px-3 py-2 text-sm">
+                        <summary className="min-h-11 cursor-pointer list-none py-2 text-ink">Detalhes do ativo</summary>
+                        <div className="grid gap-2 border-t border-line pt-3 text-muted">
+                          <p className="flex justify-between gap-3">
+                            <span>Dividend Yield</span>
+                            <span className="text-ink">{formatPercentage(asset.dividendYield)}</span>
+                          </p>
+                          <p className="flex justify-between gap-3">
+                            <span>Yield on Cost</span>
+                            <span className="text-ink">{formatPercentage(asset.yieldOnCost ?? 0)}</span>
+                          </p>
+                          <p className="flex justify-between gap-3">
+                            <span>Dividendos</span>
+                            <span className="text-ink">{formatCurrency(asset.dividendsReceived)}</span>
+                          </p>
+                          <p className="flex justify-between gap-3">
+                            <span>Peso</span>
+                            <span className="text-ink">{formatPercentage(asset.weightPercent ?? asset.portfolioWeight)}</span>
+                          </p>
+                          <p className="flex justify-between gap-3">
+                            <span>Ultima cotacao</span>
+                            <span className="text-right text-ink">{lastQuote}</span>
+                          </p>
+                        </div>
+                      </details>
+
+                      <Link to={`/ativos/${asset.ticker}`} className="mt-3 inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-ink transition hover:border-accent/50">
+                        Abrir detalhes
+                      </Link>
+                    </MobileDataCard>
+                  );
+                })}
+              </div>
+              <div className="scrollbar-thin hidden max-h-[680px] overflow-auto md:block">
               <table className="w-full min-w-[1180px] border-collapse text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-panel text-xs uppercase tracking-[0.14em] text-muted">
                   <tr className="border-b border-line">
@@ -283,26 +377,27 @@ export function PortfolioPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+              </div>
+            </>
           )}
         </div>
 
-        <aside className="space-y-4">
-          <article className="rounded-lg border border-line bg-panel p-4">
+        <aside className="min-w-0 space-y-4">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4">
             <p className="text-sm text-muted">Aporte recomendado</p>
-            <h2 className="mt-2 text-xl font-semibold text-ink">{recommendedCategory?.label ?? (portfolio.recommendation.category || "A definir")}</h2>
+            <h2 className="mt-2 break-words text-xl font-semibold text-ink">{recommendedCategory?.label ?? (portfolio.recommendation.category || "A definir")}</h2>
             <div className="mt-3 space-y-2 text-sm text-muted">
               <p>Atual: {formatPercentage(recommendedCategory?.currentPercent ?? 0)}</p>
               <p>Alvo: {formatPercentage(recommendedCategory?.targetPercent ?? 0)}</p>
               <p>Deficit: {formatCurrency(recommendedCategory?.amountNeeded ?? 0)}</p>
-              <p>Ativo sugerido: {suggestedAsset?.ticker ?? (suggestedTicker ? "Sem preco valido" : "Cadastre uma posicao elegivel")}</p>
+              <p className="break-words">Ativo sugerido: {suggestedAsset?.ticker ?? (suggestedTicker ? "Sem preco valido" : "Cadastre uma posicao elegivel")}</p>
             </div>
             <p className="mt-3 text-sm leading-6 text-muted">{portfolio.recommendation.reason}</p>
             <p className="mt-2 text-xs text-muted">
               Ultima cotacao: {suggestedAsset?.lastPriceAt ? new Date(suggestedAsset.lastPriceAt).toLocaleString("pt-BR") : "indisponivel"}
             </p>
           </article>
-          <article className="rounded-lg border border-line bg-panel p-4">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4">
             <h2 className="text-base font-semibold text-ink">Carteira ideal x atual</h2>
             <div className="mt-4">
               <PieChart data={allocationChartData} height={220} />
@@ -310,9 +405,9 @@ export function PortfolioPage() {
             <div className="mt-4 space-y-4">
               {portfolio.allocationComparison.map((item) => (
                 <div key={item.category}>
-                  <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                    <span className="truncate text-muted">{item.category}</span>
-                    <span className="text-ink">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm">
+                    <span className="break-words text-muted">{item.category}</span>
+                    <span className="shrink-0 text-ink">
                       {formatPercentage(item.currentPercentage)} / {formatPercentage(item.targetPercentage)}
                     </span>
                   </div>

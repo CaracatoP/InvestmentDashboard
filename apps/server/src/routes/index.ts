@@ -12,9 +12,11 @@ import { projectionsRoutes } from "./projections.routes";
 import { settingsRoutes } from "./settings.routes";
 import { marketRoutes } from "./market.routes";
 import { cdiRoutes } from "./cdi.routes";
+import { healthRoutes } from "./health.routes";
 
 export const apiRoutes = Router();
 
+apiRoutes.use("/health", healthRoutes);
 apiRoutes.use("/dashboard", dashboardRoutes);
 apiRoutes.use("/assets", assetsRoutes);
 apiRoutes.use("/operations", operationsRoutes);

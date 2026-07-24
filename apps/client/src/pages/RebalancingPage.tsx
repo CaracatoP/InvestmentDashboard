@@ -69,14 +69,14 @@ export function RebalancingPage() {
         description="Peso atual, peso ideal, diferenca, valor faltante e proximo aporte calculados automaticamente."
       />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Proximo aporte" value={underAllocated?.category ?? "A definir"} detail={portfolio.recommendation.action} icon={<Target size={18} />} />
         <StatCard label="Quanto falta" value={formatCurrency(underAllocated?.missingValue ?? 0)} detail={underAllocated ? `${formatPercentage(Math.abs(underAllocated.difference))} abaixo do ideal` : "Sem alvo"} icon={<ArrowDownCircle size={18} />} tone="blue" />
         <StatCard label="Maior excesso" value={overAllocated?.category ?? "A definir"} detail={formatPercentage(overAllocated?.difference ?? 0)} icon={<ArrowUpCircle size={18} />} tone="amber" />
         <StatCard label="Categorias" value={String(comparison.length)} detail="Alocacoes configuradas" icon={<GitCompareArrows size={18} />} tone="violet" />
       </section>
 
-      <section className="mt-6 grid gap-4 xl:grid-cols-[1fr_1fr]">
+      <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <ChartCard title="Distribuicao atual">
           <PieChart data={comparison} />
         </ChartCard>
@@ -89,19 +89,19 @@ export function RebalancingPage() {
         </ChartCard>
       </section>
 
-      <section className="mt-4 rounded-lg border border-line bg-panel p-4 shadow-soft">
+      <section className="mt-4 min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
         <h2 className="text-base font-semibold text-ink">Peso atual x ideal</h2>
         <div className="mt-4 space-y-4">
           {comparison.map((item) => (
             <div key={item.category}>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm">
-                <span className="font-medium text-ink">{item.category}</span>
-                <span className="text-muted">
+                <span className="break-words font-medium text-ink">{item.category}</span>
+                <span className="shrink-0 text-muted">
                   Atual {formatPercentage(item.currentPercentage)} / Ideal {formatPercentage(item.targetPercentage)}
                 </span>
               </div>
               <ProgressBar value={item.currentPercentage} tone={item.difference > 0 ? "amber" : "green"} />
-              <div className="mt-2 grid gap-2 text-sm text-muted md:grid-cols-3">
+              <div className="mt-2 grid gap-2 break-words text-sm text-muted md:grid-cols-3">
                 <span>Diferenca: {item.difference > 0 ? "+" : ""}{formatPercentage(item.difference)}</span>
                 <span>Atual: {formatCurrency(item.value ?? 0)}</span>
                 <span>Falta: {formatCurrency(item.missingValue ?? 0)}</span>

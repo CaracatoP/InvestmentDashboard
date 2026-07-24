@@ -4,6 +4,7 @@ import { PieChart } from "../components/charts/PieChart";
 import { DividendCard } from "../components/cards/DividendCard";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AllocationComparison } from "../types/investments";
@@ -38,7 +39,7 @@ export function DividendsPage() {
         description="Recebimentos, media mensal, maior pagamento, calendario, tabela e graficos vindos da API."
       />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Dividendos mes" value={formatCurrency(dividends.totals.month)} icon={<Coins size={18} />} />
         <StatCard label="Dividendos ano" value={formatCurrency(dividends.totals.year)} icon={<CalendarDays size={18} />} tone="blue" />
         <StatCard label="Total recebido" value={formatCurrency(dividends.totals.allTime)} icon={<TrendingUp size={18} />} tone="violet" />
@@ -46,7 +47,7 @@ export function DividendsPage() {
         <StatCard label="Maior pagamento" value={formatCurrency(dividends.totals.biggestPayment)} icon={<Award size={18} />} tone="rose" />
       </section>
 
-      <section className="mt-6 grid gap-4 xl:grid-cols-2">
+      <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-2">
         <ChartCard title="Grafico mensal">
           <BarChart data={dividends.monthly} name="Dividendos" color="#22c55e" />
         </ChartCard>
@@ -55,7 +56,7 @@ export function DividendsPage() {
         </ChartCard>
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+      <section className="mt-4 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <ChartCard title="Dividendos por ativo">
           <PieChart data={pieData} />
         </ChartCard>
@@ -68,9 +69,30 @@ export function DividendsPage() {
         </ChartCard>
       </section>
 
-      <section className="mt-4 rounded-lg border border-line bg-panel p-4 shadow-soft">
+      <section className="mt-4 min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
         <h2 className="text-base font-semibold text-ink">Tabela</h2>
-        <div className="scrollbar-thin mt-4 overflow-x-auto">
+        <div className="mt-4 space-y-3 md:hidden">
+          {dividends.table.map((dividend) => (
+            <MobileDataCard
+              key={`${dividend.assetTicker}-${dividend.date}-${dividend.amount}`}
+              title={dividend.assetTicker}
+              subtitle={new Date(dividend.date).toLocaleDateString("pt-BR")}
+              badge={<span className="text-accent">{formatCurrency(dividend.amount)}</span>}
+            >
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Cotas</p>
+                  <p className="font-medium text-ink">{dividend.shares}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Valor</p>
+                  <p className="font-medium text-accent">{formatCurrency(dividend.amount)}</p>
+                </div>
+              </div>
+            </MobileDataCard>
+          ))}
+        </div>
+        <div className="scrollbar-thin mt-4 hidden overflow-x-auto md:block">
           <table className="w-full min-w-[620px] text-left text-sm">
             <thead className="text-xs uppercase tracking-[0.14em] text-muted">
               <tr className="border-b border-line">

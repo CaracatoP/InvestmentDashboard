@@ -77,6 +77,14 @@ let localPriceHistory: PriceHistoryRecord[] = [];
 let localCdiRates: CdiRateRecord[] = [];
 let localCashBoxYields: CashBoxYieldRecord[] = [];
 
+interface PriceHistoryFilters {
+  source?: string;
+  type?: string;
+  interval?: string;
+  from?: string | Date;
+  to?: string | Date;
+}
+
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
   return {
@@ -158,29 +166,54 @@ export async function createPriceHistory(input: Omit<PriceHistoryRecord, "id">):
     return withId(history) as unknown as PriceHistoryRecord;
   }
 
-  const exists = localPriceHistory.some(
+  const existingHistory = localPriceHistory.find(
     (item) =>
       item.ticker === canonicalTicker &&
       new Date(item.capturedAt).getTime() === new Date(input.capturedAt).getTime() &&
       item.source === input.source
   );
-  if (exists) return localPriceHistory.find((item) => item.ticker === canonicalTicker && item.source === input.source) as PriceHistoryRecord;
-  const history = { ...input, ticker: canonicalTicker, id: randomUUID() };
+  if (existingHistory) return existingHistory;
+  const history = {
+    ...input,
+    ticker: canonicalTicker,
+    id: randomUUID(),
+    createdAt: new Date(),
+    updatedAt: new Date()
+  };
   localPriceHistory = [history, ...localPriceHistory];
   return history;
 }
 
-export async function listPriceHistory(ticker?: string): Promise<PriceHistoryRecord[]> {
+function matchesPriceHistoryFilters(item: PriceHistoryRecord, filters: PriceHistoryFilters = {}) {
+  if (filters.source && item.source !== filters.source) return false;
+  if (filters.type && item.type !== filters.type) return false;
+  if (filters.interval && item.interval !== filters.interval) return false;
+  if (filters.from && new Date(item.capturedAt).getTime() < new Date(filters.from).getTime()) return false;
+  if (filters.to && new Date(item.capturedAt).getTime() > new Date(filters.to).getTime()) return false;
+  return true;
+}
+
+export async function listPriceHistory(ticker?: string, filters: PriceHistoryFilters = {}): Promise<PriceHistoryRecord[]> {
   const canonicalTicker = ticker ? normalizeTicker(ticker) : undefined;
 
   if (isDatabaseConnected()) {
-    const query = canonicalTicker ? { ticker: canonicalTicker } : {};
+    const query: Record<string, unknown> = canonicalTicker ? { ticker: canonicalTicker } : {};
+    if (filters.source) query.source = filters.source;
+    if (filters.type) query.type = filters.type;
+    if (filters.interval) query.interval = filters.interval;
+    if (filters.from || filters.to) {
+      query.capturedAt = {
+        ...(filters.from ? { $gte: new Date(filters.from) } : {}),
+        ...(filters.to ? { $lte: new Date(filters.to) } : {})
+      };
+    }
     const history = await PriceHistoryModel.find(query).sort({ capturedAt: 1 }).lean();
     return history.map((item) => withId(item)) as unknown as PriceHistoryRecord[];
   }
 
   return localPriceHistory
     .filter((item) => !canonicalTicker || item.ticker === canonicalTicker)
+    .filter((item) => matchesPriceHistoryFilters(item, filters))
     .sort((left, right) => new Date(left.capturedAt).getTime() - new Date(right.capturedAt).getTime());
 }
 

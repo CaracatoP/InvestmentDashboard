@@ -35,19 +35,28 @@ export function startCdiScheduler() {
   schedulerState.__investmentDashboardCdiSchedulerStarted = true;
 
   let lastRunKey = "";
+  let isRunning = false;
 
   setInterval(() => {
     const now = new Date();
     const parts = getCdiParts(now);
     const runKey = `${parts.weekday}-${parts.hour}:${parts.minute}`;
 
-    if (!shouldRunCdiRefresh(now) || lastRunKey === runKey) return;
+    if (!shouldRunCdiRefresh(now) || lastRunKey === runKey || isRunning) return;
 
     lastRunKey = runKey;
+    isRunning = true;
     void refreshCdiRate()
       .then(() => recalculateCashBoxYields())
       .then((result) => {
         console.info(`CDI cashbox yield finished: ${result.applied} applied, ${result.skipped} skipped.`);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Unknown CDI scheduler error";
+        console.warn(`CDI scheduler failed: ${message}`);
+      })
+      .finally(() => {
+        isRunning = false;
       });
   }, 60_000).unref();
 }

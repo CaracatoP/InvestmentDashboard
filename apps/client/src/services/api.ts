@@ -1,7 +1,9 @@
 import axios from "axios";
+import { API_BASE_URL } from "../config/api";
 import { invalidateWorkspaceCache } from "./cache-invalidation";
 import type {
   AssetDetails,
+  AssetPriceHistoryResponse,
   ContributionsResponse,
   DashboardResponse,
   DividendsResponse,
@@ -16,11 +18,12 @@ import type {
 import type { AssetRecord, CashBoxMovementRecord, CashBoxRecord, ContributionRecord, DividendRecord, GoalRecord, OperationRecord } from "../types/management";
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:4000/api",
+  baseURL: API_BASE_URL,
   timeout: 12000
 });
 
 type ApiEnvelope<T> = T | { data: T };
+const assetPriceHistoryCache = new Map<string, AssetPriceHistoryResponse>();
 
 function unwrapData<T>(payload: ApiEnvelope<T>): T {
   if (payload && typeof payload === "object" && "data" in payload) {
@@ -49,6 +52,20 @@ export async function fetchPortfolio() {
 export async function fetchAsset(ticker: string) {
   const { data } = await api.get<ApiEnvelope<AssetDetails>>(`/assets/${ticker}`);
   return unwrapData(data);
+}
+
+export async function fetchAssetPriceHistory(ticker: string, range = "1y", signal?: AbortSignal) {
+  const key = `${ticker.toUpperCase()}-${range}`;
+  const cached = assetPriceHistoryCache.get(key);
+  if (cached) return cached;
+
+  const { data } = await api.get<ApiEnvelope<AssetPriceHistoryResponse>>(`/assets/${ticker}/price-history`, {
+    params: { range },
+    signal
+  });
+  const payload = unwrapData(data);
+  assetPriceHistoryCache.set(key, payload);
+  return payload;
 }
 
 export async function fetchDividends() {

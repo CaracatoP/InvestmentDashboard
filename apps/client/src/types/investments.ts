@@ -160,6 +160,27 @@ export interface AssetDetails extends Asset {
   operations: Array<{ assetTicker: string; type: string; date: string; quantity: number; price: number; total: number; notes: string }>;
 }
 
+export interface AssetPriceHistoryPoint {
+  timestamp: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close: number;
+  volume?: number;
+}
+
+export interface AssetPriceHistoryResponse {
+  ticker: string;
+  range: string;
+  interval: string;
+  source: string;
+  currency: string;
+  points: AssetPriceHistoryPoint[];
+  lastUpdatedAt: string | null;
+  status: "updated" | "cached" | "stale" | "unavailable" | "unsupported" | "error";
+  message?: string;
+}
+
 export interface DividendsResponse {
   totals: {
     month: number;

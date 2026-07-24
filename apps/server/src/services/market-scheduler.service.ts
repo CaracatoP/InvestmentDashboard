@@ -35,17 +35,27 @@ export function startMarketScheduler() {
   schedulerState.__investmentDashboardMarketSchedulerStarted = true;
 
   let lastRunKey = "";
+  let isRunning = false;
 
   setInterval(() => {
     const now = new Date();
     const parts = getSaoPauloParts(now);
     const runKey = `${parts.weekday}-${parts.hour}:${parts.minute}`;
 
-    if (!shouldRunMarketRefresh(now) || lastRunKey === runKey) return;
+    if (!shouldRunMarketRefresh(now) || lastRunKey === runKey || isRunning) return;
 
     lastRunKey = runKey;
-    void refreshMarketQuotes().then((result) => {
-      console.info(`Market refresh finished: ${result.updated}/${result.total} updated.`);
-    });
+    isRunning = true;
+    void refreshMarketQuotes()
+      .then((result) => {
+        console.info(`Market refresh finished: ${result.updated}/${result.total} updated.`);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Unknown market scheduler error";
+        console.warn(`Market scheduler failed: ${message}`);
+      })
+      .finally(() => {
+        isRunning = false;
+      });
   }, 60_000).unref();
 }

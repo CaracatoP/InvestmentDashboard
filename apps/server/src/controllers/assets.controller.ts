@@ -1,9 +1,10 @@
 import { asyncHandler } from "../utils/async-handler";
 import { getAssetDetails, getPortfolio } from "../services/portfolio.service";
 import { createAsset, deleteAsset, findAssetById, listAssets, updateAsset } from "../repositories/investment.repository";
+import { getAssetPriceHistory } from "../services/market-data.service";
 import { assetSchema, assetUpdateSchema } from "../validators/asset.validator";
 import { created, noContent, ok } from "../utils/api-response";
-import { notFound } from "../utils/http-error";
+import { badRequest, notFound } from "../utils/http-error";
 
 export const listAssetPortfolio = asyncHandler(async (_request, response) => {
   if (_request.query.mode === "records") {
@@ -21,6 +22,23 @@ export const showAsset = asyncHandler(async (request, response) => {
   if (!asset) throw notFound("Asset not found");
 
   ok(response, asset);
+});
+
+export const showAssetPriceHistory = asyncHandler(async (request, response) => {
+  const identifier = String(request.params.id);
+  const asset = identifier.length === 24 ? await findAssetById(identifier) : (await listAssets()).find((item) => item.ticker.toUpperCase() === identifier.toUpperCase());
+
+  if (!asset) throw notFound("Asset not found");
+
+  try {
+    ok(response, await getAssetPriceHistory(asset, String(request.query.range ?? "1y")));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Unsupported history range")) {
+      throw badRequest(error.message);
+    }
+
+    throw error;
+  }
 });
 
 export const createAssetRecord = asyncHandler(async (request, response) => {

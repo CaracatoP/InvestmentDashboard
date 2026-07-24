@@ -56,33 +56,33 @@ export function SettingsPage() {
         description="Tema, moeda, carteira ideal, backup local e exportacoes para analise externa."
       />
 
-      <section className="grid gap-4 xl:grid-cols-[0.7fr_1.3fr]">
-        <aside className="space-y-4">
-          <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+      <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+        <aside className="min-w-0 space-y-4">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
             <h2 className="text-base font-semibold text-ink">Perfil</h2>
             <div className="mt-4 space-y-3 text-sm">
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
                 <span className="text-muted">Nome</span>
-                <span className="font-medium text-ink">{settings?.profile.name}</span>
+                <span className="break-words font-medium text-ink">{settings?.profile.name}</span>
               </div>
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
                 <span className="text-muted">Tema</span>
-                <span className="font-medium text-ink">{settings?.profile.theme}</span>
+                <span className="break-words font-medium text-ink">{settings?.profile.theme}</span>
               </div>
-              <div className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
                 <span className="text-muted">Moeda</span>
-                <span className="font-medium text-ink">{settings?.profile.currency}</span>
+                <span className="break-words font-medium text-ink">{settings?.profile.currency}</span>
               </div>
             </div>
           </article>
 
-          <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
             <h2 className="text-base font-semibold text-ink">Backup e exportacao</h2>
             <div className="mt-4 grid gap-2">
               <button
                 type="button"
                 onClick={() => exportJson("backup-investimentos.json", { settings, portfolio })}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
               >
                 <Download size={16} />
                 Backup JSON
@@ -90,7 +90,7 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={exportPortfolioCsv}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
               >
                 <FileDown size={16} />
                 Exportar Excel
@@ -98,7 +98,7 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={() => window.print()}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink"
               >
                 <FileDown size={16} />
                 Exportar PDF
@@ -107,7 +107,7 @@ export function SettingsPage() {
           </article>
         </aside>
 
-        <section className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+        <section className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-base font-semibold text-ink">Alocacao ideal</h2>
@@ -116,7 +116,7 @@ export function SettingsPage() {
             <button
               type="button"
               onClick={() => void handleSave()}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-50"
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-50 md:w-auto"
               disabled={allocationTotal !== 100}
             >
               <Save size={16} />
@@ -127,10 +127,10 @@ export function SettingsPage() {
           <div className="mt-5 space-y-5">
             {allocations.map((allocation) => (
               <div key={allocation.category}>
-                <div className="mb-2 flex items-center justify-between gap-3 text-sm">
-                  <span className="inline-flex items-center gap-2 text-muted">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm">
+                  <span className="inline-flex min-w-0 items-center gap-2 text-muted">
                     <SlidersHorizontal size={15} />
-                    {allocation.category}
+                    <span className="break-words">{allocation.category}</span>
                   </span>
                   <span className="font-medium text-ink">{formatPercentage(allocation.targetPercentage)}</span>
                 </div>

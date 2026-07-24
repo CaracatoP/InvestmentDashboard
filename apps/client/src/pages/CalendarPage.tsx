@@ -12,7 +12,7 @@ export function CalendarPage() {
         title="Eventos financeiros em ordem"
         description="Dividendos, compras, vendas, aportes e rebalanceamentos em uma agenda unica."
       />
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-4">
         {events.map((event) => (
           <CalendarCard key={event.id} event={event} />
         ))}

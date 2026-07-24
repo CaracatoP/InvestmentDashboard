@@ -4,6 +4,7 @@ import { AreaChart } from "../components/charts/AreaChart";
 import { ChartCard } from "../components/ui/ChartCard";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
 import { cashBoxRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
@@ -152,7 +153,7 @@ export function CashBoxesPage() {
     <div>
       <PageHeader eyebrow="Caixinhas" title="Reserva Nubank" description="Controle saldos, CDI, movimentacoes e evolucao da sua reserva." />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Saldo atual" value={formatCurrency(overview.totals.currentBalance)} detail="Total nas caixinhas" icon={<Wallet size={18} />} />
         <StatCard label="Total aplicado" value={formatCurrency(overview.totals.deposited)} detail="Depositos registrados" icon={<TrendingUp size={18} />} tone="blue" />
         <StatCard label="Total resgatado" value={formatCurrency(overview.totals.withdrawn)} detail="Resgates registrados" icon={<TrendingDown size={18} />} tone="rose" />
@@ -160,21 +161,21 @@ export function CashBoxesPage() {
         <StatCard label="Caixinhas" value={String(cashBoxes.length)} detail="Reservas ativas" icon={<Landmark size={18} />} tone="violet" />
       </section>
 
-      <section className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+      <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <ChartCard title="Grafico de evolucao">
           <AreaChart data={overview.evolution} dataKey="value" name="Saldo" color="#38bdf8" />
         </ChartCard>
         <ChartCard title="Historico">
           <div className="space-y-3">
             {history.map((movement, index) => (
-              <div key={movement.id ?? `${movement.cashBoxName}-${movement.date}-${index}`} className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2 text-sm">
-                <div>
-                  <p className="font-medium text-ink">{movement.cashBoxName}</p>
+              <div key={movement.id ?? `${movement.cashBoxName}-${movement.date}-${index}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="break-words font-medium text-ink">{movement.cashBoxName}</p>
                   <p className="text-xs text-muted">
                     {getMovementLabel(movement.type)} - {new Date(movement.date).toLocaleDateString("pt-BR")}
                   </p>
                 </div>
-                <span className={normalizeMovementType(movement.type) === "withdrawal" ? "text-rose" : "text-accent"}>{formatCurrency(movement.value)}</span>
+                <span className={`shrink-0 ${normalizeMovementType(movement.type) === "withdrawal" ? "text-rose" : "text-accent"}`}>{formatCurrency(movement.value)}</span>
               </div>
             ))}
           </div>
@@ -187,6 +188,46 @@ export function CashBoxesPage() {
           columns={["Nome", "Tipo", "Saldo", "CDI", "Criacao", "Status"]}
           rows={filtered}
           getKey={(cashBox) => cashBox.id ?? cashBox.name}
+          renderMobileCard={(cashBox) => (
+            <MobileDataCard
+              title={cashBox.name}
+              subtitle={cashBox.type}
+              badge={<span className={cashBox.active ? "text-accent" : "text-muted"}>{cashBox.active ? "Ativa" : "Inativa"}</span>}
+            >
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Saldo</p>
+                  <p className="font-medium text-accent">{formatCurrency(cashBox.currentBalance)}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">CDI</p>
+                  <p className="font-medium text-ink">{formatPercentage(cashBox.cdiPercentage)}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Criacao</p>
+                  <p className="font-medium text-ink">{new Date(cashBox.createdAt).toLocaleDateString("pt-BR")}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Status</p>
+                  <p className="font-medium text-ink">{cashBox.active ? "Ativa" : "Inativa"}</p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                <button type="button" onClick={() => openMovement(cashBox)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                  <Plus size={15} />
+                  Movimentar
+                </button>
+                <button type="button" onClick={() => openEdit(cashBox)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                  <Edit2 size={15} />
+                  Editar
+                </button>
+                <button type="button" onClick={() => setDeleteTarget(cashBox)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
+                  <Trash2 size={15} />
+                  Excluir
+                </button>
+              </div>
+            </MobileDataCard>
+          )}
           renderRow={(cashBox) => (
             <>
               <td className="py-3 font-medium text-ink">{cashBox.name}</td>
@@ -197,13 +238,13 @@ export function CashBoxesPage() {
               <td className="py-3">{cashBox.active ? "Ativa" : "Inativa"}</td>
               <td className="py-3">
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => openMovement(cashBox)} className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink" title="Adicionar movimentacao">
+                  <button type="button" onClick={() => openMovement(cashBox)} className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink" title="Adicionar movimentacao" aria-label="Adicionar movimentacao">
                     <Plus size={15} />
                   </button>
-                  <button type="button" onClick={() => openEdit(cashBox)} className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink" title="Editar">
+                  <button type="button" onClick={() => openEdit(cashBox)} className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink" title="Editar" aria-label="Editar">
                     <Edit2 size={15} />
                   </button>
-                  <button type="button" onClick={() => setDeleteTarget(cashBox)} className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-rose/50 hover:text-rose" title="Excluir">
+                  <button type="button" onClick={() => setDeleteTarget(cashBox)} className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-rose/50 hover:text-rose" title="Excluir" aria-label="Excluir">
                     <Trash2 size={15} />
                   </button>
                 </div>

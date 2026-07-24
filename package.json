@@ -11,8 +11,11 @@
     "dev:client": "npm run dev -w apps/client",
     "dev:server": "npm run dev -w apps/server",
     "build": "npm run build -w apps/server && npm run build -w apps/client",
-    "lint": "npm run lint -w apps/client",
-    "test": "npm run test -w apps/server",
+    "build:server": "npm run build -w apps/server",
+    "build:client": "npm run build -w apps/client",
+    "start:server": "npm run start -w apps/server",
+    "lint": "npm run lint -w apps/server && npm run lint -w apps/client",
+    "test": "npm run test -w apps/server && npm run test -w apps/client",
     "typecheck": "npm run typecheck -w apps/server && npm run typecheck -w apps/client"
   },
   "devDependencies": {

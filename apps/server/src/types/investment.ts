@@ -68,6 +68,20 @@ export interface PriceHistoryRecord {
   price: number;
   capturedAt: string | Date;
   source: string;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  currency?: string;
+  providerSymbol?: string;
+  market?: string;
+  assetKind?: string;
+  type?: "market_history" | "intraday_snapshot" | string;
+  interval?: string;
+  granularity?: string;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
 }
 
 export interface ContributionRecord {

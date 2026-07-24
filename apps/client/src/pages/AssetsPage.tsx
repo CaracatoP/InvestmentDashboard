@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { assetRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AssetCategory, AssetRecord } from "../types/management";
@@ -84,6 +85,36 @@ export function AssetsPage() {
         columns={["Nome", "Ticker", "Categoria", "Subcategoria", "Setor", "Moeda"]}
         rows={filteredAssets}
         getKey={(asset) => asset.id ?? asset.ticker}
+        renderMobileCard={(asset) => (
+          <MobileDataCard title={asset.ticker} subtitle={asset.name} badge={asset.currency}>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Categoria</p>
+                <p className="font-medium text-ink">{asset.category}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Subcategoria</p>
+                <p className="break-words font-medium text-ink">{asset.subcategory || "-"}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Setor</p>
+                <p className="break-words font-medium text-ink">{asset.sector || "-"}</p>
+              </div>
+              <div className="rounded-lg bg-elevated px-3 py-2">
+                <p className="text-xs text-muted">Moeda</p>
+                <p className="font-medium text-ink">{asset.currency}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => openEdit(asset)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                Editar
+              </button>
+              <button type="button" onClick={() => setDeleteTarget(asset)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
+                Excluir
+              </button>
+            </div>
+          </MobileDataCard>
+        )}
         renderRow={(asset) => (
           <>
             <td className="py-3 font-medium text-ink">{asset.name}</td>

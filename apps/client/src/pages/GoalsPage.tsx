@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { goalRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Goal } from "../types/investments";
@@ -110,6 +111,48 @@ export function GoalsPage() {
         columns={["Titulo", "Tipo", "Atual", "Alvo", "Progresso", "Ativo"]}
         rows={filtered}
         getKey={(goal) => goal.id ?? goal.title}
+        renderMobileCard={(goal) => {
+          const calculated = calculatedById.get(goal.id);
+          const progress = calculated?.progress ?? 0;
+
+          return (
+            <MobileDataCard title={goal.title} subtitle={goal.description} badge={goalTypeLabels[goal.type]}>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Atual</p>
+                  <p className="font-medium text-ink">{calculated ? formatCurrent(calculated) : "-"}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Alvo</p>
+                  <p className="font-medium text-ink">{formatTarget(goal)}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Ativo</p>
+                  <p className="font-medium text-ink">{goal.assetTicker || "-"}</p>
+                </div>
+                <div className="rounded-lg bg-elevated px-3 py-2">
+                  <p className="text-xs text-muted">Status</p>
+                  <p className="font-medium text-ink">{progress >= 100 ? "Concluida" : "Em andamento"}</p>
+                </div>
+              </div>
+              <div className="mt-4">
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted">
+                  <span>{formatPercentage(progress)}</span>
+                  <span>{progress >= 100 ? "Concluida" : "Em andamento"}</span>
+                </div>
+                <ProgressBar value={progress} tone={progress >= 100 ? "green" : "blue"} />
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                <button type="button" onClick={() => openEdit(goal)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                  Editar
+                </button>
+                <button type="button" onClick={() => setDeleteTarget(goal)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
+                  Excluir
+                </button>
+              </div>
+            </MobileDataCard>
+          );
+        }}
         renderRow={(goal) => {
           const calculated = calculatedById.get(goal.id);
 

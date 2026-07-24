@@ -1,53 +1,68 @@
 # Investment Dashboard
 
-Full-stack dashboard for personal investment tracking, built with React, Express, MongoDB-ready models, Recharts, Framer Motion, TailwindCSS, React Router, Zustand, and Axios.
+Full-stack dashboard for personal investment tracking, built with React, Vite, Express, TypeScript, MongoDB Atlas, Recharts, TailwindCSS, React Router, Zustand, and Axios.
 
 ## Scripts
 
 ```bash
 npm install
 npm run dev
-npm run typecheck
-npm run lint
 npm run build
+npm run build:server
+npm run build:client
+npm run start:server
+npm run lint
+npm run typecheck
+npm run test
 ```
 
-The app uses MongoDB when `MONGODB_URI` is configured. Without MongoDB, it starts with an empty in-memory store for local development.
+The app uses MongoDB when `MONGODB_URI` is configured. Without MongoDB, it starts with empty in-memory data for local development.
 
 ## Environment
 
 Create `apps/server/.env` from `apps/server/.env.example`.
 
 ```env
+NODE_ENV=development
 PORT=4000
-CLIENT_ORIGIN=http://localhost:5173
-MONGODB_URI=mongodb+srv://USER:PASSWORD@CLUSTER.mongodb.net/investment-dashboard?retryWrites=true&w=majority
+MONGODB_URI=
+FRONTEND_URL=http://localhost:5173
+FRONTEND_URLS=
 MARKET_DATA_PROVIDER=brapi
 MARKET_DATA_API_KEY=
 MARKET_TIMEZONE=America/Sao_Paulo
 MARKET_REFRESH_HOURS=10:00,12:00,14:00,17:00
+CDI_PROVIDER=bcb
+CDI_RATE_FALLBACK=
+CDI_TIMEZONE=America/Sao_Paulo
+CDI_UPDATE_HOUR=18:00
+ENABLE_SCHEDULERS=true
 ```
 
-Market data runs only in the backend. If no provider/API key is configured, quotes are marked as unavailable and the app keeps the last valid quote instead of inventing prices.
+Create `apps/client/.env` from `apps/client/.env.example`.
 
-The scheduler refreshes quotes Monday to Friday at `10:00`, `12:00`, `14:00`, and `17:00` in `America/Sao_Paulo`. The scheduler has a hot-reload guard to avoid duplicated jobs during `tsx watch`.
+```env
+VITE_API_URL=http://localhost:4000
+```
+
+Do not put `MONGODB_URI`, `MARKET_DATA_API_KEY`, passwords, or tokens in the frontend. Only variables prefixed with `VITE_` are available to the Vite client bundle.
 
 ## Structure
 
-- `apps/client`: React + Vite frontend
-- `apps/server`: Express API, services, repositories, Mongoose models, validators
+- `apps/client`: React + Vite frontend.
+- `apps/server`: Express API, services, repositories, Mongoose models, validators, schedulers.
 
 ## API
 
 - `GET /health`
+- `GET /api/health`
 - `GET /api/dashboard`
 - `GET /api/assets`
 - `GET /api/assets/:ticker`
+- `GET /api/operations`
 - `GET /api/dividends`
 - `GET /api/contributions`
-- `POST /api/contributions`
 - `GET /api/goals`
-- `POST /api/goals`
 - `POST /api/projections`
 - `GET /api/market/status`
 - `POST /api/market/refresh`
@@ -55,3 +70,110 @@ The scheduler refreshes quotes Monday to Friday at `10:00`, `12:00`, `14:00`, an
 - `GET /api/history`
 - `GET /api/settings`
 - `PUT /api/settings/allocations`
+
+## Market Data And Schedulers
+
+Market data, CDI, and cashbox yield jobs run only in the backend. If no provider/API key is configured, quotes are marked as unavailable and the app keeps the last valid quote instead of inventing prices.
+
+Schedulers run Monday to Friday using `America/Sao_Paulo`:
+
+- Market refresh: `MARKET_REFRESH_HOURS`.
+- CDI update: `CDI_UPDATE_HOUR`.
+
+Use `ENABLE_SCHEDULERS=false` for previews, tests, or temporary deployments where background jobs should not run.
+
+## Deploy Do Backend No Railway
+
+Recommended Railway configuration:
+
+- Root Directory: `/`
+- Build Command: `npm run build -w apps/server`
+- Start Command: `npm run start -w apps/server`
+
+Required variables:
+
+- `NODE_ENV=production`
+- `MONGODB_URI`
+- `FRONTEND_URL`
+- `FRONTEND_URLS` optional for explicit preview URLs
+- `MARKET_DATA_PROVIDER=brapi`
+- `MARKET_DATA_API_KEY`
+- `MARKET_TIMEZONE=America/Sao_Paulo`
+- `MARKET_REFRESH_HOURS=10:00,12:00,14:00,17:00`
+- `CDI_PROVIDER=bcb`
+- `CDI_RATE_FALLBACK` optional fallback
+- `CDI_TIMEZONE=America/Sao_Paulo`
+- `CDI_UPDATE_HOUR=18:00`
+- `ENABLE_SCHEDULERS=true`
+
+The backend uses `process.env.PORT` and listens on `0.0.0.0`, so do not configure a fixed production port.
+
+After Railway generates the public domain, test:
+
+```bash
+curl https://YOUR-RAILWAY-DOMAIN/api/health
+```
+
+The health response includes only safe fields:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-07-24T00:00:00.000Z",
+  "environment": "production",
+  "database": "connected"
+}
+```
+
+## MongoDB Atlas
+
+- Railway must be able to access MongoDB Atlas.
+- For the first deploy, Atlas may need a temporary `0.0.0.0/0` network access rule.
+- Keep the database user/password strong.
+- Never commit `MONGODB_URI` or real credentials.
+
+## Deploy Do Frontend Na Vercel
+
+Recommended Vercel configuration:
+
+- Root Directory: `apps/client`
+- Framework: `Vite`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+
+Required variable:
+
+- `VITE_API_URL=https://YOUR-RAILWAY-DOMAIN`
+
+Do not add backend secrets to Vercel. After Vercel deploys, copy the Vercel domain and update `FRONTEND_URL` in Railway. If you use explicit preview URLs, add them to `FRONTEND_URLS` as a comma-separated list.
+
+`apps/client/vercel.json` rewrites every route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` work with React Router.
+
+## Ordem Correta De Deploy
+
+1. Send the code to GitHub.
+2. Create the Railway service from the repository root.
+3. Add Railway environment variables.
+4. Allow Railway access in MongoDB Atlas.
+5. Deploy the backend.
+6. Generate or copy the Railway public domain.
+7. Test `GET /api/health`.
+8. Create the Vercel project with root `apps/client`.
+9. Add `VITE_API_URL=https://YOUR-RAILWAY-DOMAIN`.
+10. Deploy the frontend.
+11. Copy the Vercel production domain.
+12. Update `FRONTEND_URL` in Railway with the Vercel domain.
+13. Redeploy the backend.
+14. Test the complete system in the browser.
+
+## CORS
+
+The backend accepts:
+
+- Requests without `Origin`, such as health checks and API tools.
+- `http://localhost:5173`
+- `http://localhost:5174`
+- `FRONTEND_URL`
+- Each origin in `FRONTEND_URLS`
+
+Unknown origins are rejected. The backend does not use `origin: "*"` with credentials.

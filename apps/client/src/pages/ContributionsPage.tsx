@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
+import { MobileDataCard } from "../components/ui/Responsive";
 import { contributionRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { ContributionRecord } from "../types/management";
@@ -76,6 +77,23 @@ export function ContributionsPage() {
         columns={["Data", "Valor", "Descricao"]}
         rows={filtered}
         getKey={(contribution) => contribution.id ?? `${contribution.date}-${contribution.value}`}
+        renderMobileCard={(contribution) => (
+          <MobileDataCard
+            title={formatCurrency(contribution.value)}
+            subtitle={new Date(contribution.date).toLocaleDateString("pt-BR")}
+            badge="Aporte"
+          >
+            <p className="break-words rounded-lg bg-elevated px-3 py-2 text-sm text-muted">{contribution.description || "Sem descricao"}</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => openEdit(contribution)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                Editar
+              </button>
+              <button type="button" onClick={() => setDeleteTarget(contribution)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
+                Excluir
+              </button>
+            </div>
+          </MobileDataCard>
+        )}
         renderRow={(contribution) => (
           <>
             <td className="py-3">{new Date(contribution.date).toLocaleDateString("pt-BR")}</td>

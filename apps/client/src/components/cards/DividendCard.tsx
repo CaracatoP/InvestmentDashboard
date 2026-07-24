@@ -9,7 +9,7 @@ interface DividendCardProps {
 
 export function DividendCard({ ticker, amount, date }: DividendCardProps) {
   return (
-    <article className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel p-4">
+    <article className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel p-4">
       <div className="flex min-w-0 items-center gap-3">
         <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent/10 text-accent">
           <Coins size={17} />
@@ -19,7 +19,7 @@ export function DividendCard({ ticker, amount, date }: DividendCardProps) {
           <p className="text-sm text-muted">{formatDate(date)}</p>
         </div>
       </div>
-      <p className="font-semibold text-accent">{formatCurrency(amount)}</p>
+      <p className="shrink-0 font-semibold text-accent">{formatCurrency(amount)}</p>
     </article>
   );
 }
