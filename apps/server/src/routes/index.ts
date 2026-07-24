@@ -1,0 +1,26 @@
+import { Router } from "express";
+import { assetsRoutes } from "./assets.routes";
+import { calendarRoutes } from "./calendar.routes";
+import { contributionsRoutes } from "./contributions.routes";
+import { dashboardRoutes } from "./dashboard.routes";
+import { dividendsRoutes } from "./dividends.routes";
+import { operationsRoutes } from "./operations.routes";
+import { cashBoxesRoutes } from "./cash-boxes.routes";
+import { goalsRoutes } from "./goals.routes";
+import { historyRoutes } from "./history.routes";
+import { projectionsRoutes } from "./projections.routes";
+import { settingsRoutes } from "./settings.routes";
+
+export const apiRoutes = Router();
+
+apiRoutes.use("/dashboard", dashboardRoutes);
+apiRoutes.use("/assets", assetsRoutes);
+apiRoutes.use("/operations", operationsRoutes);
+apiRoutes.use("/dividends", dividendsRoutes);
+apiRoutes.use("/contributions", contributionsRoutes);
+apiRoutes.use("/cash-boxes", cashBoxesRoutes);
+apiRoutes.use("/goals", goalsRoutes);
+apiRoutes.use("/projections", projectionsRoutes);
+apiRoutes.use("/calendar", calendarRoutes);
+apiRoutes.use("/history", historyRoutes);
+apiRoutes.use("/settings", settingsRoutes);
