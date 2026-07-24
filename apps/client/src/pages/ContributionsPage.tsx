@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { contributionRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { ContributionRecord } from "../types/management";
@@ -79,7 +80,7 @@ export function ContributionsPage() {
         getKey={(contribution) => contribution.id ?? `${contribution.date}-${contribution.value}`}
         renderMobileCard={(contribution) => (
           <MobileDataCard
-            title={formatCurrency(contribution.value)}
+            title={<MoneyValue value={formatCurrency(contribution.value)} size="card" />}
             subtitle={new Date(contribution.date).toLocaleDateString("pt-BR")}
             badge="Aporte"
           >
@@ -97,7 +98,9 @@ export function ContributionsPage() {
         renderRow={(contribution) => (
           <>
             <td className="py-3">{new Date(contribution.date).toLocaleDateString("pt-BR")}</td>
-            <td className="py-3 font-medium text-accent">{formatCurrency(contribution.value)}</td>
+            <td className="py-3 text-right font-medium text-accent">
+              <MoneyValue value={formatCurrency(contribution.value)} size="table" />
+            </td>
             <td className="py-3">{contribution.description}</td>
             <RowActions onEdit={() => openEdit(contribution)} onDelete={() => setDeleteTarget(contribution)} />
           </>

@@ -1,5 +1,6 @@
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { formatPercentage } from "../../utils/formatters";
+import { MoneyValue } from "./ValueDisplay";
 
 interface MoneyCardProps {
   label: string;
@@ -12,12 +13,14 @@ export function MoneyCard({ label, value, percentage }: MoneyCardProps) {
   const Icon = positive ? ArrowUpRight : ArrowDownRight;
 
   return (
-    <article className="rounded-lg border border-line bg-elevated p-4">
+    <article className="min-w-0 rounded-lg border border-line bg-elevated p-4">
       <p className="text-sm text-muted">{label}</p>
-      <div className="mt-3 flex items-end justify-between gap-3">
-        <p className="text-2xl font-semibold tracking-normal text-ink">{value}</p>
+      <div className="mt-3 flex min-w-0 items-end justify-between gap-3">
+        <p className="min-w-0 font-semibold tracking-tight text-ink">
+          <MoneyValue value={value} size="card" />
+        </p>
         {percentage !== undefined ? (
-          <span className={`inline-flex items-center gap-1 text-sm ${positive ? "text-accent" : "text-rose"}`}>
+          <span className={`inline-flex shrink-0 items-center gap-1 text-sm ${positive ? "text-accent" : "text-rose"}`}>
             <Icon size={16} />
             {formatPercentage(percentage)}
           </span>

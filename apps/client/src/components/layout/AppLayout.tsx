@@ -1,7 +1,7 @@
 import { Command, Menu, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { navigationItems } from "../../constants/navigation";
 import { refreshMarketData } from "../../services/api";
 import { useInvestmentStore } from "../../stores/useInvestmentStore";
@@ -11,10 +11,12 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
+  const location = useLocation();
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const isLoading = useInvestmentStore((state) => state.isLoading);
   const error = useInvestmentStore((state) => state.error);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const isPortfolioPage = location.pathname === "/carteira";
 
   useEffect(() => {
     if (!isDrawerOpen) return;
@@ -141,7 +143,9 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         ) : null}
 
-        <main className="mx-auto w-full max-w-7xl px-3 pb-8 pt-5 sm:px-4 md:px-6 lg:px-8 lg:pb-10">{children}</main>
+        <main className={["mx-auto w-full max-w-7xl px-3 pb-8 pt-5 sm:px-4 md:px-6 lg:px-8 lg:pb-10", isPortfolioPage ? "portfolio-main" : ""].join(" ")}>
+          {children}
+        </main>
       </div>
     </div>
   );

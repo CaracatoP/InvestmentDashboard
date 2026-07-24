@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import type { ReactNode } from "react";
+import { ValueDisplay } from "./ValueDisplay";
 
 interface StatCardProps {
   label: string;
@@ -25,14 +26,16 @@ export function StatCard({ label, value, detail, icon, tone = "green" }: StatCar
       transition={{ duration: 0.24 }}
       className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft motion-reduce:transform-none"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm text-muted">{label}</p>
-          <p className="mt-2 break-words text-[clamp(1.05rem,4.5vw,1.25rem)] font-semibold tracking-normal text-ink [overflow-wrap:anywhere]">{value}</p>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="min-w-0 text-sm leading-5 text-muted">{label}</p>
+          <p className="mt-2 min-w-0 font-semibold tracking-tight text-ink">
+            <ValueDisplay value={value} size="card" />
+          </p>
         </div>
         <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${toneClass[tone]}`}>{icon}</div>
       </div>
-      {detail ? <p className="mt-3 break-words text-xs text-muted">{detail}</p> : null}
+      {detail ? <p className="mt-3 min-w-0 break-words text-xs leading-5 text-muted" title={detail}>{detail}</p> : null}
     </motion.article>
   );
 }

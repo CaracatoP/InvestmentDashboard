@@ -1,5 +1,6 @@
 import { Repeat2 } from "lucide-react";
 import { formatCurrency, formatDate } from "../../utils/formatters";
+import { MoneyValue } from "../ui/ValueDisplay";
 
 interface OperationCardProps {
   type: string;
@@ -24,7 +25,9 @@ export function OperationCard({ type, ticker, date, amount, description }: Opera
         </div>
       </div>
       <p className="mt-3 break-words text-sm text-muted">{description}</p>
-      <p className="mt-2 break-words font-semibold text-ink [overflow-wrap:anywhere]">{formatCurrency(amount)}</p>
+      <p className="mt-2 min-w-0 font-semibold text-ink">
+        <MoneyValue value={formatCurrency(amount)} />
+      </p>
     </article>
   );
 }

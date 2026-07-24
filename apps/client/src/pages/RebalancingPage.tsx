@@ -5,6 +5,7 @@ import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { StatCard } from "../components/ui/StatCard";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 
@@ -69,7 +70,7 @@ export function RebalancingPage() {
         description="Peso atual, peso ideal, diferenca, valor faltante e proximo aporte calculados automaticamente."
       />
 
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="stat-card-grid">
         <StatCard label="Proximo aporte" value={underAllocated?.category ?? "A definir"} detail={portfolio.recommendation.action} icon={<Target size={18} />} />
         <StatCard label="Quanto falta" value={formatCurrency(underAllocated?.missingValue ?? 0)} detail={underAllocated ? `${formatPercentage(Math.abs(underAllocated.difference))} abaixo do ideal` : "Sem alvo"} icon={<ArrowDownCircle size={18} />} tone="blue" />
         <StatCard label="Maior excesso" value={overAllocated?.category ?? "A definir"} detail={formatPercentage(overAllocated?.difference ?? 0)} icon={<ArrowUpCircle size={18} />} tone="amber" />
@@ -101,10 +102,10 @@ export function RebalancingPage() {
                 </span>
               </div>
               <ProgressBar value={item.currentPercentage} tone={item.difference > 0 ? "amber" : "green"} />
-              <div className="mt-2 grid gap-2 break-words text-sm text-muted md:grid-cols-3">
+              <div className="mt-2 grid min-w-0 gap-2 text-sm text-muted md:grid-cols-3">
                 <span>Diferenca: {item.difference > 0 ? "+" : ""}{formatPercentage(item.difference)}</span>
-                <span>Atual: {formatCurrency(item.value ?? 0)}</span>
-                <span>Falta: {formatCurrency(item.missingValue ?? 0)}</span>
+                <span className="min-w-0">Atual: <MoneyValue value={formatCurrency(item.value ?? 0)} /></span>
+                <span className="min-w-0">Falta: <MoneyValue value={formatCurrency(item.missingValue ?? 0)} /></span>
               </div>
             </div>
           ))}
@@ -113,3 +114,4 @@ export function RebalancingPage() {
     </div>
   );
 }
+

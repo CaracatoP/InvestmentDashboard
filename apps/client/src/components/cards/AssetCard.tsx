@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Asset } from "../../types/investments";
 import { formatCurrency, formatPercentage } from "../../utils/formatters";
 import { ProgressBar } from "../ui/ProgressBar";
+import { MoneyValue } from "../ui/ValueDisplay";
 
 interface AssetCardProps {
   asset: Asset;
@@ -23,7 +24,9 @@ export function AssetCard({ asset }: AssetCardProps) {
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <p className="text-muted">Valor atual</p>
-          <p className="break-words font-medium text-ink [overflow-wrap:anywhere]">{currentValue}</p>
+          <p className="min-w-0 font-medium text-ink">
+            <MoneyValue value={currentValue} />
+          </p>
         </div>
         <div>
           <p className="text-muted">Peso</p>

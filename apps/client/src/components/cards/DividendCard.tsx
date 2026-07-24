@@ -1,5 +1,6 @@
 import { Coins } from "lucide-react";
 import { formatCurrency, formatDate } from "../../utils/formatters";
+import { MoneyValue } from "../ui/ValueDisplay";
 
 interface DividendCardProps {
   ticker: string;
@@ -19,7 +20,9 @@ export function DividendCard({ ticker, amount, date }: DividendCardProps) {
           <p className="text-sm text-muted">{formatDate(date)}</p>
         </div>
       </div>
-      <p className="shrink-0 font-semibold text-accent">{formatCurrency(amount)}</p>
+      <p className="min-w-0 shrink-0 font-semibold text-accent">
+        <MoneyValue value={formatCurrency(amount)} />
+      </p>
     </article>
   );
 }

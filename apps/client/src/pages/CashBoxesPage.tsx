@@ -6,6 +6,7 @@ import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, Management
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { cashBoxRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { CashBoxMovementRecord, CashBoxMovementType, CashBoxRecord } from "../types/management";
@@ -153,7 +154,7 @@ export function CashBoxesPage() {
     <div>
       <PageHeader eyebrow="Caixinhas" title="Reserva Nubank" description="Controle saldos, CDI, movimentacoes e evolucao da sua reserva." />
 
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="stat-card-grid">
         <StatCard label="Saldo atual" value={formatCurrency(overview.totals.currentBalance)} detail="Total nas caixinhas" icon={<Wallet size={18} />} />
         <StatCard label="Total aplicado" value={formatCurrency(overview.totals.deposited)} detail="Depositos registrados" icon={<TrendingUp size={18} />} tone="blue" />
         <StatCard label="Total resgatado" value={formatCurrency(overview.totals.withdrawn)} detail="Resgates registrados" icon={<TrendingDown size={18} />} tone="rose" />
@@ -175,7 +176,9 @@ export function CashBoxesPage() {
                     {getMovementLabel(movement.type)} - {new Date(movement.date).toLocaleDateString("pt-BR")}
                   </p>
                 </div>
-                <span className={`shrink-0 ${normalizeMovementType(movement.type) === "withdrawal" ? "text-rose" : "text-accent"}`}>{formatCurrency(movement.value)}</span>
+                <span className={`min-w-0 shrink-0 ${normalizeMovementType(movement.type) === "withdrawal" ? "text-rose" : "text-accent"}`}>
+                  <MoneyValue value={formatCurrency(movement.value)} />
+                </span>
               </div>
             ))}
           </div>
@@ -194,10 +197,12 @@ export function CashBoxesPage() {
               subtitle={cashBox.type}
               badge={<span className={cashBox.active ? "text-accent" : "text-muted"}>{cashBox.active ? "Ativa" : "Inativa"}</span>}
             >
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="mobile-metric-grid text-sm">
                 <div className="rounded-lg bg-elevated px-3 py-2">
                   <p className="text-xs text-muted">Saldo</p>
-                  <p className="font-medium text-accent">{formatCurrency(cashBox.currentBalance)}</p>
+                  <p className="min-w-0 font-medium text-accent">
+                    <MoneyValue value={formatCurrency(cashBox.currentBalance)} />
+                  </p>
                 </div>
                 <div className="rounded-lg bg-elevated px-3 py-2">
                   <p className="text-xs text-muted">CDI</p>
@@ -232,7 +237,9 @@ export function CashBoxesPage() {
             <>
               <td className="py-3 font-medium text-ink">{cashBox.name}</td>
               <td className="py-3">{cashBox.type}</td>
-              <td className="py-3 text-accent">{formatCurrency(cashBox.currentBalance)}</td>
+              <td className="py-3 text-right text-accent">
+                <MoneyValue value={formatCurrency(cashBox.currentBalance)} size="table" />
+              </td>
               <td className="py-3">{formatPercentage(cashBox.cdiPercentage)}</td>
               <td className="py-3">{new Date(cashBox.createdAt).toLocaleDateString("pt-BR")}</td>
               <td className="py-3">{cashBox.active ? "Ativa" : "Inativa"}</td>
@@ -280,3 +287,4 @@ export function CashBoxesPage() {
     </div>
   );
 }
+

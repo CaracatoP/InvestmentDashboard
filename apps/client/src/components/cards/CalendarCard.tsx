@@ -1,6 +1,7 @@
 import { CalendarDays } from "lucide-react";
 import type { Movement } from "../../types/investments";
 import { formatCurrency, formatDate } from "../../utils/formatters";
+import { MoneyValue } from "../ui/ValueDisplay";
 
 interface CalendarCardProps {
   event: Movement;
@@ -17,7 +18,9 @@ export function CalendarCard({ event }: CalendarCardProps) {
       </div>
       <p className="mt-4 break-words font-semibold text-ink">{event.type}</p>
       <p className="mt-1 break-words text-sm text-muted">{event.title}</p>
-      <p className="mt-3 break-words text-sm font-medium text-accent [overflow-wrap:anywhere]">{formatCurrency(event.amount)}</p>
+      <p className="mt-3 min-w-0 text-sm font-medium text-accent">
+        <MoneyValue value={formatCurrency(event.amount)} />
+      </p>
     </article>
   );
 }

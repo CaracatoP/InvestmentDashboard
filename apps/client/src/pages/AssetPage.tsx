@@ -117,7 +117,7 @@ export function AssetPage() {
         {asset.priceSource ? ` via ${asset.priceSource}` : ""}
       </p>
 
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="stat-card-grid">
         <StatCard label="Preco medio" value={formatCurrency(asset.averagePrice)} detail={`${asset.quantity} unidades`} icon={<TrendingUp size={18} />} tone="blue" />
         <StatCard label="Preco atual" value={currentPrice} detail={currentValue} icon={<Wallet size={18} />} />
         <StatCard label="Lucro" value={profit !== null && profit !== undefined ? formatCurrency(profit) : "Indisponivel"} detail={profitability !== null && profitability !== undefined ? formatPercentage(profitability) : "Indisponivel"} icon={<BadgePercent size={18} />} tone="violet" />
@@ -187,3 +187,4 @@ export function AssetPage() {
     </div>
   );
 }
+

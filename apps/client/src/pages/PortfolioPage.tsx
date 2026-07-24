@@ -6,6 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { EmptyState, MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { refreshMarketData } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Asset } from "../types/investments";
@@ -175,7 +176,7 @@ export function PortfolioPage() {
         description="Pesos, rentabilidade, dividend yield, preco medio e exposicao por categoria em uma tabela filtravel."
       />
 
-      <section className="mb-4 grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <section className="portfolio-summary-grid stat-card-grid stat-card-grid--wide mb-4">
         <StatCard label="Valor investido" value={formatCurrency(summary.invested)} detail="Posicoes ativas" icon={<RefreshCw size={18} />} tone="violet" />
         <StatCard label="Valor atual" value={formatCurrency(summary.current)} detail="Somente cotacoes validas" icon={<RefreshCw size={18} />} />
         <StatCard label="Lucro nao realizado" value={formatCurrency(summary.profit)} detail="Sem dividendos" icon={<RefreshCw size={18} />} tone={summary.profit < 0 ? "rose" : "green"} />
@@ -184,11 +185,11 @@ export function PortfolioPage() {
         <StatCard label="Cotacoes indisponiveis" value={String(summary.unavailableCount)} detail="Requer refresh ou provider" icon={<RefreshCw size={18} />} tone={summary.unavailableCount > 0 ? "amber" : "green"} />
       </section>
 
-      <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.65fr)]">
+      <section className="portfolio-desktop-grid grid min-w-0 gap-4">
         <div className="min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
           <div className="mb-4 flex flex-col gap-3">
-            <div className="flex flex-col gap-3 xl:flex-row">
-              <label className="relative flex-1">
+            <div className="portfolio-filters grid gap-3 lg:grid-cols-2">
+              <label className="relative min-w-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                 <input
                   value={search}
@@ -197,17 +198,17 @@ export function PortfolioPage() {
                   placeholder="Buscar por nome ou ticker"
                 />
               </label>
-              <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
+              <select value={category} onChange={(event) => setCategory(event.target.value)} className="h-11 w-full min-w-0 rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm">
                 {categories.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
               </select>
-              <select value={positionFilter} onChange={(event) => setPositionFilter(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
+              <select value={positionFilter} onChange={(event) => setPositionFilter(event.target.value)} className="h-11 w-full min-w-0 rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm">
                 {positionFilters.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
               </select>
-              <select value={quoteStatusFilter} onChange={(event) => setQuoteStatusFilter(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm xl:w-auto">
+              <select value={quoteStatusFilter} onChange={(event) => setQuoteStatusFilter(event.target.value)} className="h-11 w-full min-w-0 rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm">
                 {quoteStatusFilters.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
@@ -216,10 +217,10 @@ export function PortfolioPage() {
                 type="button"
                 onClick={() => void handleRefresh()}
                 disabled={isRefreshing}
-                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-ink transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                className="inline-flex h-11 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-ink transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
                 aria-label="Atualizar cotacoes"
               >
-                <RefreshCw size={16} className={isRefreshing ? "animate-spin" : ""} />
+                <RefreshCw size={16} className={`shrink-0 ${isRefreshing ? "animate-spin" : ""}`} />
                 {isRefreshing ? "Atualizando" : "Atualizar"}
               </button>
             </div>
@@ -249,7 +250,7 @@ export function PortfolioPage() {
                       subtitle={asset.name}
                       badge={<span className={quoteStatusClass(asset)}>{quoteLabel}</span>}
                     >
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="mobile-metric-grid text-sm">
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Categoria</p>
                           <p className="break-words font-medium text-ink">{asset.categoryLabel ?? asset.category}</p>
@@ -260,23 +261,33 @@ export function PortfolioPage() {
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Preco medio</p>
-                          <p className="font-medium text-ink">{formatCurrency(asset.averagePrice)}</p>
+                          <p className="min-w-0 font-medium text-ink">
+                            <MoneyValue value={formatCurrency(asset.averagePrice)} />
+                          </p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Preco atual</p>
-                          <p className="font-medium text-ink">{hasValidPrice(asset) ? formatCurrency(asset.currentPrice ?? 0) : "Indisponivel"}</p>
+                          <p className="min-w-0 font-medium text-ink">
+                            <MoneyValue value={hasValidPrice(asset) ? formatCurrency(asset.currentPrice ?? 0) : "Indisponivel"} />
+                          </p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Investido</p>
-                          <p className="font-medium text-ink">{formatCurrency(asset.totalInvested ?? asset.investedValue)}</p>
+                          <p className="min-w-0 font-medium text-ink">
+                            <MoneyValue value={formatCurrency(asset.totalInvested ?? asset.investedValue)} />
+                          </p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Valor atual</p>
-                          <p className="font-medium text-ink">{formatNullableCurrency(asset.currentValue)}</p>
+                          <p className="min-w-0 font-medium text-ink">
+                            <MoneyValue value={formatNullableCurrency(asset.currentValue)} />
+                          </p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Lucro</p>
-                          <p className={`font-medium ${metricClass(asset.unrealizedProfit ?? asset.profit)}`}>{formatNullableCurrency(asset.unrealizedProfit ?? asset.profit)}</p>
+                          <p className={`min-w-0 font-medium ${metricClass(asset.unrealizedProfit ?? asset.profit)}`}>
+                            <MoneyValue value={formatNullableCurrency(asset.unrealizedProfit ?? asset.profit)} />
+                          </p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Rentabilidade</p>
@@ -299,7 +310,9 @@ export function PortfolioPage() {
                           </p>
                           <p className="flex justify-between gap-3">
                             <span>Dividendos</span>
-                            <span className="text-ink">{formatCurrency(asset.dividendsReceived)}</span>
+                            <span className="min-w-0 text-right text-ink">
+                              <MoneyValue value={formatCurrency(asset.dividendsReceived)} />
+                            </span>
                           </p>
                           <p className="flex justify-between gap-3">
                             <span>Peso</span>
@@ -319,60 +332,72 @@ export function PortfolioPage() {
                   );
                 })}
               </div>
-              <div className="scrollbar-thin hidden max-h-[680px] overflow-auto md:block">
-              <table className="w-full min-w-[1180px] border-collapse text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-panel text-xs uppercase tracking-[0.14em] text-muted">
-                  <tr className="border-b border-line">
-                    <th className="sticky left-0 z-20 bg-panel py-3 pr-3 font-medium">Ativo</th>
-                    <th className="py-3 font-medium">Categoria</th>
-                    <th className="py-3 text-right font-medium">Quantidade</th>
-                    <th className="py-3 text-right font-medium">Preco medio</th>
-                    <th className="py-3 text-right font-medium">Preco atual</th>
-                    <th className="py-3 text-right font-medium">Investido</th>
-                    <th className="py-3 text-right font-medium">Valor atual</th>
-                    <th className="py-3 text-right font-medium">Lucro</th>
-                    <th className="py-3 text-right font-medium">Rent.</th>
-                    <th className="py-3 text-right font-medium">DY</th>
-                    <th className="py-3 text-right font-medium">Yield on Cost</th>
-                    <th className="py-3 text-right font-medium">Dividendos</th>
-                    <th className="py-3 text-right font-medium">Peso</th>
+              <div className="scrollbar-thin portfolio-table-scroll hidden max-h-[680px] overflow-auto md:block">
+              <table className="portfolio-table w-full min-w-[1480px] text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-panel text-xs uppercase tracking-[0.14em] text-muted shadow-[0_1px_0_0_#232728]">
+                  <tr>
+                    <th className="sticky left-0 z-20 min-w-[190px] bg-panel px-4 py-4 font-medium">Ativo</th>
+                    <th className="min-w-[130px] px-4 py-4 font-medium">Categoria</th>
+                    <th className="min-w-[100px] px-4 py-4 text-center font-medium">Quantidade</th>
+                    <th className="min-w-[130px] px-4 py-4 text-right font-medium">Preco medio</th>
+                    <th className="min-w-[150px] px-4 py-4 text-right font-medium">Preco atual</th>
+                    <th className="min-w-[140px] px-4 py-4 text-right font-medium">Investido</th>
+                    <th className="min-w-[140px] px-4 py-4 text-right font-medium">Valor atual</th>
+                    <th className="min-w-[140px] px-4 py-4 text-right font-medium">Lucro</th>
+                    <th className="min-w-[120px] px-4 py-4 text-right font-medium">Rent.</th>
+                    <th className="min-w-[95px] px-4 py-4 text-right font-medium">DY</th>
+                    <th className="min-w-[125px] px-4 py-4 text-right font-medium">Yield on Cost</th>
+                    <th className="min-w-[140px] px-4 py-4 text-right font-medium">Dividendos</th>
+                    <th className="min-w-[95px] px-4 py-4 text-right font-medium">Peso</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredAssets.map((asset) => (
-                    <tr key={asset.ticker} className="border-b border-line/70 text-muted">
-                      <td className="sticky left-0 bg-panel py-4 pr-3">
+                    <tr key={asset.ticker} className="text-muted transition hover:bg-elevated/30">
+                      <td className="sticky left-0 border-b border-line/70 bg-panel px-4 py-5 shadow-[1px_0_0_0_#232728]">
                         <Link to={`/ativos/${asset.ticker}`} className="font-medium text-ink hover:text-accent">
                           {asset.ticker}
                         </Link>
                         <p className="text-xs text-muted">{asset.name}</p>
                       </td>
-                      <td className="py-4">{asset.categoryLabel ?? asset.category}</td>
-                      <td className="py-4 text-right">{asset.quantity}</td>
-                      <td className="py-4 text-right">{formatCurrency(asset.averagePrice)}</td>
-                      <td className="py-4 text-right">
+                      <td className="border-b border-line/70 px-4 py-5">{asset.categoryLabel ?? asset.category}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-center tabular-nums">{asset.quantity}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right font-medium text-ink">
+                        <MoneyValue value={formatCurrency(asset.averagePrice)} size="table" />
+                      </td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right">
                         {hasValidPrice(asset) ? (
-                          <>
-                            <p className="text-ink">{formatCurrency(asset.currentPrice ?? 0)}</p>
-                            <p className="text-xs text-muted">
-                              {asset.priceSource ? asset.priceSource.toUpperCase() : quoteStatusLabel(asset.priceStatus)}
-                              {asset.lastPriceAt ? ` · ${new Date(asset.lastPriceAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                          <div className="flex flex-col items-end gap-1">
+                            <p className="font-semibold text-ink">
+                              <MoneyValue value={formatCurrency(asset.currentPrice ?? 0)} size="table" />
                             </p>
-                          </>
+                            <p className="whitespace-nowrap text-[0.68rem] uppercase tracking-[0.08em] text-muted">
+                              {asset.priceSource ? asset.priceSource.toUpperCase() : quoteStatusLabel(asset.priceStatus)}
+                              {asset.lastPriceAt ? ` • ${new Date(asset.lastPriceAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                            </p>
+                          </div>
                         ) : (
                           <span className={hasPosition(asset) ? "text-amber" : "text-muted"}>Indisponivel</span>
                         )}
                       </td>
-                      <td className="py-4 text-right">{formatCurrency(asset.totalInvested ?? asset.investedValue)}</td>
-                      <td className="py-4 text-right">{formatNullableCurrency(asset.currentValue)}</td>
-                      <td className={`py-4 text-right ${metricClass(asset.unrealizedProfit ?? asset.profit)}`}>{formatNullableCurrency(asset.unrealizedProfit ?? asset.profit)}</td>
-                      <td className={`py-4 text-right ${metricClass(asset.profitabilityPercent ?? asset.returnPercentage)}`}>
+                      <td className="border-b border-line/70 px-4 py-5 text-right font-medium text-ink">
+                        <MoneyValue value={formatCurrency(asset.totalInvested ?? asset.investedValue)} size="table" />
+                      </td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right font-medium text-ink">
+                        <MoneyValue value={formatNullableCurrency(asset.currentValue)} size="table" />
+                      </td>
+                      <td className={`border-b border-line/70 px-4 py-5 text-right font-medium ${metricClass(asset.unrealizedProfit ?? asset.profit)}`}>
+                        <MoneyValue value={formatNullableCurrency(asset.unrealizedProfit ?? asset.profit)} size="table" />
+                      </td>
+                      <td className={`border-b border-line/70 px-4 py-5 text-right tabular-nums ${metricClass(asset.profitabilityPercent ?? asset.returnPercentage)}`}>
                         {formatNullablePercentage(asset.profitabilityPercent ?? asset.returnPercentage)}
                       </td>
-                      <td className="py-4 text-right">{formatPercentage(asset.dividendYield)}</td>
-                      <td className="py-4 text-right">{formatPercentage(asset.yieldOnCost ?? 0)}</td>
-                      <td className="py-4 text-right">{formatCurrency(asset.dividendsReceived)}</td>
-                      <td className="py-4 text-right">{formatPercentage(asset.weightPercent ?? asset.portfolioWeight)}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right tabular-nums">{formatPercentage(asset.dividendYield)}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right tabular-nums">{formatPercentage(asset.yieldOnCost ?? 0)}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right font-medium text-ink">
+                        <MoneyValue value={formatCurrency(asset.dividendsReceived)} size="table" />
+                      </td>
+                      <td className="border-b border-line/70 px-4 py-5 text-right tabular-nums">{formatPercentage(asset.weightPercent ?? asset.portfolioWeight)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -383,13 +408,24 @@ export function PortfolioPage() {
         </div>
 
         <aside className="min-w-0 space-y-4">
-          <article className="min-w-0 rounded-lg border border-line bg-panel p-4">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4 sm:p-5">
             <p className="text-sm text-muted">Aporte recomendado</p>
             <h2 className="mt-2 break-words text-xl font-semibold text-ink">{recommendedCategory?.label ?? (portfolio.recommendation.category || "A definir")}</h2>
-            <div className="mt-3 space-y-2 text-sm text-muted">
-              <p>Atual: {formatPercentage(recommendedCategory?.currentPercent ?? 0)}</p>
-              <p>Alvo: {formatPercentage(recommendedCategory?.targetPercent ?? 0)}</p>
-              <p>Deficit: {formatCurrency(recommendedCategory?.amountNeeded ?? 0)}</p>
+            <div className="mt-4 grid gap-2 text-sm text-muted">
+              <p className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+                <span>Atual</span>
+                <span className="text-ink">{formatPercentage(recommendedCategory?.currentPercent ?? 0)}</span>
+              </p>
+              <p className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+                <span>Alvo</span>
+                <span className="text-ink">{formatPercentage(recommendedCategory?.targetPercent ?? 0)}</span>
+              </p>
+              <p className="flex items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+                <span>Deficit</span>
+                <span className="min-w-0 text-right text-ink">
+                  <MoneyValue value={formatCurrency(recommendedCategory?.amountNeeded ?? 0)} />
+                </span>
+              </p>
               <p className="break-words">Ativo sugerido: {suggestedAsset?.ticker ?? (suggestedTicker ? "Sem preco valido" : "Cadastre uma posicao elegivel")}</p>
             </div>
             <p className="mt-3 text-sm leading-6 text-muted">{portfolio.recommendation.reason}</p>
@@ -397,7 +433,7 @@ export function PortfolioPage() {
               Ultima cotacao: {suggestedAsset?.lastPriceAt ? new Date(suggestedAsset.lastPriceAt).toLocaleString("pt-BR") : "indisponivel"}
             </p>
           </article>
-          <article className="min-w-0 rounded-lg border border-line bg-panel p-4">
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4 sm:p-5">
             <h2 className="text-base font-semibold text-ink">Carteira ideal x atual</h2>
             <div className="mt-4">
               <PieChart data={allocationChartData} height={220} />

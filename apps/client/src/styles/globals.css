@@ -70,11 +70,223 @@ button:disabled {
   scrollbar-color: #2b302f transparent;
 }
 
+.scrollbar-thin::-webkit-scrollbar {
+  width: 0.45rem;
+  height: 0.45rem;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #2b302f;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #39413f;
+}
+
+.stat-card-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.stat-card-grid--wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mobile-metric-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.75rem;
+}
+
+.financial-value,
+.responsive-value {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.12;
+  overflow: visible;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.financial-value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.26em;
+  row-gap: 0.08em;
+}
+
+.financial-value__part {
+  white-space: nowrap;
+}
+
+.responsive-value {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.financial-value__amount {
+  min-width: 0;
+}
+
+.financial-value--card,
+.responsive-value--card {
+  font-size: clamp(1.02rem, 3.4vw, 1.28rem);
+}
+
+.financial-value--table,
+.responsive-value--table {
+  font-size: clamp(0.84rem, 1.2vw, 0.95rem);
+}
+
+.financial-value--inline,
+.responsive-value--inline {
+  font-size: inherit;
+}
+
+.portfolio-table-scroll {
+  scroll-behavior: smooth;
+}
+
+.portfolio-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+@media (min-width: 480px) {
+  .stat-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .stat-card-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  }
+
+  .stat-card-grid--wide {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr));
+  }
+}
+
+@media (min-width: 1200px) {
+  main.portfolio-main {
+    max-width: none;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .portfolio-summary-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .portfolio-summary-grid > * {
+    height: 100%;
+  }
+
+  .portfolio-desktop-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(17rem, 25%);
+    align-items: start;
+  }
+
+  div.portfolio-filters {
+    grid-template-columns: minmax(20rem, 1fr) minmax(8.5rem, 0.2fr) minmax(10rem, 0.24fr) minmax(9rem, 0.2fr) minmax(8rem, auto);
+    align-items: center;
+  }
+
+  .portfolio-table {
+    min-width: 1100px;
+    table-layout: auto;
+  }
+
+  .portfolio-table th,
+  .portfolio-table td {
+    padding-left: 0.375rem;
+    padding-right: 0.375rem;
+  }
+
+  .portfolio-table th {
+    letter-spacing: 0.08em;
+  }
+
+  .portfolio-table th:nth-child(1),
+  .portfolio-table td:nth-child(1) {
+    min-width: 8.75rem;
+  }
+
+  .portfolio-table th:nth-child(2),
+  .portfolio-table td:nth-child(2) {
+    min-width: 5.75rem;
+  }
+
+  .portfolio-table th:nth-child(3),
+  .portfolio-table td:nth-child(3) {
+    min-width: 4.75rem;
+  }
+
+  .portfolio-table th:nth-child(4),
+  .portfolio-table td:nth-child(4),
+  .portfolio-table th:nth-child(6),
+  .portfolio-table td:nth-child(6),
+  .portfolio-table th:nth-child(7),
+  .portfolio-table td:nth-child(7),
+  .portfolio-table th:nth-child(8),
+  .portfolio-table td:nth-child(8),
+  .portfolio-table th:nth-child(12),
+  .portfolio-table td:nth-child(12) {
+    min-width: 5.65rem;
+  }
+
+  .portfolio-table th:nth-child(5),
+  .portfolio-table td:nth-child(5) {
+    min-width: 6.25rem;
+  }
+
+  .portfolio-table th:nth-child(9),
+  .portfolio-table td:nth-child(9),
+  .portfolio-table th:nth-child(11),
+  .portfolio-table td:nth-child(11) {
+    min-width: 4.75rem;
+  }
+
+  .portfolio-table th:nth-child(10),
+  .portfolio-table td:nth-child(10),
+  .portfolio-table th:nth-child(13),
+  .portfolio-table td:nth-child(13) {
+    min-width: 3.75rem;
+  }
+}
+
+@media (min-width: 1536px) {
+  .portfolio-desktop-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(19rem, 25%);
+  }
+
+  .portfolio-table {
+    min-width: 1100px;
+  }
+}
+
 @media (max-width: 767px) {
   input,
   select,
   textarea {
     font-size: 16px;
+  }
+
+  .financial-value--card,
+  .responsive-value--card {
+    font-size: clamp(1rem, 6.2vw, 1.22rem);
   }
 }
 

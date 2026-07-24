@@ -26,7 +26,7 @@ export function DashboardPage() {
         description="Acompanhe patrimonio, aportes, dividendos, alocacao ideal e o proximo movimento recomendado."
       />
 
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="stat-card-grid">
         <StatCard label="Patrimonio total" value={formatCurrency(metrics.totalWealth)} detail="Valor atualizado da carteira" icon={<Wallet size={18} />} />
         <StatCard label="Lucro total" value={formatCurrency(metrics.totalProfit)} detail="Resultado sobre preco medio" icon={<TrendingUp size={18} />} tone="blue" />
         <StatCard label="Rentabilidade" value={formatPercentage(metrics.returnPercentage)} detail="Carteira consolidada" icon={<BadgePercent size={18} />} tone="violet" />
@@ -87,3 +87,4 @@ export function DashboardPage() {
     </div>
   );
 }
+

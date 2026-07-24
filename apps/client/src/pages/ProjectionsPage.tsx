@@ -5,6 +5,7 @@ import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { StatCard } from "../components/ui/StatCard";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { calculateProjection } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Goal } from "../types/investments";
@@ -21,6 +22,14 @@ const initialProjection: ProjectionInput = {
   reinvestDividends: true,
   annualDividendYield: 0
 };
+
+const decimalFields = new Set<keyof ProjectionInput>(["wealth", "monthlyContribution", "expectedReturn", "inflation", "annualDividendYield"]);
+
+function roundProjectionNumber(field: keyof ProjectionInput, value: number) {
+  if (!Number.isFinite(value)) return 0;
+  const decimals = decimalFields.has(field) ? 2 : 0;
+  return Number(value.toFixed(decimals));
+}
 
 function getGoalTarget(goal: Goal) {
   return goal.target;
@@ -68,14 +77,14 @@ export function ProjectionsPage() {
     const targetAge = settings.projections?.targetAge ?? initialProjection.targetAge;
 
     setForm({
-      wealth: dashboard.metrics.totalWealth,
-      monthlyContribution: contributions?.totals.monthlyAverage ?? dashboard.metrics.monthlyContributions,
-      expectedReturn: settings.projections?.expectedReturn ?? initialProjection.expectedReturn,
-      inflation: settings.projections?.inflation ?? initialProjection.inflation,
+      wealth: roundProjectionNumber("wealth", dashboard.metrics.totalWealth),
+      monthlyContribution: roundProjectionNumber("monthlyContribution", contributions?.totals.monthlyAverage ?? dashboard.metrics.monthlyContributions),
+      expectedReturn: roundProjectionNumber("expectedReturn", settings.projections?.expectedReturn ?? initialProjection.expectedReturn),
+      inflation: roundProjectionNumber("inflation", settings.projections?.inflation ?? initialProjection.inflation),
       currentAge,
       targetAge: targetAge > currentAge ? targetAge : currentAge + 1,
       reinvestDividends: true,
-      annualDividendYield: dashboard.metrics.currentValue > 0 ? ((dividends?.totals.monthlyAverage ?? 0) * 12 / dashboard.metrics.currentValue) * 100 : 0
+      annualDividendYield: roundProjectionNumber("annualDividendYield", dashboard.metrics.currentValue > 0 ? ((dividends?.totals.monthlyAverage ?? 0) * 12 / dashboard.metrics.currentValue) * 100 : 0)
     });
     setHasLoadedDefaults(true);
   }, [contributions?.totals.monthlyAverage, dashboard, dividends?.totals.monthlyAverage, hasLoadedDefaults, settings]);
@@ -112,7 +121,10 @@ export function ProjectionsPage() {
   );
 
   function updateField(field: keyof ProjectionInput, value: number | boolean) {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => ({
+      ...current,
+      [field]: typeof value === "number" ? roundProjectionNumber(field, value) : value
+    }));
   }
 
   return (
@@ -167,7 +179,7 @@ export function ProjectionsPage() {
 
         <div className="min-w-0 space-y-4">
           {projection ? (
-            <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <section className="stat-card-grid stat-card-grid--wide">
               <StatCard label="Patrimonio futuro" value={formatCurrency(projection.summary.futureWealth)} icon={<TrendingUp size={18} />} />
               <StatCard label="Valor real" value={formatCurrency(projection.summary.realFutureWealth)} icon={<TrendingUp size={18} />} tone="blue" />
               <StatCard label="Dividendos futuros" value={formatCurrency(projection.summary.futureMonthlyDividends)} icon={<Coins size={18} />} tone="amber" />
@@ -202,9 +214,13 @@ export function ProjectionsPage() {
                       <span className="text-muted">{timeLabel}</span>
                     </div>
                     <ProgressBar value={progress} tone={progress >= 100 ? "green" : "blue"} />
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 break-words text-xs text-muted">
-                      <span>Projetado: {goal.type === "shares" ? projectedValue.toLocaleString("pt-BR") : formatCurrency(projectedValue)}</span>
-                      <span>Meta: {goal.type === "shares" ? getGoalTarget(goal).toLocaleString("pt-BR") : formatCurrency(getGoalTarget(goal))}</span>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+                      <span className="min-w-0">
+                        Projetado: {goal.type === "shares" ? projectedValue.toLocaleString("pt-BR") : <MoneyValue value={formatCurrency(projectedValue)} />}
+                      </span>
+                      <span className="min-w-0">
+                        Meta: {goal.type === "shares" ? getGoalTarget(goal).toLocaleString("pt-BR") : <MoneyValue value={formatCurrency(getGoalTarget(goal))} />}
+                      </span>
                       <span>{formatPercentage(progress)}</span>
                     </div>
                   </div>
@@ -219,3 +235,4 @@ export function ProjectionsPage() {
     </div>
   );
 }
+

@@ -6,6 +6,7 @@ import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AllocationComparison } from "../types/investments";
 import { formatCurrency } from "../utils/formatters";
@@ -39,7 +40,7 @@ export function DividendsPage() {
         description="Recebimentos, media mensal, maior pagamento, calendario, tabela e graficos vindos da API."
       />
 
-      <section className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <section className="stat-card-grid">
         <StatCard label="Dividendos mes" value={formatCurrency(dividends.totals.month)} icon={<Coins size={18} />} />
         <StatCard label="Dividendos ano" value={formatCurrency(dividends.totals.year)} icon={<CalendarDays size={18} />} tone="blue" />
         <StatCard label="Total recebido" value={formatCurrency(dividends.totals.allTime)} icon={<TrendingUp size={18} />} tone="violet" />
@@ -77,16 +78,18 @@ export function DividendsPage() {
               key={`${dividend.assetTicker}-${dividend.date}-${dividend.amount}`}
               title={dividend.assetTicker}
               subtitle={new Date(dividend.date).toLocaleDateString("pt-BR")}
-              badge={<span className="text-accent">{formatCurrency(dividend.amount)}</span>}
+              badge={<span className="text-accent"><MoneyValue value={formatCurrency(dividend.amount)} /></span>}
             >
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="mobile-metric-grid text-sm">
                 <div className="rounded-lg bg-elevated px-3 py-2">
                   <p className="text-xs text-muted">Cotas</p>
                   <p className="font-medium text-ink">{dividend.shares}</p>
                 </div>
                 <div className="rounded-lg bg-elevated px-3 py-2">
                   <p className="text-xs text-muted">Valor</p>
-                  <p className="font-medium text-accent">{formatCurrency(dividend.amount)}</p>
+                  <p className="min-w-0 font-medium text-accent">
+                    <MoneyValue value={formatCurrency(dividend.amount)} />
+                  </p>
                 </div>
               </div>
             </MobileDataCard>
@@ -99,7 +102,7 @@ export function DividendsPage() {
                 <th className="py-3 font-medium">Ativo</th>
                 <th className="py-3 font-medium">Data</th>
                 <th className="py-3 font-medium">Cotas</th>
-                <th className="py-3 font-medium">Valor</th>
+                <th className="py-3 text-right font-medium">Valor</th>
               </tr>
             </thead>
             <tbody>
@@ -108,7 +111,9 @@ export function DividendsPage() {
                   <td className="py-3 font-medium text-ink">{dividend.assetTicker}</td>
                   <td className="py-3">{new Date(dividend.date).toLocaleDateString("pt-BR")}</td>
                   <td className="py-3">{dividend.shares}</td>
-                  <td className="py-3 text-accent">{formatCurrency(dividend.amount)}</td>
+                  <td className="py-3 text-right text-accent">
+                    <MoneyValue value={formatCurrency(dividend.amount)} size="table" />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -118,3 +123,4 @@ export function DividendsPage() {
     </div>
   );
 }
+

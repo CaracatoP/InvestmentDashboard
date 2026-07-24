@@ -1,5 +1,5 @@
 import { Edit2, Plus, Search, Trash2, X } from "lucide-react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent, HTMLAttributes, MouseEvent, ReactNode } from "react";
 
 interface ToolbarProps {
   search: string;
@@ -51,9 +51,10 @@ interface TableProps<T> {
   getKey: (row: T) => string;
   renderRow: (row: T) => ReactNode;
   renderMobileCard?: (row: T) => ReactNode;
+  getRowProps?: (row: T) => HTMLAttributes<HTMLTableRowElement>;
 }
 
-export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMobileCard }: TableProps<T>) {
+export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMobileCard, getRowProps }: TableProps<T>) {
   if (rows.length === 0) {
     return (
       <section className="min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
@@ -84,11 +85,15 @@ export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMob
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={getKey(row)} className="border-b border-line/70 text-muted">
-                {renderRow(row)}
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const rowProps = getRowProps?.(row);
+
+              return (
+                <tr {...rowProps} key={getKey(row)} className={["border-b border-line/70 text-muted", rowProps?.className].filter(Boolean).join(" ")}>
+                  {renderRow(row)}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -96,25 +101,57 @@ export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMob
   );
 }
 
-export function RowActions({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+function stopRowNavigation(event: MouseEvent<HTMLButtonElement>, action: () => void) {
+  event.stopPropagation();
+  action();
+}
+
+export function RowActions({
+  onView,
+  onEdit,
+  onDelete,
+  viewLabel = "Ver detalhes",
+  editLabel = "Editar",
+  deleteLabel = "Excluir",
+  viewIcon
+}: {
+  onView?: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  viewLabel?: string;
+  editLabel?: string;
+  deleteLabel?: string;
+  viewIcon?: ReactNode;
+}) {
   return (
     <td className="py-3">
       <div className="flex justify-end gap-2">
+        {onView ? (
+          <button
+            type="button"
+            onClick={(event) => stopRowNavigation(event, onView)}
+            className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink focus-visible:border-accent focus-visible:outline-none"
+            title={viewLabel}
+            aria-label={viewLabel}
+          >
+            {viewIcon ?? <Search size={15} />}
+          </button>
+        ) : null}
         <button
           type="button"
-          onClick={onEdit}
-          className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink"
-          title="Editar"
-          aria-label="Editar"
+          onClick={(event) => stopRowNavigation(event, onEdit)}
+          className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-accent/50 hover:text-ink focus-visible:border-accent focus-visible:outline-none"
+          title={editLabel}
+          aria-label={editLabel}
         >
           <Edit2 size={15} />
         </button>
         <button
           type="button"
-          onClick={onDelete}
-          className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-rose/50 hover:text-rose"
-          title="Excluir"
-          aria-label="Excluir"
+          onClick={(event) => stopRowNavigation(event, onDelete)}
+          className="grid h-11 w-11 place-items-center rounded-lg border border-line bg-elevated text-muted transition hover:border-rose/50 hover:text-rose focus-visible:border-rose focus-visible:outline-none"
+          title={deleteLabel}
+          aria-label={deleteLabel}
         >
           <Trash2 size={15} />
         </button>

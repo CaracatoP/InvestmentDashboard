@@ -16,7 +16,7 @@ export function MobileDataCard({ title, subtitle, badge, children, actions }: Mo
           <div className="break-words font-semibold text-ink">{title}</div>
           {subtitle ? <div className="mt-1 break-words text-sm text-muted">{subtitle}</div> : null}
         </div>
-        {badge ? <div className="shrink-0 text-right text-xs text-muted">{badge}</div> : null}
+        {badge ? <div className="min-w-0 max-w-[48%] text-right text-xs text-muted">{badge}</div> : null}
       </div>
       <div className="mt-4 min-w-0">{children}</div>
       {actions ? <div className="mt-4 flex flex-wrap gap-2">{actions}</div> : null}

@@ -1,6 +1,7 @@
 import { Circle } from "lucide-react";
 import type { Movement } from "../../types/investments";
 import { formatCurrency, formatDate } from "../../utils/formatters";
+import { MoneyValue } from "./ValueDisplay";
 
 interface TimelineProps {
   items: Movement[];
@@ -22,7 +23,9 @@ export function Timeline({ items }: TimelineProps) {
             <p className="mt-1 break-words text-sm text-muted">
               {item.title} - {item.description}
             </p>
-            <p className="mt-2 break-words text-sm font-medium text-accent [overflow-wrap:anywhere]">{formatCurrency(item.amount)}</p>
+            <p className="mt-2 min-w-0 text-sm font-medium text-accent">
+              <MoneyValue value={formatCurrency(item.amount)} />
+            </p>
           </div>
         </article>
       ))}

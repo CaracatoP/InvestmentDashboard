@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
+import { MoneyValue } from "../components/ui/ValueDisplay";
 import { assetRecordsApi, operationRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AssetRecord, OperationRecord, OperationType } from "../types/management";
@@ -94,24 +95,30 @@ export function OperationsPage() {
           <MobileDataCard
             title={`${operation.type} ${operation.assetTicker}`}
             subtitle={new Date(operation.date).toLocaleDateString("pt-BR")}
-            badge={<span className="text-accent">{formatCurrency(operation.totalValue)}</span>}
+            badge={<span className="text-accent"><MoneyValue value={formatCurrency(operation.totalValue)} /></span>}
           >
-            <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="mobile-metric-grid text-sm">
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Quantidade</p>
                 <p className="font-medium text-ink">{operation.quantity}</p>
               </div>
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Preco</p>
-                <p className="font-medium text-ink">{formatCurrency(operation.price)}</p>
+                <p className="min-w-0 font-medium text-ink">
+                  <MoneyValue value={formatCurrency(operation.price)} />
+                </p>
               </div>
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Taxas</p>
-                <p className="font-medium text-ink">{formatCurrency(operation.fees)}</p>
+                <p className="min-w-0 font-medium text-ink">
+                  <MoneyValue value={formatCurrency(operation.fees)} />
+                </p>
               </div>
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Total</p>
-                <p className="font-medium text-accent">{formatCurrency(operation.totalValue)}</p>
+                <p className="min-w-0 font-medium text-accent">
+                  <MoneyValue value={formatCurrency(operation.totalValue)} />
+                </p>
               </div>
             </div>
             {operation.notes ? <p className="mt-3 break-words text-sm text-muted">{operation.notes}</p> : null}
@@ -131,9 +138,9 @@ export function OperationsPage() {
             <td className="py-3">{operation.type}</td>
             <td className="py-3 font-medium text-ink">{operation.assetTicker}</td>
             <td className="py-3">{operation.quantity}</td>
-            <td className="py-3">{formatCurrency(operation.price)}</td>
-            <td className="py-3">{formatCurrency(operation.fees)}</td>
-            <td className="py-3">{formatCurrency(operation.totalValue)}</td>
+            <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.price)} size="table" /></td>
+            <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.fees)} size="table" /></td>
+            <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.totalValue)} size="table" /></td>
             <RowActions onEdit={() => openEdit(operation)} onDelete={() => setDeleteTarget(operation)} />
           </>
         )}
