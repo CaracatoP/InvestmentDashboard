@@ -149,6 +149,15 @@ Do not add backend secrets to Vercel. After Vercel deploys, copy the Vercel doma
 
 `apps/client/vercel.json` rewrites every route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` work with React Router.
 
+## Favicon E Cache
+
+The Vite frontend serves favicon files from `apps/client/public`, and Vercel copies them to the production `dist` root during build.
+
+- Browser favicon: `apps/client/public/favicon.svg` and `apps/client/public/favicon-32x32.png`.
+- Apple touch icon: `apps/client/public/apple-touch-icon.png`.
+- To replace the logo later, update the files in `apps/client/public` and keep the same filenames, or change the links in `apps/client/index.html`.
+- Browsers may cache favicons aggressively. If the old icon still appears, use a hard refresh with `Ctrl+Shift+R`.
+
 ## Ordem Correta De Deploy
 
 1. Send the code to GitHub.
