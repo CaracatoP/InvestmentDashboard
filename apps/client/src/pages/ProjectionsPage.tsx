@@ -132,7 +132,7 @@ export function ProjectionsPage() {
       <PageHeader
         eyebrow="Projecoes"
         title="Simulador de independencia financeira"
-        description="Projete patrimonio, renda futura, inflacao e reinvestimento de dividendos ate a idade objetivo."
+        description="Projete patrimonio com retorno total esperado e use o dividend yield apenas para estimar renda passiva futura."
       />
 
       <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
@@ -142,9 +142,9 @@ export function ProjectionsPage() {
             {[
               ["wealth", "Patrimonio"],
               ["monthlyContribution", "Aporte mensal"],
-              ["expectedReturn", "Rentabilidade esperada (%)"],
-              ["inflation", "Inflacao (%)"],
-              ["annualDividendYield", "Dividend yield anual (%)"],
+              ["expectedReturn", "Retorno total esperado (% a.a.)"],
+              ["inflation", "Inflacao (% a.a.)"],
+              ["annualDividendYield", "Dividend yield estimado (% a.a.)"],
               ["currentAge", "Idade atual"],
               ["targetAge", "Idade objetivo"]
             ].map(([field, label]) => (
@@ -161,7 +161,7 @@ export function ProjectionsPage() {
               </label>
             ))}
             <label className="flex items-center justify-between gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
-              Reinvestir dividendos
+              Reinvestir dividendos (estimativo)
               <input
                 type="checkbox"
                 checked={form.reinvestDividends}
@@ -182,8 +182,8 @@ export function ProjectionsPage() {
             <section className="stat-card-grid stat-card-grid--wide">
               <StatCard label="Patrimonio futuro" value={formatCurrency(projection.summary.futureWealth)} icon={<TrendingUp size={18} />} />
               <StatCard label="Valor real" value={formatCurrency(projection.summary.realFutureWealth)} icon={<TrendingUp size={18} />} tone="blue" />
-              <StatCard label="Dividendos futuros" value={formatCurrency(projection.summary.futureMonthlyDividends)} icon={<Coins size={18} />} tone="amber" />
-              <StatCard label="Dividendos acumulados" value={formatCurrency(projection.summary.accumulatedDividends)} icon={<Coins size={18} />} tone="amber" />
+              <StatCard label="Renda passiva mensal estimada" value={formatCurrency(projection.summary.futureMonthlyDividends)} detail={`Anual estimado: ${formatCurrency(projection.summary.futureAnnualDividends ?? projection.summary.futureMonthlyDividends * 12)}`} icon={<Coins size={18} />} tone="amber" />
+              <StatCard label={form.reinvestDividends ? "Dividendos estimados reinvestidos" : "Dividendos estimados recebidos"} value={formatCurrency(projection.summary.accumulatedDividends)} detail="Estimativa pelo dividend yield; nao e somada novamente ao patrimonio." icon={<Coins size={18} />} tone="amber" />
               <StatCard label="Tempo projetado" value={`${projection.summary.years} anos`} detail={`${projection.summary.months} meses`} icon={<Clock size={18} />} tone="violet" />
             </section>
           ) : null}
@@ -194,8 +194,8 @@ export function ProjectionsPage() {
               series={[
                 { dataKey: "wealth", name: "Nominal", color: "#22c55e" },
                 { dataKey: "realWealth", name: "Real", color: "#38bdf8" },
-                { dataKey: "projectedDividends", name: "Dividendos", color: "#f59e0b" },
-                { dataKey: "accumulatedDividends", name: "Dividendos acumulados", color: "#a78bfa" }
+                { dataKey: "projectedDividends", name: "Renda mensal", color: "#f59e0b" },
+                { dataKey: "accumulatedDividends", name: "Dividendos estimados", color: "#a78bfa" }
               ]}
             />
           </ChartCard>
