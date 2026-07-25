@@ -254,7 +254,6 @@ export interface ProjectionResponse {
     futureWealth: number;
     realFutureWealth: number;
     futureMonthlyDividends: number;
-    futureAnnualDividends?: number;
     accumulatedDividends: number;
     years: number;
     months: number;
