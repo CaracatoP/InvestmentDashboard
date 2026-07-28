@@ -256,6 +256,10 @@ export function HistoryPage() {
         <p className="mt-3 text-xs text-muted">
           Exibindo {filteredHistory.length} de {history.length} eventos. Eventos futuros aparecem com identificacao textual como Previsto ou Agendado.
         </p>
+        <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-accent" />Entrada</span>
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-rose" />Saída</span>
+        </div>
       </section>
 
       {isLoading ? <p className="rounded-lg border border-line bg-panel p-4 text-sm text-muted">Carregando historico...</p> : null}
@@ -267,7 +271,7 @@ export function HistoryPage() {
           {groupedHistory.map((group) => (
             <section key={group.date} className="min-w-0">
               <h2 className="mb-2 text-sm font-semibold text-ink">{group.title}</h2>
-              <Timeline items={group.events} showStatus />
+              <Timeline items={group.events} showStatus colorByFlow />
             </section>
           ))}
         </div>
