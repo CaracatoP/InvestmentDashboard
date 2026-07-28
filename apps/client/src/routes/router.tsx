@@ -1,39 +1,74 @@
-import { createBrowserRouter } from "react-router-dom";
+import { lazy, Suspense, type ReactNode } from "react";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import { App } from "../App";
-import { AssetPage } from "../pages/AssetPage";
-import { AssetsPage } from "../pages/AssetsPage";
-import { CalendarPage } from "../pages/CalendarPage";
-import { ContributionsPage } from "../pages/ContributionsPage";
-import { CashBoxesPage } from "../pages/CashBoxesPage";
-import { DashboardPage } from "../pages/DashboardPage";
-import { DividendsPage } from "../pages/DividendsPage";
-import { GoalsPage } from "../pages/GoalsPage";
-import { HistoryPage } from "../pages/HistoryPage";
-import { OperationsPage } from "../pages/OperationsPage";
-import { PortfolioPage } from "../pages/PortfolioPage";
-import { ProjectionsPage } from "../pages/ProjectionsPage";
-import { RebalancingPage } from "../pages/RebalancingPage";
-import { SettingsPage } from "../pages/SettingsPage";
+
+const DashboardPage = lazy(() => import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const PortfolioPage = lazy(() => import("../pages/PortfolioPage").then((module) => ({ default: module.PortfolioPage })));
+const AssetsPage = lazy(() => import("../pages/AssetsPage").then((module) => ({ default: module.AssetsPage })));
+const AssetPage = lazy(() => import("../pages/AssetPage").then((module) => ({ default: module.AssetPage })));
+const OperationsPage = lazy(() => import("../pages/OperationsPage").then((module) => ({ default: module.OperationsPage })));
+const DividendsPage = lazy(() => import("../pages/DividendsPage").then((module) => ({ default: module.DividendsPage })));
+const ContributionsPage = lazy(() => import("../pages/ContributionsPage").then((module) => ({ default: module.ContributionsPage })));
+const CashBoxesPage = lazy(() => import("../pages/CashBoxesPage").then((module) => ({ default: module.CashBoxesPage })));
+const GoalsPage = lazy(() => import("../pages/GoalsPage").then((module) => ({ default: module.GoalsPage })));
+const ProjectionsPage = lazy(() => import("../pages/ProjectionsPage").then((module) => ({ default: module.ProjectionsPage })));
+const HistoryPage = lazy(() => import("../pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
+const SettingsPage = lazy(() => import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
+const RebalancingPage = lazy(() => import("../pages/RebalancingPage").then((module) => ({ default: module.RebalancingPage })));
+const PlanningOverviewPage = lazy(() => import("../pages/planning/PlanningOverviewPage"));
+const PlanningBudgetPage = lazy(() => import("../pages/planning/PlanningBudgetPage"));
+const PlanningExpensesPage = lazy(() => import("../pages/planning/PlanningExpensesPage"));
+const PlanningCalendarPage = lazy(() => import("../pages/planning/PlanningCalendarPage"));
+const PlanningGoalsPage = lazy(() => import("../pages/planning/PlanningGoalsPage"));
+const PlanningAnalyticsPage = lazy(() => import("../pages/planning/PlanningAnalyticsPage"));
+const PlanningCategoryAnalyticsPage = lazy(() => import("../pages/planning/PlanningCategoryAnalyticsPage"));
+const InvestmentsOverviewPage = lazy(() => import("../pages/investments/InvestmentsOverviewPage"));
+const InvestmentPortfolioPage = lazy(() => import("../pages/investments/InvestmentPortfolioPage"));
+const InvestmentContributionsPage = lazy(() => import("../pages/investments/InvestmentContributionsPage"));
+const InvestmentDividendsPage = lazy(() => import("../pages/investments/InvestmentDividendsPage"));
+const InvestmentContributionGoalsPage = lazy(() => import("../pages/investments/InvestmentContributionGoalsPage"));
+const InvestmentAnalyticsPage = lazy(() => import("../pages/investments/InvestmentAnalyticsPage"));
+
+function lazyPage(page: ReactNode) {
+  return (
+    <Suspense fallback={<div className="rounded-lg border border-line bg-panel p-6 text-sm text-muted">Carregando pagina...</div>}>
+      {page}
+    </Suspense>
+  );
+}
 
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <App />,
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: "carteira", element: <PortfolioPage /> },
-      { path: "ativos", element: <AssetsPage /> },
-      { path: "ativos/:ticker", element: <AssetPage /> },
-      { path: "operacoes", element: <OperationsPage /> },
-      { path: "dividendos", element: <DividendsPage /> },
-      { path: "aportes", element: <ContributionsPage /> },
-      { path: "caixinhas", element: <CashBoxesPage /> },
-      { path: "metas", element: <GoalsPage /> },
-      { path: "projecoes", element: <ProjectionsPage /> },
-      { path: "calendario", element: <CalendarPage /> },
-      { path: "historico", element: <HistoryPage /> },
-      { path: "configuracoes", element: <SettingsPage /> },
-      { path: "alocacao", element: <RebalancingPage /> }
+      { index: true, element: lazyPage(<DashboardPage />) },
+      { path: "investimentos", element: lazyPage(<InvestmentsOverviewPage />) },
+      { path: "investimentos/carteira", element: lazyPage(<InvestmentPortfolioPage />) },
+      { path: "investimentos/aportes", element: lazyPage(<InvestmentContributionsPage />) },
+      { path: "investimentos/dividendos", element: lazyPage(<InvestmentDividendsPage />) },
+      { path: "investimentos/metas", element: lazyPage(<InvestmentContributionGoalsPage />) },
+      { path: "investimentos/analises", element: lazyPage(<InvestmentAnalyticsPage />) },
+      { path: "carteira", element: lazyPage(<PortfolioPage />) },
+      { path: "ativos", element: lazyPage(<AssetsPage />) },
+      { path: "ativos/:ticker", element: lazyPage(<AssetPage />) },
+      { path: "operacoes", element: lazyPage(<OperationsPage />) },
+      { path: "dividendos", element: lazyPage(<DividendsPage />) },
+      { path: "aportes", element: lazyPage(<ContributionsPage />) },
+      { path: "planejamento-mensal", element: lazyPage(<PlanningOverviewPage />) },
+      { path: "planejamento-mensal/orcamento", element: lazyPage(<PlanningBudgetPage />) },
+      { path: "planejamento-mensal/gastos", element: lazyPage(<PlanningExpensesPage />) },
+      { path: "planejamento-mensal/calendario", element: lazyPage(<PlanningCalendarPage />) },
+      { path: "planejamento-mensal/objetivos", element: lazyPage(<PlanningGoalsPage />) },
+      { path: "planejamento-mensal/analises", element: lazyPage(<PlanningAnalyticsPage />) },
+      { path: "planejamento-mensal/analises/categoria/:categoryId", element: lazyPage(<PlanningCategoryAnalyticsPage />) },
+      { path: "caixinhas", element: lazyPage(<CashBoxesPage />) },
+      { path: "metas", element: lazyPage(<GoalsPage />) },
+      { path: "projecoes", element: lazyPage(<ProjectionsPage />) },
+      { path: "calendario", element: <Navigate to="/historico" replace /> },
+      { path: "historico", element: lazyPage(<HistoryPage />) },
+      { path: "configuracoes", element: lazyPage(<SettingsPage />) },
+      { path: "alocacao", element: lazyPage(<RebalancingPage />) }
     ]
   }
 ]);

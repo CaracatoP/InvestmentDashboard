@@ -4,6 +4,7 @@ import { HttpError } from "../utils/http-error";
 
 export function notFoundHandler(request: Request, response: Response) {
   response.status(404).json({
+    success: false,
     error: {
       message: `Route ${request.method} ${request.originalUrl} not found`
     }
@@ -13,6 +14,7 @@ export function notFoundHandler(request: Request, response: Response) {
 export function errorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction) {
   if (error instanceof ZodError) {
     response.status(422).json({
+      success: false,
       error: {
         message: "Validation error",
         issues: error.flatten()
@@ -23,6 +25,7 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
 
   if (error instanceof HttpError) {
     response.status(error.statusCode).json({
+      success: false,
       error: {
         message: error.message
       }
@@ -32,6 +35,7 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
 
   const message = error instanceof Error ? error.message : "Unexpected server error";
   response.status(500).json({
+    success: false,
     error: {
       message
     }

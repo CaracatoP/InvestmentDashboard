@@ -167,9 +167,10 @@ interface ModalProps {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
   submitLabel?: string;
+  submitDisabled?: boolean;
 }
 
-export function ManagementModal({ title, isOpen, onClose, onSubmit, children, submitLabel = "Salvar" }: ModalProps) {
+export function ManagementModal({ title, isOpen, onClose, onSubmit, children, submitLabel = "Salvar", submitDisabled = false }: ModalProps) {
   if (!isOpen) return null;
 
   return (
@@ -186,7 +187,7 @@ export function ManagementModal({ title, isOpen, onClose, onSubmit, children, su
           <button type="button" onClick={onClose} className="h-11 rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:text-ink">
             Cancelar
           </button>
-          <button type="submit" className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
+          <button type="submit" disabled={submitDisabled} className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
             {submitLabel}
           </button>
         </div>

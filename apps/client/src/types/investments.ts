@@ -38,6 +38,14 @@ export interface Movement {
   description: string;
   amount: number;
   day?: number;
+  eventType?: string;
+  assetTicker?: string;
+  assetCategory?: string;
+  sector?: string;
+  status?: "completed" | "planned" | "cancelled" | string;
+  statusLabel?: string;
+  paymentMethod?: string;
+  source?: string;
 }
 
 export interface AllocationComparison {
@@ -270,4 +278,34 @@ export interface MarketRefreshResponse {
   stale: number;
   failed: number;
   unsupported: number;
+}
+
+export type CdiSource = "bcb" | "fallback";
+
+export interface CdiRateSnapshot {
+  rate: number;
+  dailyRate: number;
+  referenceDate: string;
+  source: CdiSource;
+  updatedAt: string;
+  fallbackReason?: string | null;
+}
+
+export interface CdiStatusResponse extends CdiRateSnapshot {
+  provider: CdiSource;
+  timezone: string;
+  updateHour: number;
+  schedulersEnabled: boolean;
+  fallbackAnnualRate: number;
+  history: CdiRateSnapshot[];
+}
+
+export interface CdiRefreshResponse {
+  rate: CdiRateSnapshot;
+  recalculation: {
+    applied: number;
+    skipped: number;
+    cashBoxCount: number;
+    referenceDate: string;
+  };
 }

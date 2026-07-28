@@ -240,6 +240,26 @@ export async function getLatestCdiRate(): Promise<CdiRateRecord | null> {
   return (await listCdiRates(1))[0] ?? null;
 }
 
+export async function findCdiRateByReferenceDate(referenceDate: string): Promise<CdiRateRecord | null> {
+  if (isDatabaseConnected()) {
+    const rate = await CdiRateModel.findOne({ referenceDate }).lean();
+    return rate ? (withId(rate) as unknown as CdiRateRecord) : null;
+  }
+
+  return localCdiRates.find((rate) => rate.referenceDate === referenceDate) ?? null;
+}
+
+export async function getLatestCdiRateBeforeOrOn(referenceDate: string): Promise<CdiRateRecord | null> {
+  if (isDatabaseConnected()) {
+    const rate = await CdiRateModel.findOne({ referenceDate: { $lte: referenceDate } }).sort({ referenceDate: -1 }).lean();
+    return rate ? (withId(rate) as unknown as CdiRateRecord) : null;
+  }
+
+  return [...localCdiRates]
+    .filter((rate) => rate.referenceDate <= referenceDate)
+    .sort((left, right) => right.referenceDate.localeCompare(left.referenceDate))[0] ?? null;
+}
+
 export async function upsertCdiRate(input: Omit<CdiRateRecord, "id">): Promise<CdiRateRecord> {
   if (isDatabaseConnected()) {
     const rate = await CdiRateModel.findOneAndUpdate({ referenceDate: input.referenceDate }, input, { new: true, upsert: true }).lean();

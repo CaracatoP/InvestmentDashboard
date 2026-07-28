@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Edit2, Landmark, Percent, Plus, Trash2, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { Edit2, Landmark, Percent, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { AreaChart } from "../components/charts/AreaChart";
 import { ChartCard } from "../components/ui/ChartCard";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar } from "../components/ui/Management";
@@ -7,8 +7,9 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
 import { MoneyValue } from "../components/ui/ValueDisplay";
-import { cashBoxRecordsApi } from "../services/api";
+import { cashBoxRecordsApi, fetchCdiStatus, refreshCdiData } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
+import type { CdiStatusResponse } from "../types/investments";
 import type { CashBoxMovementRecord, CashBoxMovementType, CashBoxRecord } from "../types/management";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 
@@ -63,9 +64,14 @@ function getMovementLabel(type: CashBoxMovementType) {
   return labels[type] ?? "Movimentacao";
 }
 
+function cdiSourceLabel(source?: CdiStatusResponse["source"]) {
+  return source === "bcb" ? "Banco Central" : "Fallback";
+}
+
 export function CashBoxesPage() {
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [overview, setOverview] = useState<CashBoxesOverview | null>(null);
+  const [cdiStatus, setCdiStatus] = useState<CdiStatusResponse | null>(null);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("Todos");
   const [editing, setEditing] = useState<CashBoxRecord | null>(null);
@@ -75,13 +81,25 @@ export function CashBoxesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CashBoxRecord | null>(null);
+  const [isRefreshingCdi, setIsRefreshingCdi] = useState(false);
+  const [cdiFeedback, setCdiFeedback] = useState("");
 
   async function loadCashBoxes() {
     setOverview(await cashBoxRecordsApi.overview());
   }
 
+  async function loadCdiOverview() {
+    try {
+      setCdiStatus(await fetchCdiStatus());
+      setCdiFeedback("");
+    } catch (error) {
+      setCdiFeedback(error instanceof Error ? `Falha ao consultar CDI: ${error.message}` : "Falha ao consultar CDI.");
+    }
+  }
+
   useEffect(() => {
     void loadCashBoxes();
+    void loadCdiOverview();
   }, []);
 
   const cashBoxes = overview?.cashBoxes ?? [];
@@ -146,6 +164,25 @@ export function CashBoxesPage() {
     await Promise.all([loadCashBoxes(), loadWorkspace()]);
   }
 
+  async function handleCdiRefresh() {
+    if (isRefreshingCdi) return;
+
+    setIsRefreshingCdi(true);
+    setCdiFeedback("");
+
+    try {
+      const result = await refreshCdiData();
+      await Promise.all([loadCashBoxes(), loadWorkspace(), loadCdiOverview()]);
+      setCdiFeedback(
+        `${cdiSourceLabel(result.rate.source)} em ${new Date(result.rate.updatedAt).toLocaleString("pt-BR")} · ${result.recalculation.applied} rendimentos recalculados`
+      );
+    } catch (error) {
+      setCdiFeedback(error instanceof Error ? `Falha ao atualizar CDI: ${error.message}` : "Falha ao atualizar CDI.");
+    } finally {
+      setIsRefreshingCdi(false);
+    }
+  }
+
   if (!overview) {
     return <div className="rounded-lg border border-line bg-panel p-6 text-sm text-muted">Carregando caixinhas...</div>;
   }
@@ -160,6 +197,59 @@ export function CashBoxesPage() {
         <StatCard label="Total resgatado" value={formatCurrency(overview.totals.withdrawn)} detail="Resgates registrados" icon={<TrendingDown size={18} />} tone="rose" />
         <StatCard label="Rentabilidade" value={formatPercentage(overview.totals.profitability)} detail={formatCurrency(overview.totals.yield)} icon={<Percent size={18} />} tone="amber" />
         <StatCard label="Caixinhas" value={String(cashBoxes.length)} detail="Reservas ativas" icon={<Landmark size={18} />} tone="violet" />
+      </section>
+
+      <section className="mt-4">
+        <article className="rounded-lg border border-line bg-panel p-4 shadow-soft sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm text-muted">CDI oficial da reserva</p>
+              <h2 className="mt-2 text-2xl font-semibold text-ink">{cdiStatus ? formatPercentage(cdiStatus.rate) : "Carregando..."}</h2>
+              <p className="mt-2 text-sm text-muted">
+                Fonte atual:{" "}
+                <span className={cdiStatus?.source === "fallback" ? "text-amber" : "text-accent"}>
+                  {cdiSourceLabel(cdiStatus?.source)}
+                </span>
+                {cdiStatus ? ` · referencia ${new Date(`${cdiStatus.referenceDate}T12:00:00Z`).toLocaleDateString("pt-BR")}` : ""}
+              </p>
+              {cdiStatus?.fallbackReason ? <p className="mt-2 text-xs text-amber">Motivo do fallback: {cdiStatus.fallbackReason}</p> : null}
+              {cdiFeedback ? <p className="mt-2 text-xs text-muted">{cdiFeedback}</p> : null}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void handleCdiRefresh()}
+              disabled={isRefreshingCdi}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-ink transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={isRefreshingCdi ? "animate-spin" : ""} />
+              {isRefreshingCdi ? "Atualizando CDI" : "Atualizar CDI"}
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="rounded-lg bg-elevated px-3 py-3">
+              <p className="text-xs text-muted">Taxa anual</p>
+              <p className="mt-1 font-medium text-ink">{cdiStatus ? formatPercentage(cdiStatus.rate) : "Indisponivel"}</p>
+            </div>
+            <div className="rounded-lg bg-elevated px-3 py-3">
+              <p className="text-xs text-muted">Referencia</p>
+              <p className="mt-1 font-medium text-ink">
+                {cdiStatus ? new Date(`${cdiStatus.referenceDate}T12:00:00Z`).toLocaleDateString("pt-BR") : "Indisponivel"}
+              </p>
+            </div>
+            <div className="rounded-lg bg-elevated px-3 py-3">
+              <p className="text-xs text-muted">Ultima atualizacao</p>
+              <p className="mt-1 font-medium text-ink">{cdiStatus ? new Date(cdiStatus.updatedAt).toLocaleString("pt-BR") : "Indisponivel"}</p>
+            </div>
+            <div className="rounded-lg bg-elevated px-3 py-3">
+              <p className="text-xs text-muted">Scheduler</p>
+              <p className="mt-1 font-medium text-ink">
+                {cdiStatus ? `${cdiStatus.schedulersEnabled ? "Ativo" : "Desligado"} · ${String(cdiStatus.updateHour).padStart(2, "0")}h` : "Indisponivel"}
+              </p>
+            </div>
+          </div>
+        </article>
       </section>
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">

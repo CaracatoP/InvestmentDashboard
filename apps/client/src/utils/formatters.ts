@@ -21,6 +21,29 @@ export function formatCurrency(value: number) {
   return currencyFormatter.format(value);
 }
 
+export function formatCents(valueInCents: number) {
+  return formatCurrency(valueInCents / 100);
+}
+
+export function parseBrazilianMoneyToCents(value: string) {
+  const normalized = value.trim().replace(/[^\d,.-]/g, "");
+  if (!normalized || normalized.startsWith("-")) return null;
+
+  const commaIndex = normalized.lastIndexOf(",");
+  const integerInput = commaIndex >= 0 ? normalized.slice(0, commaIndex) : normalized;
+  const decimalInput = commaIndex >= 0 ? normalized.slice(commaIndex + 1) : "";
+  const integerPart = integerInput.replace(/\./g, "");
+  const decimalPart = decimalInput.replace(/\./g, "");
+
+  if (!/^\d*$/.test(integerPart) || !/^\d{0,2}$/.test(decimalPart)) return null;
+
+  const reais = integerPart ? Number(integerPart) : 0;
+  const cents = decimalPart ? Number(decimalPart.padEnd(2, "0")) : 0;
+  const amountInCents = reais * 100 + cents;
+
+  return Number.isSafeInteger(amountInCents) ? amountInCents : null;
+}
+
 export function formatCompactCurrency(value: number) {
   return compactCurrencyFormatter.format(value);
 }
@@ -33,7 +56,8 @@ export function formatDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "2-digit",
-    year: "numeric"
+    year: "numeric",
+    timeZone: "UTC"
   }).format(new Date(value));
 }
 

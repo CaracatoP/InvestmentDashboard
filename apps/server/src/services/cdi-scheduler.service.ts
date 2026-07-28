@@ -1,9 +1,17 @@
 import { env } from "../config/env";
-import { recalculateCashBoxYields, refreshCdiRate } from "./cdi.service";
+import { getLatestCdiRate } from "../repositories/investment.repository";
+import { refreshCdiAndRecalculate, toReferenceDate } from "./cdi.service";
 
 const schedulerState = globalThis as typeof globalThis & {
   __investmentDashboardCdiSchedulerStarted?: boolean;
+  __investmentDashboardCdiSchedulerTimer?: ReturnType<typeof setInterval>;
 };
+
+function logCdiScheduler(level: "info" | "warn", message: string, meta: Record<string, unknown> = {}) {
+  const payload = Object.fromEntries(Object.entries(meta).filter(([, value]) => value !== undefined));
+  const suffix = Object.keys(payload).length > 0 ? ` ${JSON.stringify(payload)}` : "";
+  console[level](`[CDI] ${message}${suffix}`);
+}
 
 function getCdiParts(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -16,8 +24,8 @@ function getCdiParts(date: Date) {
 
   return {
     weekday: parts.find((part) => part.type === "weekday")?.value ?? "",
-    hour: parts.find((part) => part.type === "hour")?.value ?? "00",
-    minute: parts.find((part) => part.type === "minute")?.value ?? "00"
+    hour: Number(parts.find((part) => part.type === "hour")?.value ?? "0"),
+    minute: Number(parts.find((part) => part.type === "minute")?.value ?? "0")
   };
 }
 
@@ -25,38 +33,92 @@ function isWeekday(weekday: string) {
   return !["Sat", "Sun"].includes(weekday);
 }
 
-function shouldRunCdiRefresh(date: Date) {
+export function shouldRunCdiRefresh(date: Date) {
   const parts = getCdiParts(date);
-  return isWeekday(parts.weekday) && `${parts.hour}:${parts.minute}` === env.cdiUpdateHour;
+  return isWeekday(parts.weekday) && parts.hour === env.cdiUpdateHour && parts.minute === 0;
 }
 
-export function startCdiScheduler() {
-  if (schedulerState.__investmentDashboardCdiSchedulerStarted) return;
+export function shouldRunStartupCdiRefresh(date: Date, latestReferenceDate?: string | null) {
+  if (!latestReferenceDate) return true;
+
+  const parts = getCdiParts(date);
+  if (!isWeekday(parts.weekday)) return false;
+
+  return parts.hour >= env.cdiUpdateHour && latestReferenceDate < toReferenceDate(date);
+}
+
+async function runScheduledRefresh(trigger: "startup" | "interval") {
+  try {
+    const result = await refreshCdiAndRecalculate();
+    logCdiScheduler("info", "Atualizacao e recalculo concluidos", {
+      trigger,
+      source: result.rate.source,
+      referenceDate: result.rate.referenceDate,
+      applied: result.recalculation.applied,
+      skipped: result.recalculation.skipped
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown CDI scheduler error";
+    logCdiScheduler("warn", "Scheduler falhou", {
+      trigger,
+      reason: message
+    });
+  }
+}
+
+export function resetCdiSchedulerStateForTests() {
+  if (schedulerState.__investmentDashboardCdiSchedulerTimer) {
+    clearInterval(schedulerState.__investmentDashboardCdiSchedulerTimer);
+  }
+
+  schedulerState.__investmentDashboardCdiSchedulerStarted = false;
+  schedulerState.__investmentDashboardCdiSchedulerTimer = undefined;
+}
+
+export function startCdiScheduler(options: { skipInitialRefresh?: boolean } = {}) {
+  if (!env.enableSchedulers) {
+    logCdiScheduler("info", "Scheduler desativado por configuracao");
+    return { started: false, reason: "disabled" as const };
+  }
+
+  if (schedulerState.__investmentDashboardCdiSchedulerStarted) {
+    return { started: false, reason: "already-started" as const };
+  }
+
   schedulerState.__investmentDashboardCdiSchedulerStarted = true;
-
   let lastRunKey = "";
-  let isRunning = false;
 
-  setInterval(() => {
-    const now = new Date();
-    const parts = getCdiParts(now);
-    const runKey = `${parts.weekday}-${parts.hour}:${parts.minute}`;
+  if (!options.skipInitialRefresh) {
+    void getLatestCdiRate()
+      .then((latest) => {
+        const now = new Date();
+        if (!shouldRunStartupCdiRefresh(now, latest?.referenceDate ?? null)) return;
 
-    if (!shouldRunCdiRefresh(now) || lastRunKey === runKey || isRunning) return;
+        const parts = getCdiParts(now);
+        if (shouldRunCdiRefresh(now)) {
+          lastRunKey = `${parts.weekday}-${parts.hour}:${String(parts.minute).padStart(2, "0")}`;
+        }
 
-    lastRunKey = runKey;
-    isRunning = true;
-    void refreshCdiRate()
-      .then(() => recalculateCashBoxYields())
-      .then((result) => {
-        console.info(`CDI cashbox yield finished: ${result.applied} applied, ${result.skipped} skipped.`);
+        void runScheduledRefresh("startup");
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : "Unknown CDI scheduler error";
-        console.warn(`CDI scheduler failed: ${message}`);
-      })
-      .finally(() => {
-        isRunning = false;
+        const message = error instanceof Error ? error.message : "Unknown startup refresh error";
+        logCdiScheduler("warn", "Falha ao decidir refresh inicial", { reason: message });
       });
-  }, 60_000).unref();
+  }
+
+  schedulerState.__investmentDashboardCdiSchedulerTimer = setInterval(() => {
+    const now = new Date();
+    const parts = getCdiParts(now);
+    const runKey = `${parts.weekday}-${parts.hour}:${String(parts.minute).padStart(2, "0")}`;
+
+    if (!shouldRunCdiRefresh(now) || lastRunKey === runKey) return;
+
+    lastRunKey = runKey;
+    void runScheduledRefresh("interval");
+  }, 60_000);
+
+  schedulerState.__investmentDashboardCdiSchedulerTimer.unref();
+
+  return { started: true as const };
 }

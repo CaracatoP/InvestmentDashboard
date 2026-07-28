@@ -3,84 +3,263 @@ import {
   createCashBoxYield,
   findCashBoxById,
   findCashBoxYield,
+  findCdiRateByReferenceDate,
   getLatestCdiRate,
+  getLatestCdiRateBeforeOrOn,
   listCashBoxes,
   listCdiRates,
   upsertCdiRate,
   updateCashBox
 } from "../repositories/investment.repository";
-import type { CashBoxMovementRecord, CashBoxRecord, CdiRateRecord } from "../types/investment";
+import type { CashBoxMovementRecord, CashBoxRecord, CdiRateRecord, CdiRateSnapshot, CdiSource } from "../types/investment";
 import { badRequest } from "../utils/http-error";
 import { calculateCashBoxTotals, isCashBoxYield, toCashBoxContributionType } from "./cash-box.service";
 
+const BCB_CDI_SERIES_CODE = 12;
+const CDI_REQUEST_TIMEOUT_MS = 12_000;
+const CDI_LOOKBACK_DAYS = 31;
+const CDI_BUSINESS_DAYS_PER_YEAR = 252;
+const CDI_BUSINESS_DAYS_PER_MONTH = 21;
+
 interface CdiProviderResult {
   annualCdiRate: number;
-  dailyCdiRate?: number;
+  dailyCdiRate: number;
   referenceDate: string;
-  source: string;
+  source: CdiSource;
+  fallbackReason?: string | null;
+  fetchedAt: Date;
 }
 
 interface CdiRateProvider {
-  name: string;
+  name: CdiSource;
   fetchRate(referenceDate: Date): Promise<CdiProviderResult>;
 }
 
+interface BcbSeriesItem {
+  data?: unknown;
+  valor?: unknown;
+}
+
+export interface CdiYieldRecalculationResult {
+  applied: number;
+  skipped: number;
+  cashBoxCount: number;
+  referenceDate: string;
+  yields: unknown[];
+}
+
+export interface CdiRefreshResult {
+  rate: CdiRateSnapshot;
+  recalculation: CdiYieldRecalculationResult;
+}
+
+const refreshPromises = new Map<string, Promise<CdiRateRecord>>();
+let refreshAndRecalculatePromise: Promise<CdiRefreshResult> | null = null;
+
+function serializeLogValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+function logCdi(level: "info" | "warn", message: string, meta: Record<string, unknown> = {}) {
+  const payload = Object.fromEntries(Object.entries(meta).filter(([, value]) => value !== undefined).map(([key, value]) => [key, serializeLogValue(value)]));
+  const suffix = Object.keys(payload).length > 0 ? ` ${JSON.stringify(payload)}` : "";
+  console[level](`[CDI] ${message}${suffix}`);
+}
+
+function normalizeCdiSource(source: string | null | undefined): CdiSource {
+  const normalized = String(source ?? "").toLowerCase();
+  if (normalized === "bcb") return "bcb";
+  return "fallback";
+}
+
+function fallbackReasonFromRecord(record: CdiRateRecord | null | undefined) {
+  if (!record) return null;
+  if (typeof record.fallbackReason === "string" && record.fallbackReason.trim() !== "") return record.fallbackReason;
+  const source = String(record.source ?? "");
+  return source.startsWith("fallback:") ? source.slice("fallback:".length) : null;
+}
+
+function toSnapshot(record: CdiRateRecord): CdiRateSnapshot {
+  return {
+    rate: record.annualCdiRate,
+    dailyRate: record.dailyCdiRate,
+    referenceDate: record.referenceDate,
+    source: normalizeCdiSource(record.source),
+    updatedAt: record.fetchedAt,
+    fallbackReason: fallbackReasonFromRecord(record)
+  };
+}
+
+function validateNonNegativeNumber(value: number, message: string) {
+  if (!Number.isFinite(value) || value < 0) throw badRequest(message);
+}
+
+export function percentToDecimal(percent: number) {
+  validateNonNegativeNumber(percent, "Rate percent must be non-negative");
+  return percent / 100;
+}
+
+export function decimalToPercent(decimal: number) {
+  validateNonNegativeNumber(decimal, "Rate decimal must be non-negative");
+  return decimal * 100;
+}
+
+export function equivalentRate(rateDecimal: number, periods: number) {
+  validateNonNegativeNumber(rateDecimal, "Rate decimal must be non-negative");
+  if (!Number.isInteger(periods) || periods <= 0) throw badRequest("Periods must be a positive integer");
+  return Math.pow(1 + rateDecimal, periods) - 1;
+}
+
+// BCB series 12 returns the CDI as a daily percentage rate (% p.d.); this helper
+// centralizes every conversion the app may need from that single source of truth.
+export function convertBcbDailyPercentToRates(dailyRatePercent: number) {
+  validateNonNegativeNumber(dailyRatePercent, "Daily CDI percent must be non-negative");
+
+  const dailyRate = percentToDecimal(dailyRatePercent);
+  const monthlyRate = equivalentRate(dailyRate, CDI_BUSINESS_DAYS_PER_MONTH);
+  const annualRate = equivalentRate(dailyRate, CDI_BUSINESS_DAYS_PER_YEAR);
+
+  return {
+    dailyRatePercent,
+    dailyRate,
+    monthlyRate,
+    monthlyRatePercent: decimalToPercent(monthlyRate),
+    annualRate,
+    annualRatePercent: decimalToPercent(annualRate)
+  };
+}
+
+export function annualRateToDailyRate(annualRatePercent: number, businessDays = CDI_BUSINESS_DAYS_PER_YEAR) {
+  validateNonNegativeNumber(annualRatePercent, "Annual CDI rate must be non-negative");
+  if (!Number.isInteger(businessDays) || businessDays <= 0) throw badRequest("Business days must be a positive integer");
+  return Math.pow(1 + percentToDecimal(annualRatePercent), 1 / businessDays) - 1;
+}
+
 class FallbackCdiProvider implements CdiRateProvider {
-  name = "fallback";
+  name: CdiSource = "fallback";
+
+  constructor(private readonly reason: string | null = null) {}
 
   async fetchRate(referenceDate: Date): Promise<CdiProviderResult> {
+    const annualCdiRate = env.cdiRateFallback;
+    const clampedReferenceDate = clampReferenceDate(toReferenceDate(referenceDate));
+
+    validateNonNegativeNumber(annualCdiRate, "Fallback annual CDI rate must be non-negative");
+
     return {
-      annualCdiRate: env.cdiRateFallback,
-      referenceDate: toReferenceDate(referenceDate),
-      source: this.name
+      annualCdiRate,
+      dailyCdiRate: annualRateToDailyRate(annualCdiRate),
+      referenceDate: clampedReferenceDate,
+      source: this.name,
+      fallbackReason: this.reason,
+      fetchedAt: new Date()
     };
   }
 }
 
 class BcbCdiProvider implements CdiRateProvider {
-  name = "bcb";
+  name: CdiSource = "bcb";
 
   async fetchRate(referenceDate: Date): Promise<CdiProviderResult> {
+    const requestedReferenceDate = clampReferenceDate(toReferenceDate(referenceDate));
+    const startReferenceDate = addDays(requestedReferenceDate, -CDI_LOOKBACK_DAYS);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
+    const timeout = setTimeout(() => controller.abort(), CDI_REQUEST_TIMEOUT_MS);
+    const startedAt = Date.now();
+    const url = new URL(`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${BCB_CDI_SERIES_CODE}/dados`);
+
+    url.searchParams.set("formato", "json");
+    url.searchParams.set("dataInicial", referenceDateToBrazilianDate(startReferenceDate));
+    url.searchParams.set("dataFinal", referenceDateToBrazilianDate(requestedReferenceDate));
+
+    logCdi("info", "Buscando taxa no Banco Central", {
+      source: this.name,
+      series: BCB_CDI_SERIES_CODE,
+      requestedReferenceDate
+    });
 
     try {
-      const response = await fetch("https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados/ultimos/1?formato=json", {
-        signal: controller.signal
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const responseText = await response.text();
+      let payload: unknown;
+
+      try {
+        payload = JSON.parse(responseText);
+      } catch {
+        throw new Error("Invalid JSON payload");
+      }
+
+      if (!Array.isArray(payload)) throw new Error("Unexpected BCB payload");
+
+      const latest = pickLatestValidBcbEntry(payload as BcbSeriesItem[], requestedReferenceDate);
+      if (!latest) throw new Error("BCB returned no valid CDI values");
+
+      const converted = convertBcbDailyPercentToRates(latest.dailyRatePercent);
+
+      logCdi("info", "Taxa obtida com sucesso", {
+        source: this.name,
+        referenceDate: latest.referenceDate,
+        durationMs: Date.now() - startedAt
       });
 
-      if (!response.ok) throw new Error(`CDI provider failed with status ${response.status}`);
-
-      const payload = (await response.json()) as Array<{ data?: string; valor?: string }>;
-      const item = payload[0];
-      const dailyPercent = Number(String(item?.valor ?? "").replace(",", "."));
-
-      if (!Number.isFinite(dailyPercent) || dailyPercent < 0) throw new Error("CDI provider returned an invalid rate");
-
-      const dailyCdiRate = dailyPercent / 100;
-      const annualCdiRate = (Math.pow(1 + dailyCdiRate, 252) - 1) * 100;
-
       return {
-        annualCdiRate,
-        dailyCdiRate,
-        referenceDate: item?.data ? brazilianDateToReferenceDate(item.data) : toReferenceDate(referenceDate),
-        source: this.name
+        annualCdiRate: converted.annualRatePercent,
+        dailyCdiRate: converted.dailyRate,
+        referenceDate: latest.referenceDate,
+        source: this.name,
+        fetchedAt: new Date()
       };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("Request timeout");
+      }
+
+      const message = error instanceof Error ? error.message : "Unknown BCB provider error";
+      throw new Error(message);
     } finally {
       clearTimeout(timeout);
     }
   }
 }
 
-function getProvider(): CdiRateProvider {
-  if (env.cdiProvider.toLowerCase() === "bcb") return new BcbCdiProvider();
-  return new FallbackCdiProvider();
+function getProvider() {
+  if (env.cdiProvider === "fallback") return new FallbackCdiProvider("Configured provider");
+  return new BcbCdiProvider();
+}
+
+function parseBcbRatePercent(value: unknown) {
+  const normalized = String(value ?? "").trim().replace(",", ".");
+  if (normalized === "") return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function brazilianDateToReferenceDate(value: string) {
-  const [day, month, year] = value.split("/");
-  if (!day || !month || !year) return toReferenceDate(new Date());
-  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const match = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+
+  const [, day, month, year] = match;
+  return `${year}-${month}-${day}`;
+}
+
+function pickLatestValidBcbEntry(entries: BcbSeriesItem[], maxReferenceDate: string) {
+  for (const entry of [...entries].reverse()) {
+    const referenceDate = typeof entry.data === "string" ? brazilianDateToReferenceDate(entry.data) : null;
+    if (!referenceDate || referenceDate > maxReferenceDate) continue;
+
+    const dailyRatePercent = parseBcbRatePercent(entry.valor);
+    if (dailyRatePercent === null || dailyRatePercent < 0) continue;
+
+    return {
+      referenceDate,
+      dailyRatePercent
+    };
+  }
+
+  return null;
 }
 
 function getTimeZoneParts(date: Date, timeZone = env.cdiTimezone) {
@@ -112,8 +291,18 @@ export function toReferenceDate(date: string | Date, timeZone = env.cdiTimezone)
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function clampReferenceDate(referenceDate: string) {
+  const today = toReferenceDate(new Date());
+  return referenceDate > today ? today : referenceDate;
+}
+
 function referenceDateToUtcDate(referenceDate: string) {
   return new Date(`${referenceDate}T12:00:00.000Z`);
+}
+
+function referenceDateToBrazilianDate(referenceDate: string) {
+  const [year, month, day] = referenceDate.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function addDays(referenceDate: string, days: number) {
@@ -140,11 +329,6 @@ export function getBusinessDatesBetween(from: string | Date, to: string | Date) 
   }
 
   return dates;
-}
-
-export function annualRateToDailyRate(annualRatePercent: number, businessDays = 252) {
-  if (!Number.isFinite(annualRatePercent) || annualRatePercent < 0) throw badRequest("Annual CDI rate must be non-negative");
-  return Math.pow(1 + annualRatePercent / 100, 1 / businessDays) - 1;
 }
 
 export function calculateDailyCashBoxYield(balance: number, annualRatePercent: number, cdiPercentage: number) {
@@ -179,31 +363,106 @@ function nonYieldMovementsOnDate(cashBox: CashBoxRecord, referenceDate: string) 
     .reduce((total, movement) => total + nonYieldMovementDelta(movement), 0);
 }
 
-export async function refreshCdiRate(referenceDate = new Date()): Promise<CdiRateRecord> {
+async function persistCdiRate(input: CdiProviderResult) {
+  const existingForDate = await findCdiRateByReferenceDate(input.referenceDate);
+
+  if (input.source === "fallback" && existingForDate && normalizeCdiSource(existingForDate.source) === "bcb") {
+    logCdi("warn", "Mantendo taxa valida do Banco Central ja armazenada", {
+      referenceDate: input.referenceDate,
+      fallbackReason: input.fallbackReason ?? null
+    });
+    return existingForDate;
+  }
+
+  return upsertCdiRate({
+    annualCdiRate: input.annualCdiRate,
+    dailyCdiRate: input.dailyCdiRate,
+    referenceDate: input.referenceDate,
+    source: input.source,
+    fallbackReason: input.fallbackReason ?? null,
+    fetchedAt: input.fetchedAt
+  });
+}
+
+async function performRefreshCdiRate(referenceDate = new Date()) {
+  const requestedReferenceDate = clampReferenceDate(toReferenceDate(referenceDate));
   const provider = getProvider();
 
-  try {
-    const fetched = await provider.fetchRate(referenceDate);
-    const dailyCdiRate = fetched.dailyCdiRate ?? annualRateToDailyRate(fetched.annualCdiRate);
-
-    return upsertCdiRate({
-      annualCdiRate: fetched.annualCdiRate,
-      dailyCdiRate,
-      referenceDate: fetched.referenceDate,
-      source: fetched.source,
-      fetchedAt: new Date()
+  if (provider.name === "fallback") {
+    logCdi("info", "Provider configurado explicitamente como fallback", {
+      source: provider.name,
+      requestedReferenceDate
     });
-  } catch (error) {
-    const dailyCdiRate = annualRateToDailyRate(env.cdiRateFallback);
 
-    return upsertCdiRate({
-      annualCdiRate: env.cdiRateFallback,
-      dailyCdiRate,
-      referenceDate: toReferenceDate(referenceDate),
-      source: `fallback:${error instanceof Error ? error.message : "provider-error"}`,
-      fetchedAt: new Date()
-    });
+    const fallbackRate = await provider.fetchRate(referenceDate);
+    return persistCdiRate(fallbackRate);
   }
+
+  const startedAt = Date.now();
+
+  try {
+    const rate = await provider.fetchRate(referenceDate);
+    const persisted = await persistCdiRate(rate);
+
+    logCdi("info", "Atualizacao concluida", {
+      source: normalizeCdiSource(persisted.source),
+      referenceDate: persisted.referenceDate,
+      durationMs: Date.now() - startedAt
+    });
+
+    return persisted;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown provider error";
+    const durationMs = Date.now() - startedAt;
+    const latestStoredBcbRate = await getLatestCdiRateBeforeOrOn(requestedReferenceDate);
+
+    if (latestStoredBcbRate && normalizeCdiSource(latestStoredBcbRate.source) === "bcb") {
+      logCdi("warn", "API do BCB indisponivel, reutilizando ultima taxa valida armazenada", {
+        source: "bcb",
+        requestedReferenceDate,
+        referenceDate: latestStoredBcbRate.referenceDate,
+        durationMs,
+        reason
+      });
+      return latestStoredBcbRate;
+    }
+
+    logCdi("warn", "API do BCB indisponivel, utilizando fallback", {
+      source: "fallback",
+      requestedReferenceDate,
+      durationMs,
+      reason
+    });
+
+    const fallbackRate = await new FallbackCdiProvider(reason).fetchRate(referenceDate);
+    const persisted = await persistCdiRate(fallbackRate);
+
+    logCdi("info", "Atualizacao concluida", {
+      source: normalizeCdiSource(persisted.source),
+      referenceDate: persisted.referenceDate,
+      durationMs
+    });
+
+    return persisted;
+  }
+}
+
+export async function refreshCdiRate(referenceDate = new Date()): Promise<CdiRateRecord> {
+  const requestKey = clampReferenceDate(toReferenceDate(referenceDate));
+  const inFlight = refreshPromises.get(requestKey);
+  if (inFlight) {
+    logCdi("info", "Atualizacao ja em andamento, aguardando a execucao atual", {
+      referenceDate: requestKey
+    });
+    return inFlight;
+  }
+
+  const promise = performRefreshCdiRate(referenceDate).finally(() => {
+    refreshPromises.delete(requestKey);
+  });
+
+  refreshPromises.set(requestKey, promise);
+  return promise;
 }
 
 async function getRateForCalculation(referenceDate: string, annualRateOverride?: number) {
@@ -217,13 +476,13 @@ async function getRateForCalculation(referenceDate: string, annualRateOverride?:
     };
   }
 
-  const latest = await getLatestCdiRate();
+  const latest = await getLatestCdiRateBeforeOrOn(referenceDate);
   if (latest) return latest;
   return refreshCdiRate(referenceDateToUtcDate(referenceDate));
 }
 
-export async function recalculateCashBoxYields(input: { from?: string; to?: string; cashBoxId?: string } = {}) {
-  const to = toReferenceDate(input.to ?? new Date());
+export async function recalculateCashBoxYields(input: { from?: string; to?: string; cashBoxId?: string } = {}): Promise<CdiYieldRecalculationResult> {
+  const to = clampReferenceDate(toReferenceDate(input.to ?? new Date()));
   const cashBoxes = input.cashBoxId ? [await findCashBoxById(input.cashBoxId)] : await listCashBoxes();
   const activeCashBoxes = cashBoxes.filter((cashBox): cashBox is NonNullable<typeof cashBox> => Boolean(cashBox?.active));
   let applied = 0;
@@ -248,6 +507,11 @@ export async function recalculateCashBoxYields(input: { from?: string; to?: stri
       }
 
       const rate = await getRateForCalculation(referenceDate, cashBox.annualRateOverride);
+      if (rate.source !== "cashbox-override" && rate.referenceDate !== referenceDate) {
+        skipped += 1;
+        continue;
+      }
+
       workingBalance = Math.max(workingBalance + nonYieldMovementsOnDate(cashBox, referenceDate), 0);
       const yieldValue = calculateDailyCashBoxYield(workingBalance, rate.annualCdiRate, cashBox.cdiPercentage);
       const closingBalance = workingBalance + yieldValue;
@@ -268,6 +532,7 @@ export async function recalculateCashBoxYields(input: { from?: string; to?: stri
       const hasMovement = workingMovements.some(
         (movement) => isCashBoxYield(toCashBoxContributionType(movement.type)) && toReferenceDate(movement.date) === referenceDate
       );
+
       workingMovements = hasMovement
         ? workingMovements
         : [
@@ -279,6 +544,7 @@ export async function recalculateCashBoxYields(input: { from?: string; to?: stri
               description: `Rendimento CDI ${cashBox.cdiPercentage}%`
             }
           ];
+
       workingTotalYield += yieldValue;
 
       await updateCashBox(cashBox.id, {
@@ -295,6 +561,13 @@ export async function recalculateCashBoxYields(input: { from?: string; to?: stri
     }
   }
 
+  logCdi("info", "Recalculo de rendimentos concluido", {
+    referenceDate: to,
+    cashBoxCount: activeCashBoxes.length,
+    applied,
+    skipped
+  });
+
   return {
     applied,
     skipped,
@@ -304,16 +577,38 @@ export async function recalculateCashBoxYields(input: { from?: string; to?: stri
   };
 }
 
+export async function refreshCdiAndRecalculate(referenceDate = new Date()): Promise<CdiRefreshResult> {
+  if (refreshAndRecalculatePromise) {
+    logCdi("info", "Atualizacao de CDI e recalc em andamento, reutilizando a mesma execucao");
+    return refreshAndRecalculatePromise;
+  }
+
+  refreshAndRecalculatePromise = (async () => {
+    const rate = await refreshCdiRate(referenceDate);
+    const recalculation = await recalculateCashBoxYields();
+
+    return {
+      rate: toSnapshot(rate),
+      recalculation
+    };
+  })().finally(() => {
+    refreshAndRecalculatePromise = null;
+  });
+
+  return refreshAndRecalculatePromise;
+}
+
 export async function getCdiStatus() {
-  const latest = await getLatestCdiRate();
+  const latest = (await getLatestCdiRate()) ?? (await refreshCdiRate());
   const history = await listCdiRates(30);
 
   return {
-    provider: env.cdiProvider,
+    ...toSnapshot(latest),
+    provider: env.cdiProvider === "fallback" ? "fallback" : "bcb",
     timezone: env.cdiTimezone,
     updateHour: env.cdiUpdateHour,
+    schedulersEnabled: env.enableSchedulers,
     fallbackAnnualRate: env.cdiRateFallback,
-    latest,
-    history
+    history: history.map(toSnapshot)
   };
 }

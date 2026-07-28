@@ -35,7 +35,7 @@ MARKET_REFRESH_HOURS=10:00,12:00,14:00,17:00
 CDI_PROVIDER=bcb
 CDI_RATE_FALLBACK=
 CDI_TIMEZONE=America/Sao_Paulo
-CDI_UPDATE_HOUR=18:00
+CDI_UPDATE_HOUR=8
 ENABLE_SCHEDULERS=true
 ```
 
@@ -70,10 +70,20 @@ Do not put `MONGODB_URI`, `MARKET_DATA_API_KEY`, passwords, or tokens in the fro
 - `GET /api/history`
 - `GET /api/settings`
 - `PUT /api/settings/allocations`
+- `GET /api/cdi/status`
+- `POST /api/cdi/refresh`
 
 ## Market Data And Schedulers
 
-Market data, CDI, and cashbox yield jobs run only in the backend. If no provider/API key is configured, quotes are marked as unavailable and the app keeps the last valid quote instead of inventing prices.
+Market data, CDI, and cashbox yield jobs run only in the backend. The frontend never calls Banco Central directly. If no market provider/API key is configured, quotes are marked as unavailable and the app keeps the last valid quote instead of inventing prices.
+
+CDI uses Banco Central do Brasil SGS series `12` (`Taxa de juros - CDI`, `% p.d.`) as the primary source through the public endpoint `https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados`. The backend converts this daily percentage into:
+
+- daily decimal rate used in calculations
+- monthly equivalent rate when needed
+- annual equivalent rate on a 252-business-day basis
+
+If Banco Central is temporarily unavailable, the backend first reuses the last valid BCB rate already stored for the requested reference date range. Only when no valid stored rate is available does it fall back to `CDI_RATE_FALLBACK`. You can still force offline mode with `CDI_PROVIDER=fallback`.
 
 Schedulers run Monday to Friday using `America/Sao_Paulo`:
 
@@ -103,7 +113,7 @@ Required variables:
 - `CDI_PROVIDER=bcb`
 - `CDI_RATE_FALLBACK` optional fallback
 - `CDI_TIMEZONE=America/Sao_Paulo`
-- `CDI_UPDATE_HOUR=18:00`
+- `CDI_UPDATE_HOUR=8`
 - `ENABLE_SCHEDULERS=true`
 
 The backend uses `process.env.PORT` and listens on `0.0.0.0`, so do not configure a fixed production port.
@@ -186,3 +196,28 @@ The backend accepts:
 - Each origin in `FRONTEND_URLS`
 
 Unknown origins are rejected. The backend does not use `origin: "*"` with credentials.
+
+## Validacao Da Integracao Do CDI
+
+Use these checks after configuring the backend:
+
+```bash
+curl http://localhost:4000/api/cdi/status
+curl -X POST http://localhost:4000/api/cdi/refresh
+```
+
+Expected fields in the response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "rate": 14.9,
+    "referenceDate": "2026-07-24",
+    "source": "bcb",
+    "updatedAt": "2026-07-28T11:00:00.000Z"
+  }
+}
+```
+
+The values above are only an example of shape. The real `referenceDate` depends on the most recent value published by Banco Central on or before Tuesday, July 28, 2026.

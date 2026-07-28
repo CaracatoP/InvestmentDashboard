@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import {
-  fetchCalendarEvents,
   fetchContributions,
   fetchDashboard,
   fetchDividends,
@@ -25,7 +24,6 @@ interface InvestmentStore {
   dividends: DividendsResponse | null;
   contributions: ContributionsResponse | null;
   goals: Goal[];
-  calendar: Movement[];
   history: Movement[];
   settings: SettingsResponse | null;
   isLoading: boolean;
@@ -39,7 +37,6 @@ export const useInvestmentStore = create<InvestmentStore>((set) => ({
   dividends: null,
   contributions: null,
   goals: [],
-  calendar: [],
   history: [],
   settings: null,
   isLoading: false,
@@ -48,13 +45,12 @@ export const useInvestmentStore = create<InvestmentStore>((set) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const [dashboard, portfolio, dividends, contributions, goals, calendar, history, settings] = await Promise.all([
+      const [dashboard, portfolio, dividends, contributions, goals, history, settings] = await Promise.all([
         fetchDashboard(),
         fetchPortfolio(),
         fetchDividends(),
         fetchContributions(),
         fetchGoals(),
-        fetchCalendarEvents(),
         fetchHistory(),
         fetchSettings()
       ]);
@@ -65,7 +61,6 @@ export const useInvestmentStore = create<InvestmentStore>((set) => ({
         dividends,
         contributions,
         goals,
-        calendar,
         history,
         settings,
         isLoading: false

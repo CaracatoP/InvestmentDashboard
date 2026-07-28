@@ -4,6 +4,8 @@ import { invalidateWorkspaceCache } from "./cache-invalidation";
 import type {
   AssetDetails,
   AssetPriceHistoryResponse,
+  CdiRefreshResponse,
+  CdiStatusResponse,
   ContributionsResponse,
   DashboardResponse,
   DividendsResponse,
@@ -15,7 +17,18 @@ import type {
   ProjectionResponse,
   SettingsResponse
 } from "../types/investments";
-import type { AssetRecord, CashBoxMovementRecord, CashBoxRecord, ContributionRecord, DividendRecord, GoalRecord, OperationRecord } from "../types/management";
+import type {
+  AssetRecord,
+  CashBoxMovementRecord,
+  CashBoxRecord,
+  ContributionRecord,
+  DividendRecord,
+  GoalRecord,
+  MonthlyExpenseRecord,
+  MonthlyPlanningOverview,
+  MonthlyPlanRecord,
+  OperationRecord
+} from "../types/management";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -100,11 +113,6 @@ export async function calculateProjection(input: ProjectionInput) {
   return unwrapData(data);
 }
 
-export async function fetchCalendarEvents() {
-  const { data } = await api.get<ApiEnvelope<Movement[]>>("/calendar");
-  return unwrapData(data);
-}
-
 export async function fetchHistory() {
   const { data } = await api.get<ApiEnvelope<Movement[]>>("/history");
   return unwrapData(data);
@@ -126,8 +134,13 @@ export async function refreshMarketData() {
   return unwrapData(data);
 }
 
+export async function fetchCdiStatus() {
+  const { data } = await api.get<ApiEnvelope<CdiStatusResponse>>("/cdi/status");
+  return unwrapData(data);
+}
+
 export async function refreshCdiData() {
-  const { data } = await api.post<ApiEnvelope<unknown>>("/cdi/refresh");
+  const { data } = await api.post<ApiEnvelope<CdiRefreshResponse>>("/cdi/refresh");
   invalidateWorkspaceCache();
   return unwrapData(data);
 }
@@ -189,4 +202,19 @@ export const goalRecordsApi = {
   create: async (input: GoalRecord) => mutate(() => api.post<ApiEnvelope<GoalRecord>>("/goals", input)),
   update: async (id: string, input: Partial<GoalRecord>) => mutate(() => api.put<ApiEnvelope<GoalRecord>>(`/goals/${id}`, input)),
   remove: async (id: string) => mutate(() => api.delete(`/goals/${id}`))
+};
+
+export const monthlyPlanningApi = {
+  overview: async (year: number, month: number, comparisonRange = 1) => {
+    const { data } = await api.get<ApiEnvelope<MonthlyPlanningOverview>>("/monthly-planning", { params: { year, month, comparisonRange } });
+    return unwrapData(data);
+  },
+  savePlan: async (input: MonthlyPlanRecord) => mutate(() => api.post<ApiEnvelope<MonthlyPlanRecord>>("/monthly-planning", input)),
+  updatePlan: async (id: string, input: Partial<MonthlyPlanRecord>) => mutate(() => api.put<ApiEnvelope<MonthlyPlanRecord>>(`/monthly-planning/${id}`, input)),
+  copyPrevious: async (year: number, month: number) => mutate(() => api.post<ApiEnvelope<MonthlyPlanRecord>>("/monthly-planning/copy-previous", { year, month })),
+  createExpense: async (planId: string, input: Omit<MonthlyExpenseRecord, "id" | "planId">) =>
+    mutate(() => api.post<ApiEnvelope<MonthlyExpenseRecord>>(`/monthly-planning/${planId}/expenses`, input)),
+  updateExpense: async (id: string, input: Partial<MonthlyExpenseRecord>, scope: "single" | "series" = "single") =>
+    mutate(() => api.put<ApiEnvelope<MonthlyExpenseRecord>>(`/monthly-planning/expenses/${id}`, input, { params: { scope } })),
+  removeExpense: async (id: string, scope: "single" | "series" = "single") => mutate(() => api.delete(`/monthly-planning/expenses/${id}`, { params: { scope } }))
 };

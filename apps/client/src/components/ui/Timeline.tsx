@@ -5,9 +5,15 @@ import { MoneyValue } from "./ValueDisplay";
 
 interface TimelineProps {
   items: Movement[];
+  showStatus?: boolean;
+  emptyMessage?: string;
 }
 
-export function Timeline({ items }: TimelineProps) {
+export function Timeline({ items, showStatus = false, emptyMessage = "Nenhum evento encontrado." }: TimelineProps) {
+  if (items.length === 0) {
+    return <p className="rounded-lg border border-line bg-panel p-4 text-sm text-muted">{emptyMessage}</p>;
+  }
+
   return (
     <div className="space-y-3">
       {items.map((item) => (
@@ -17,7 +23,12 @@ export function Timeline({ items }: TimelineProps) {
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="break-words font-medium text-ink">{item.type}</p>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <p className="break-words font-medium text-ink">{item.type}</p>
+                {showStatus && item.statusLabel ? (
+                  <span className="rounded-full border border-line bg-elevated px-2 py-0.5 text-xs text-muted">{item.statusLabel}</span>
+                ) : null}
+              </div>
               <span className="text-xs text-muted">{formatDate(item.date)}</span>
             </div>
             <p className="mt-1 break-words text-sm text-muted">

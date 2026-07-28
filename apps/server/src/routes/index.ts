@@ -13,6 +13,7 @@ import { settingsRoutes } from "./settings.routes";
 import { marketRoutes } from "./market.routes";
 import { cdiRoutes } from "./cdi.routes";
 import { healthRoutes } from "./health.routes";
+import { monthlyPlanningRoutes } from "./monthly-planning.routes";
 
 export const apiRoutes = Router();
 
@@ -31,3 +32,4 @@ apiRoutes.use("/history", historyRoutes);
 apiRoutes.use("/settings", settingsRoutes);
 apiRoutes.use("/market", marketRoutes);
 apiRoutes.use("/cdi", cdiRoutes);
+apiRoutes.use("/monthly-planning", monthlyPlanningRoutes);

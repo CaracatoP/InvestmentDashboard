@@ -150,13 +150,25 @@ export interface CashBoxMovementRecord {
   description?: string;
 }
 
+export type CdiSource = "bcb" | "fallback";
+
 export interface CdiRateRecord {
   id?: string;
   annualCdiRate: number;
   dailyCdiRate: number;
   referenceDate: string;
-  source: string;
+  source: CdiSource | string;
+  fallbackReason?: string | null;
   fetchedAt: string | Date;
+}
+
+export interface CdiRateSnapshot {
+  rate: number;
+  dailyRate: number;
+  referenceDate: string;
+  source: CdiSource;
+  updatedAt: string | Date;
+  fallbackReason?: string | null;
 }
 
 export interface CashBoxYieldRecord {
@@ -183,4 +195,70 @@ export interface SettingsRecord {
   currentAge: number;
   targetAge: number;
   allocations: AllocationRecord[];
+}
+
+export type MonthlyBudgetType = "percentage" | "fixed";
+export type MonthlyExpenseStatus = "completed" | "planned";
+export type MonthlyExpenseType = "single" | "recurring";
+export type MonthlyRecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "annual" | "custom";
+
+export interface MonthlyPlanCategoryRecord {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  budgetType: MonthlyBudgetType;
+  percentage: number;
+  fixedAmountInCents?: number | null;
+}
+
+export interface MonthlyFinancialGoalRecord {
+  id: string;
+  name: string;
+  targetInCents: number;
+  savedInCents: number;
+  monthlyContributionInCents?: number;
+  linkedSource?: "manual" | "portfolio" | "cashbox";
+  linkedSourceId?: string;
+  active: boolean;
+}
+
+export interface MonthlyPlanRecord {
+  id?: string;
+  month: number;
+  year: number;
+  incomeInCents: number;
+  categories: MonthlyPlanCategoryRecord[];
+  monthlyContributionGoalInCents?: number;
+  includeDividendsAsIncome?: boolean;
+  investmentSimulationAmountInCents?: number;
+  goals?: MonthlyFinancialGoalRecord[];
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface MonthlyExpenseRecord {
+  id?: string;
+  planId: string;
+  categoryId: string;
+  description: string;
+  amountInCents: number;
+  date: string;
+  time: string;
+  note?: string;
+  paymentMethod?: string | null;
+  expenseType: MonthlyExpenseType;
+  recurring: boolean;
+  recurrenceId?: string | null;
+  recurrenceSourceId?: string | null;
+  recurrenceFrequency?: MonthlyRecurrenceFrequency | null;
+  recurrenceInterval?: number | null;
+  recurrenceDayOfMonth?: number | null;
+  recurrenceStartDate?: string | null;
+  recurrenceEndDate?: string | null;
+  recurrenceOriginalDate?: string | null;
+  recurrenceCancelled?: boolean;
+  status: MonthlyExpenseStatus;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
 }
