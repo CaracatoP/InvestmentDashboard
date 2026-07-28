@@ -175,16 +175,21 @@ export interface AssetPriceHistoryPoint {
   low?: number;
   close: number;
   volume?: number;
+  valueInCents?: number;
 }
 
 export interface AssetPriceHistoryResponse {
+  assetId?: string;
   ticker: string;
+  period?: string;
   range: string;
   interval: string;
   source: string;
   currency: string;
   points: AssetPriceHistoryPoint[];
   lastUpdatedAt: string | null;
+  updatedAt?: string | null;
+  cached?: boolean;
   status: "updated" | "cached" | "stale" | "unavailable" | "unsupported" | "error";
   message?: string;
 }

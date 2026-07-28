@@ -1,4 +1,4 @@
-import { Calculator, Clock, Coins, Target, TrendingUp } from "lucide-react";
+import { Bot, Calculator, Clock, Coins, RefreshCw, Target, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { LineChart } from "../components/charts/LineChart";
 import { ChartCard } from "../components/ui/ChartCard";
@@ -6,10 +6,11 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { StatCard } from "../components/ui/StatCard";
 import { MoneyValue } from "../components/ui/ValueDisplay";
-import { calculateProjection } from "../services/api";
+import { calculateProjection, explainProjectionWithAi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Goal } from "../types/investments";
 import type { ProjectionInput, ProjectionResponse } from "../types/investments";
+import type { AiProjectionExplanationResult } from "../types/ai";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 
 const initialProjection: ProjectionInput = {
@@ -67,6 +68,8 @@ export function ProjectionsPage() {
   const settings = useInvestmentStore((state) => state.settings);
   const [form, setForm] = useState<ProjectionInput>(initialProjection);
   const [projection, setProjection] = useState<ProjectionResponse | null>(null);
+  const [aiExplanation, setAiExplanation] = useState<AiProjectionExplanationResult | null>(null);
+  const [isExplaining, setIsExplaining] = useState(false);
   const [error, setError] = useState("");
   const [hasLoadedDefaults, setHasLoadedDefaults] = useState(false);
 
@@ -125,6 +128,20 @@ export function ProjectionsPage() {
       ...current,
       [field]: typeof value === "number" ? roundProjectionNumber(field, value) : value
     }));
+  }
+
+  async function handleExplainProjection() {
+    if (!projection) return;
+    setIsExplaining(true);
+    try {
+      const explanation = await explainProjectionWithAi({
+        input: form as unknown as Record<string, unknown>,
+        projection: projection as unknown as Record<string, unknown>
+      });
+      setAiExplanation(explanation);
+    } finally {
+      setIsExplaining(false);
+    }
   }
 
   return (
@@ -199,6 +216,49 @@ export function ProjectionsPage() {
               ]}
             />
           </ChartCard>
+
+          <section className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full bg-accent/10 px-2 py-1 text-xs font-medium text-accent">
+                  <Bot size={14} />
+                  Explicacao com Groq
+                </div>
+                <h2 className="mt-3 text-base font-semibold text-ink">Leitura da projecao</h2>
+                <p className="mt-1 text-sm text-muted">A IA explica o resultado ja calculado pelo simulador, sem recalcular os valores.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleExplainProjection()}
+                disabled={!projection || isExplaining}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:border-accent/60 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw size={16} className={isExplaining ? "animate-spin" : ""} />
+                Explicar
+              </button>
+            </div>
+            {aiExplanation ? (
+              <div className="mt-4 grid gap-3">
+                <p className="rounded-lg bg-elevated px-3 py-3 text-sm leading-relaxed text-muted">{aiExplanation.explanation.summary}</p>
+                <div className="grid gap-3 lg:grid-cols-3">
+                  {[
+                    ["Premissas", aiExplanation.explanation.assumptions],
+                    ["Sensibilidades", aiExplanation.explanation.sensitivities],
+                    ["Proximos passos", aiExplanation.explanation.nextSteps]
+                  ].map(([title, items]) => (
+                    <div key={title as string} className="rounded-lg border border-line bg-elevated p-3">
+                      <h3 className="text-sm font-semibold text-ink">{title as string}</h3>
+                      <div className="mt-2 space-y-2 text-sm text-muted">
+                        {(items as string[]).length > 0 ? (items as string[]).map((item) => <p key={item}>{item}</p>) : <p>Nenhum item destacado.</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Clique em explicar para gerar uma leitura do cenario atual.</p>
+            )}
+          </section>
 
           <section className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
             <div className="flex items-center justify-between gap-3">

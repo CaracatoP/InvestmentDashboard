@@ -2,6 +2,16 @@ import axios from "axios";
 import { API_BASE_URL } from "../config/api";
 import { invalidateWorkspaceCache } from "./cache-invalidation";
 import type {
+  AiAnalysisResult,
+  AiAnalysisType,
+  AiChatMessageResult,
+  AiChatSession,
+  AiChatSessionDetails,
+  AiHealth,
+  AiProjectionExplanationResult,
+  AiStoredAnalysis
+} from "../types/ai";
+import type {
   AssetDetails,
   AssetPriceHistoryResponse,
   CdiRefreshResponse,
@@ -36,7 +46,24 @@ export const api = axios.create({
 });
 
 type ApiEnvelope<T> = T | { data: T };
-const assetPriceHistoryCache = new Map<string, AssetPriceHistoryResponse>();
+
+type AssetPriceHistoryRequestOptions = {
+  signal?: AbortSignal;
+  forceRefresh?: boolean;
+  interval?: string;
+};
+
+const assetHistoryStaleTimeMs: Record<string, number> = {
+  "1mo": 15 * 60 * 1000,
+  "3mo": 30 * 60 * 1000,
+  "6mo": 30 * 60 * 1000,
+  "1y": 60 * 60 * 1000,
+  "5y": 4 * 60 * 60 * 1000,
+  max: 8 * 60 * 60 * 1000
+};
+
+const assetPriceHistoryCache = new Map<string, { payload: AssetPriceHistoryResponse; expiresAt: number }>();
+const assetPriceHistoryInflight = new Map<string, Promise<AssetPriceHistoryResponse>>();
 
 function unwrapData<T>(payload: ApiEnvelope<T>): T {
   if (payload && typeof payload === "object" && "data" in payload) {
@@ -67,18 +94,61 @@ export async function fetchAsset(ticker: string) {
   return unwrapData(data);
 }
 
-export async function fetchAssetPriceHistory(ticker: string, range = "1y", signal?: AbortSignal) {
-  const key = `${ticker.toUpperCase()}-${range}`;
-  const cached = assetPriceHistoryCache.get(key);
-  if (cached) return cached;
+function normalizeHistoryOptions(options?: AbortSignal | AssetPriceHistoryRequestOptions): AssetPriceHistoryRequestOptions {
+  if (!options) return {};
+  if ("aborted" in options) return { signal: options };
+  return options;
+}
 
-  const { data } = await api.get<ApiEnvelope<AssetPriceHistoryResponse>>(`/assets/${ticker}/price-history`, {
-    params: { range },
-    signal
+function getAssetHistoryCacheKey(ticker: string, range: string, interval?: string) {
+  return `${ticker.toUpperCase()}-${range}-${interval ?? "auto"}`;
+}
+
+function raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new DOMException("Request aborted", "AbortError"));
+
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException("Request aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
-  const payload = unwrapData(data);
-  assetPriceHistoryCache.set(key, payload);
-  return payload;
+}
+
+export async function fetchAssetPriceHistory(ticker: string, range = "3mo", options?: AbortSignal | AssetPriceHistoryRequestOptions) {
+  const normalizedOptions = normalizeHistoryOptions(options);
+  const key = getAssetHistoryCacheKey(ticker, range, normalizedOptions.interval);
+  const cached = assetPriceHistoryCache.get(key);
+  if (!normalizedOptions.forceRefresh && cached && Date.now() <= cached.expiresAt) return cached.payload;
+
+  const inflight = assetPriceHistoryInflight.get(key);
+  if (!normalizedOptions.forceRefresh && inflight) return raceWithSignal(inflight, normalizedOptions.signal);
+
+  const request = api.get<ApiEnvelope<AssetPriceHistoryResponse>>(`/assets/${ticker}/history`, {
+    params: {
+      period: range,
+      interval: normalizedOptions.interval,
+      forceRefresh: normalizedOptions.forceRefresh ? "true" : undefined
+    }
+  }).then(({ data }) => {
+    const payload = unwrapData(data);
+    const staleTime = assetHistoryStaleTimeMs[payload.range] ?? assetHistoryStaleTimeMs[range] ?? 30 * 60 * 1000;
+    assetPriceHistoryCache.set(key, { payload, expiresAt: Date.now() + staleTime });
+    return payload;
+  }).finally(() => {
+    assetPriceHistoryInflight.delete(key);
+  });
+
+  assetPriceHistoryInflight.set(key, request);
+  return raceWithSignal(request, normalizedOptions.signal);
+}
+
+export function prefetchAssetPriceHistory(ticker: string, range = "3mo", interval?: string) {
+  const key = getAssetHistoryCacheKey(ticker, range, interval);
+  const cached = assetPriceHistoryCache.get(key);
+  if (cached && Date.now() <= cached.expiresAt) return;
+  if (assetPriceHistoryInflight.has(key)) return;
+  void fetchAssetPriceHistory(ticker, range, { interval }).catch(() => undefined);
 }
 
 export async function fetchDividends() {
@@ -112,6 +182,54 @@ export async function calculateProjection(input: ProjectionInput) {
   const { data } = await api.post<ApiEnvelope<ProjectionResponse>>("/projections", input);
   return unwrapData(data);
 }
+
+export async function fetchAiHealth() {
+  const { data } = await api.get<ApiEnvelope<AiHealth>>("/ai/health", { timeout: 130000 });
+  return unwrapData(data);
+}
+
+export async function generateAiAnalysis(input: {
+  year: number;
+  month: number;
+  analysisType: AiAnalysisType;
+  categoryId?: string;
+  forceRefresh?: boolean;
+}) {
+  const { data } = await api.post<ApiEnvelope<AiAnalysisResult>>("/ai/analyses", input, { timeout: 130000 });
+  return unwrapData(data);
+}
+
+export async function fetchAiAnalyses(limit = 20) {
+  const { data } = await api.get<ApiEnvelope<AiStoredAnalysis[]>>("/ai/analyses", { params: { limit } });
+  return unwrapData(data);
+}
+
+export async function explainProjectionWithAi(input: { input?: Record<string, unknown>; projection: Record<string, unknown> }) {
+  const { data } = await api.post<ApiEnvelope<AiProjectionExplanationResult>>("/ai/projections/explain", input, { timeout: 130000 });
+  return unwrapData(data);
+}
+
+export const aiChatApi = {
+  createSession: async (title?: string) => {
+    const { data } = await api.post<ApiEnvelope<AiChatSession>>("/ai/chat/sessions", { title });
+    return unwrapData(data);
+  },
+  listSessions: async () => {
+    const { data } = await api.get<ApiEnvelope<AiChatSession[]>>("/ai/chat/sessions");
+    return unwrapData(data);
+  },
+  getSession: async (sessionId: string) => {
+    const { data } = await api.get<ApiEnvelope<AiChatSessionDetails>>(`/ai/chat/sessions/${sessionId}`);
+    return unwrapData(data);
+  },
+  sendMessage: async (sessionId: string, message: string) => {
+    const { data } = await api.post<ApiEnvelope<AiChatMessageResult>>(`/ai/chat/sessions/${sessionId}/messages`, { message }, { timeout: 130000 });
+    return unwrapData(data);
+  },
+  removeSession: async (sessionId: string) => {
+    await api.delete(`/ai/chat/sessions/${sessionId}`);
+  }
+};
 
 export async function fetchHistory() {
   const { data } = await api.get<ApiEnvelope<Movement[]>>("/history");

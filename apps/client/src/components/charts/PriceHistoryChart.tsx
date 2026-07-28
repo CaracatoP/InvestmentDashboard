@@ -2,11 +2,13 @@ import {
   Area,
   AreaChart as RechartsAreaChart,
   CartesianGrid,
+  ReferenceDot,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
 } from "recharts";
+import { useMemo } from "react";
 import type { AssetPriceHistoryPoint } from "../../types/investments";
 import { formatCompactCurrency, formatCurrency } from "../../utils/formatters";
 
@@ -20,12 +22,29 @@ interface PriceHistoryChartProps {
   data: AssetPriceHistoryPoint[];
   range: string;
   height?: number;
+  operations?: PriceHistoryOperation[];
 }
 
 interface HistoryTooltipProps {
   active?: boolean;
   label?: string | number;
   payload?: ReadonlyArray<{ payload?: AssetPriceHistoryPoint }>;
+}
+
+interface PriceHistoryOperation {
+  type: string;
+  date: string;
+  quantity: number;
+  price: number;
+  total: number;
+}
+
+interface OperationMarker {
+  key: string;
+  timestamp: string;
+  close: number;
+  type: string;
+  quantity: number;
 }
 
 function formatAxisDate(value: string, range: string) {
@@ -148,6 +167,40 @@ function formatVolume(value?: number) {
   return new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+function dateOnly(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function buildOperationMarkers(data: AssetPriceHistoryPoint[], operations: PriceHistoryOperation[] = []) {
+  if (data.length === 0 || operations.length === 0) return [];
+
+  const sortedPoints = data
+    .filter((point) => Number.isFinite(point.close) && point.close > 0)
+    .sort((left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime());
+  const markers: OperationMarker[] = [];
+
+  for (const operation of operations) {
+    if (operation.type !== "COMPRA" && operation.type !== "VENDA") continue;
+    const operationDate = dateOnly(operation.date);
+    if (!operationDate) continue;
+
+    const point = sortedPoints.find((item) => dateOnly(item.timestamp) >= operationDate) ?? sortedPoints[sortedPoints.length - 1];
+    if (!point) continue;
+
+    markers.push({
+      key: `${operation.type}-${operation.date}-${operation.quantity}-${operation.price}`,
+      timestamp: point.timestamp,
+      close: point.close,
+      type: operation.type,
+      quantity: operation.quantity
+    });
+  }
+
+  return markers;
+}
+
 function HistoryTooltip({ active, payload, label }: HistoryTooltipProps) {
   if (!active || !payload?.length) return null;
 
@@ -169,11 +222,13 @@ function HistoryTooltip({ active, payload, label }: HistoryTooltipProps) {
   );
 }
 
-export function PriceHistoryChart({ data, range, height = 280 }: PriceHistoryChartProps) {
+export function PriceHistoryChart({ data, range, height = 280, operations = [] }: PriceHistoryChartProps) {
   const minHeight = Math.min(220, height);
-  const axisTicks = selectAxisTicks(data, range);
-  const priceDomain = calculatePriceDomain(data);
-  const priceTicks = buildYAxisTicks(priceDomain);
+  const axisTicks = useMemo(() => selectAxisTicks(data, range), [data, range]);
+  const priceDomain = useMemo(() => calculatePriceDomain(data), [data]);
+  const priceTicks = useMemo(() => buildYAxisTicks(priceDomain), [priceDomain]);
+  const operationMarkers = useMemo(() => buildOperationMarkers(data, operations), [data, operations]);
+  const shouldAnimate = data.length <= 260;
 
   return (
     <div className="min-w-0" style={{ height: `clamp(${minHeight}px, 58vw, ${height}px)` }}>
@@ -222,7 +277,20 @@ export function PriceHistoryChart({ data, range, height = 280 }: PriceHistoryCha
             fill="url(#asset-price-history)"
             strokeWidth={2.5}
             activeDot={{ r: 4, stroke: "#38bdf8", strokeWidth: 2 }}
+            isAnimationActive={shouldAnimate}
           />
+          {operationMarkers.map((marker, index) => (
+            <ReferenceDot
+              key={`${marker.key}-${index}`}
+              x={marker.timestamp}
+              y={marker.close}
+              r={4}
+              fill={marker.type === "COMPRA" ? "#22c55e" : "#f97316"}
+              stroke="#0B0F0C"
+              strokeWidth={1.5}
+              ifOverflow="visible"
+            />
+          ))}
         </RechartsAreaChart>
       </ResponsiveContainer>
     </div>

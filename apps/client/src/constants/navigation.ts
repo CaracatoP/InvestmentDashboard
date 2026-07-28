@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bot,
   CalendarDays,
   ClipboardList,
   Landmark,
@@ -19,5 +20,6 @@ export const navigationItems = [
   { label: "Caixinhas", path: "/caixinhas", icon: Landmark },
   { label: "Projecoes", path: "/projecoes", icon: BarChart3 },
   { label: "Historico", path: "/historico", icon: History },
+  { label: "Assistente IA", path: "/assistente", icon: Bot },
   { label: "Configuracoes", path: "/configuracoes", icon: Settings }
 ] as const;

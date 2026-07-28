@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildRejectedQuote,
+  clearAssetHistoryCacheForTests,
   getAssetPriceHistory,
   isValidMarketPrice,
   isValidStoredQuote,
@@ -170,6 +171,174 @@ test("historical service falls back to cache when provider is unavailable", asyn
   } finally {
     env.marketDataProvider = previousProvider;
     env.marketDataApiKey = previousKey;
+  }
+});
+
+test("historical service returns memory cache without duplicated provider calls", async () => {
+  const previousProvider = env.marketDataProvider;
+  const previousKey = env.marketDataApiKey;
+  const previousTtl = env.marketHistoryCacheTtlMinutes;
+  const previousFetch = globalThis.fetch;
+  let fetchCount = 0;
+  clearAssetHistoryCacheForTests();
+  env.marketDataProvider = "brapi";
+  env.marketDataApiKey = "test-token";
+  env.marketHistoryCacheTtlMinutes = 60;
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        results: [
+          {
+            symbol: "MEMC3",
+            data: {
+              usedRange: "1mo",
+              usedInterval: "1d",
+              historicalDataPrice: [{ date: 1784862000, open: 10, high: 10.3, low: 9.9, close: 10.2, volume: 1000 }]
+            }
+          }
+        ]
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const cachedAsset = await createAsset({
+      name: "Memory Cache",
+      ticker: "MEMC3",
+      category: "ACAO",
+      currency: "BRL",
+      active: true
+    });
+    const first = await getAssetPriceHistory(cachedAsset, "1mo");
+    const second = await getAssetPriceHistory(cachedAsset, "1mo");
+
+    assert.equal(first.status, "updated");
+    assert.equal(second.status, "cached");
+    assert.equal(fetchCount, 1);
+  } finally {
+    clearAssetHistoryCacheForTests();
+    env.marketDataProvider = previousProvider;
+    env.marketDataApiKey = previousKey;
+    env.marketHistoryCacheTtlMinutes = previousTtl;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("historical service deduplicates simultaneous cache misses", async () => {
+  const previousProvider = env.marketDataProvider;
+  const previousKey = env.marketDataApiKey;
+  const previousFetch = globalThis.fetch;
+  let fetchCount = 0;
+  clearAssetHistoryCacheForTests();
+  env.marketDataProvider = "brapi";
+  env.marketDataApiKey = "test-token";
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return new Response(
+      JSON.stringify({
+        results: [
+          {
+            symbol: "DEDUP3",
+            data: {
+              usedRange: "1mo",
+              usedInterval: "1d",
+              historicalDataPrice: [{ date: 1784862000, close: 20.2 }]
+            }
+          }
+        ]
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const dedupedAsset = await createAsset({
+      name: "Dedupe Cache",
+      ticker: "DEDUP3",
+      category: "ACAO",
+      currency: "BRL",
+      active: true
+    });
+    const [first, second] = await Promise.all([
+      getAssetPriceHistory(dedupedAsset, "1mo"),
+      getAssetPriceHistory(dedupedAsset, "1mo")
+    ]);
+
+    assert.equal(first.status, "updated");
+    assert.equal(second.status, "updated");
+    assert.equal(fetchCount, 1);
+  } finally {
+    clearAssetHistoryCacheForTests();
+    env.marketDataProvider = previousProvider;
+    env.marketDataApiKey = previousKey;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("stale historical cache is returned while background refresh runs", async () => {
+  const previousProvider = env.marketDataProvider;
+  const previousKey = env.marketDataApiKey;
+  const previousTtl = env.marketHistoryCacheTtlMinutes;
+  const previousFetch = globalThis.fetch;
+  let fetchCount = 0;
+  clearAssetHistoryCacheForTests();
+  env.marketDataProvider = "brapi";
+  env.marketDataApiKey = "test-token";
+  env.marketHistoryCacheTtlMinutes = 0;
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return new Response(
+      JSON.stringify({
+        results: [
+          {
+            symbol: "STALE3",
+            data: {
+              usedRange: "1mo",
+              usedInterval: "1mo",
+              historicalDataPrice: [{ date: 1784862000, close: 31.2 }]
+            }
+          }
+        ]
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const staleAsset = await createAsset({
+      name: "Stale Cache",
+      ticker: "STALE3",
+      category: "ACAO",
+      currency: "BRL",
+      active: true
+    });
+    await createPriceHistory({
+      ticker: staleAsset.ticker,
+      price: 30,
+      capturedAt: new Date("2026-06-01T03:00:00.000Z"),
+      source: "brapi-history-1d",
+      close: 30,
+      type: "market_history",
+      interval: "1mo",
+      granularity: "1mo"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const history = await getAssetPriceHistory(staleAsset, "max");
+
+    assert.equal(history.status, "stale");
+    assert.equal(history.points[0].close, 30);
+    assert.equal(fetchCount, 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  } finally {
+    clearAssetHistoryCacheForTests();
+    env.marketDataProvider = previousProvider;
+    env.marketDataApiKey = previousKey;
+    env.marketHistoryCacheTtlMinutes = previousTtl;
+    globalThis.fetch = previousFetch;
   }
 });
 

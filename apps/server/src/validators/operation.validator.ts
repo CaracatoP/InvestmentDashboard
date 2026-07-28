@@ -18,7 +18,7 @@ export const operationSchema = operationBaseSchema.refine((input) => Boolean(inp
 }).refine((input) => input.quantity > 0, {
   message: "Operation quantity must be greater than zero",
   path: ["quantity"]
-}).refine((input) => (input.type === "BONIFICACAO" ? true : input.price > 0), {
+}).refine((input) => (["BONIFICACAO", "DESDOBRAMENTO", "GRUPAMENTO"].includes(input.type) ? true : input.price > 0), {
   message: "Operation price must be greater than zero",
   path: ["price"]
 });

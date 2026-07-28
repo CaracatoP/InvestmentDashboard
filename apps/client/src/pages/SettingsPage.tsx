@@ -1,9 +1,10 @@
-import { Download, FileDown, Save, SlidersHorizontal } from "lucide-react";
+import { Bot, Download, FileDown, RefreshCw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
-import { updateAllocations } from "../services/api";
+import { fetchAiHealth, updateAllocations } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
+import type { AiHealth } from "../types/ai";
 import type { SettingsResponse } from "../types/investments";
 import { exportCsv, exportJson, formatPercentage } from "../utils/formatters";
 
@@ -12,10 +13,25 @@ export function SettingsPage() {
   const portfolio = useInvestmentStore((state) => state.portfolio);
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [allocations, setAllocations] = useState<SettingsResponse["allocations"]>([]);
+  const [aiHealth, setAiHealth] = useState<AiHealth | null>(null);
+  const [isCheckingAi, setIsCheckingAi] = useState(false);
 
   useEffect(() => {
     setAllocations(settings?.allocations ?? []);
   }, [settings?.allocations]);
+
+  async function loadAiHealth() {
+    setIsCheckingAi(true);
+    try {
+      setAiHealth(await fetchAiHealth());
+    } finally {
+      setIsCheckingAi(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadAiHealth();
+  }, []);
 
   const allocationTotal = useMemo(() => allocations.reduce((total, item) => total + item.targetPercentage, 0), [allocations]);
 
@@ -102,6 +118,42 @@ export function SettingsPage() {
               >
                 <FileDown size={16} />
                 Exportar PDF
+              </button>
+            </div>
+          </article>
+
+          <article className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-ink">Inteligencia artificial</h2>
+                <p className="mt-1 text-sm text-muted">Status do provider configurado no backend.</p>
+              </div>
+              <Bot size={18} className="text-accent" />
+            </div>
+            <div className="mt-4 space-y-3 text-sm">
+              {[
+                ["Provider", aiHealth?.provider ?? "-"],
+                ["Modelo", aiHealth?.model ?? "-"],
+                ["Status", aiHealth?.status ?? "-"],
+                ["Ultimo teste", aiHealth?.checkedAt ? new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(aiHealth.checkedAt)) : "-"],
+                ["Latencia", aiHealth?.latencyMs !== null && aiHealth?.latencyMs !== undefined ? `${aiHealth.latencyMs}ms` : "-"],
+                ["Limite/hora", aiHealth?.limits.maxRequestsPerHour ?? "-"],
+                ["Contexto efetivo", aiHealth?.limits.effectiveContextTokens ? `${aiHealth.limits.effectiveContextTokens} tokens` : "-"]
+              ].map(([label, value]) => (
+                <div key={label} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-elevated px-3 py-2">
+                  <span className="text-muted">{label}</span>
+                  <span className="break-words text-right font-medium text-ink">{value}</span>
+                </div>
+              ))}
+              {aiHealth?.message ? <p className="rounded-lg bg-amber/10 px-3 py-2 text-sm text-amber">{aiHealth.message}</p> : null}
+              <button
+                type="button"
+                onClick={() => void loadAiHealth()}
+                disabled={isCheckingAi}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw size={16} className={isCheckingAi ? "animate-spin" : ""} />
+                Testar conexao
               </button>
             </div>
           </article>

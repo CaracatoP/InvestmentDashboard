@@ -5,10 +5,20 @@ import { getTickerProfile, normalizeTicker, type TickerProfile } from "./ticker.
 
 type QuoteStatus = MarketQuoteRecord["status"];
 type PriceHistoryStatus = "updated" | "cached" | "stale" | "unavailable" | "unsupported" | "error";
-type HistoryRange = "1mo" | "3mo" | "6mo" | "1y" | "5y" | "max";
-type HistoryInterval = "1d" | "1wk" | "1mo";
+export type HistoryRange = "1mo" | "3mo" | "6mo" | "1y" | "5y" | "max";
+export type HistoryInterval = "1d" | "1wk" | "1mo";
 
-const historyCacheTtlMs = 6 * 60 * 60 * 1000;
+const defaultHistoryCacheTtlMs: Record<HistoryRange, number> = {
+  "1mo": 15 * 60 * 1000,
+  "3mo": 30 * 60 * 1000,
+  "6mo": 30 * 60 * 1000,
+  "1y": 60 * 60 * 1000,
+  "5y": 4 * 60 * 60 * 1000,
+  max: 8 * 60 * 60 * 1000
+};
+
+const historyResponseCache = new Map<string, { response: HistoricalPriceResponse; expiresAt: number }>();
+const historyRefreshPromises = new Map<string, Promise<HistoricalPriceResponse>>();
 
 export interface HistoricalPricePoint {
   timestamp: Date;
@@ -17,6 +27,7 @@ export interface HistoricalPricePoint {
   low?: number;
   close: number;
   volume?: number;
+  valueInCents?: number;
 }
 
 export interface HistoricalPricesResult {
@@ -30,15 +41,28 @@ export interface HistoricalPricesResult {
 }
 
 interface HistoricalPriceResponse {
+  assetId?: string;
   ticker: string;
+  period: HistoryRange;
   range: HistoryRange;
   interval: HistoryInterval;
   source: string;
   currency: string;
   points: Array<HistoricalPricePoint & { timestamp: Date }>;
   lastUpdatedAt: Date | null;
+  updatedAt: Date | null;
+  cached: boolean;
   status: PriceHistoryStatus;
   message?: string;
+}
+
+export interface AssetPriceHistoryRequest {
+  period?: string;
+  range?: string;
+  interval?: string;
+  startDate?: string;
+  endDate?: string;
+  forceRefresh?: boolean;
 }
 
 interface BrapiHistoricalPoint {
@@ -105,6 +129,58 @@ export function normalizeHistoryRange(input?: string) {
   };
 
   return { range, interval: intervalByRange[range] };
+}
+
+export function normalizeHistoryInterval(input: string | undefined, fallback: HistoryInterval) {
+  if (!input || input.trim() === "") return fallback;
+
+  const normalized = input.trim().toLowerCase();
+  const aliases: Record<string, HistoryInterval> = {
+    "1d": "1d",
+    daily: "1d",
+    dia: "1d",
+    "1w": "1wk",
+    "1wk": "1wk",
+    weekly: "1wk",
+    semana: "1wk",
+    "1m": "1mo",
+    "1mo": "1mo",
+    monthly: "1mo",
+    mes: "1mo"
+  };
+  const interval = aliases[normalized];
+  if (!interval) throw new Error(`Unsupported history interval: ${input}`);
+  return interval;
+}
+
+function parseHistoryDate(value: string | undefined, boundary: "start" | "end") {
+  if (!value) return undefined;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`Invalid history ${boundary}Date: ${value}`);
+
+  const date = new Date(`${value}T${boundary === "start" ? "00:00:00.000" : "23:59:59.999"}Z`);
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid history ${boundary}Date: ${value}`);
+  return date;
+}
+
+function normalizeHistoryRequest(input?: string | AssetPriceHistoryRequest) {
+  const period = typeof input === "string" ? input : input?.period ?? input?.range;
+  const normalized = normalizeHistoryRange(period);
+  const interval = normalizeHistoryInterval(typeof input === "string" ? undefined : input?.interval, normalized.interval);
+  const startDate = parseHistoryDate(typeof input === "string" ? undefined : input?.startDate, "start");
+  const endDate = parseHistoryDate(typeof input === "string" ? undefined : input?.endDate, "end");
+
+  if (startDate && endDate && startDate.getTime() > endDate.getTime()) {
+    throw new Error("Invalid history date range: startDate must be before endDate");
+  }
+
+  return {
+    range: normalized.range,
+    interval,
+    startDate,
+    endDate,
+    forceRefresh: typeof input === "string" ? false : Boolean(input?.forceRefresh)
+  };
 }
 
 function rangeStartDate(range: HistoryRange, now = new Date()) {
@@ -710,16 +786,57 @@ function latestCacheUpdate(records: Awaited<ReturnType<typeof listPriceHistory>>
   return new Date(Math.max(...timestamps));
 }
 
-function cacheIsFresh(records: Awaited<ReturnType<typeof listPriceHistory>>, now = new Date()) {
-  const lastUpdatedAt = latestCacheUpdate(records);
-  return Boolean(lastUpdatedAt && now.getTime() - lastUpdatedAt.getTime() <= historyCacheTtlMs);
+function getHistoryCacheTtlMs(range: HistoryRange) {
+  if (Number.isFinite(env.marketHistoryCacheTtlMinutes) && env.marketHistoryCacheTtlMinutes >= 0) {
+    return env.marketHistoryCacheTtlMinutes * 60 * 1000;
+  }
+
+  return defaultHistoryCacheTtlMs[range];
 }
 
-function cacheCoversRange(records: Awaited<ReturnType<typeof listPriceHistory>>, range: HistoryRange, now = new Date()) {
+function buildHistoryCacheKey(asset: AssetRecord, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
+  return [
+    "asset-history",
+    asset.id ?? normalizeTicker(asset.ticker),
+    normalizeTicker(asset.ticker),
+    range,
+    interval,
+    startDate ? toDateInput(startDate) : "",
+    endDate ? toDateInput(endDate) : ""
+  ].join(":");
+}
+
+function cloneHistoryResponse(response: HistoricalPriceResponse, status: PriceHistoryStatus = response.status): HistoricalPriceResponse {
+  return {
+    ...response,
+    status,
+    cached: status === "cached" || status === "stale",
+    points: response.points.map((point) => ({ ...point, timestamp: new Date(point.timestamp) }))
+  };
+}
+
+function rememberHistoryResponse(cacheKey: string, response: HistoricalPriceResponse, range: HistoryRange) {
+  historyResponseCache.set(cacheKey, {
+    response: cloneHistoryResponse(response),
+    expiresAt: Date.now() + getHistoryCacheTtlMs(range)
+  });
+}
+
+export function clearAssetHistoryCacheForTests() {
+  historyResponseCache.clear();
+  historyRefreshPromises.clear();
+}
+
+function cacheIsFresh(records: Awaited<ReturnType<typeof listPriceHistory>>, range: HistoryRange, now = new Date()) {
+  const lastUpdatedAt = latestCacheUpdate(records);
+  return Boolean(lastUpdatedAt && now.getTime() - lastUpdatedAt.getTime() <= getHistoryCacheTtlMs(range));
+}
+
+function cacheCoversRange(records: Awaited<ReturnType<typeof listPriceHistory>>, range: HistoryRange, now = new Date(), startDate?: Date) {
   if (records.length === 0) return false;
   if (range === "max") return true;
 
-  const start = rangeStartDate(range, now).getTime();
+  const start = (startDate ?? rangeStartDate(range, now)).getTime();
   const earliest = Math.min(...records.map((record) => new Date(record.capturedAt).getTime()));
   return earliest <= start + 10 * 86_400_000;
 }
@@ -733,25 +850,34 @@ function buildHistoryResponse(
   records: Awaited<ReturnType<typeof listPriceHistory>>,
   message?: string
 ): HistoricalPriceResponse {
+  const lastUpdatedAt = latestCacheUpdate(records);
   return {
+    assetId: asset.id,
     ticker: normalizeTicker(asset.ticker),
+    period: range,
     range,
     interval,
     source,
     currency: asset.currency ?? "BRL",
-    points: records.map(toCachedPoint).filter((point) => Number.isFinite(point.close) && point.close > 0),
-    lastUpdatedAt: latestCacheUpdate(records),
+    points: records
+      .map(toCachedPoint)
+      .filter((point) => Number.isFinite(point.close) && point.close > 0)
+      .map((point) => ({ ...point, valueInCents: Math.round(point.close * 100) })),
+    lastUpdatedAt,
+    updatedAt: lastUpdatedAt,
+    cached: status === "cached" || status === "stale",
     status,
     message
   };
 }
 
-async function listCachedHistoricalPrices(asset: AssetRecord, range: HistoryRange, interval: HistoryInterval) {
-  const from = range === "max" ? undefined : rangeStartDate(range);
+async function listCachedHistoricalPrices(asset: AssetRecord, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
+  const from = startDate ?? (range === "max" ? undefined : rangeStartDate(range));
   return listPriceHistory(asset.ticker, {
     type: "market_history",
     interval,
-    from
+    from,
+    to: endDate
   });
 }
 
@@ -780,45 +906,157 @@ async function persistHistoricalPrices(asset: AssetRecord, profile: TickerProfil
   }
 }
 
-export async function getAssetPriceHistory(asset: AssetRecord, requestedRange?: string): Promise<HistoricalPriceResponse> {
-  const { range, interval } = normalizeHistoryRange(requestedRange);
-  const profile = getTickerProfile(asset);
-  const provider = getProvider();
-  const cachedRecords = await listCachedHistoricalPrices(asset, range, interval);
-
-  if (!profile.supported || profile.market !== "b3") {
-    return cachedRecords.length > 0
-      ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Asset is not supported by historical price provider")
-      : buildHistoryResponse(asset, range, interval, provider.name, "unsupported", [], "Asset is not supported by historical price provider");
-  }
-
-  if (cacheIsFresh(cachedRecords) && cacheCoversRange(cachedRecords, range)) {
-    return buildHistoryResponse(asset, range, interval, "brapi", "cached", cachedRecords);
-  }
+async function refreshHistoricalPrices(input: {
+  asset: AssetRecord;
+  profile: TickerProfile;
+  provider: MarketDataProvider;
+  range: HistoryRange;
+  interval: HistoryInterval;
+  startDate?: Date;
+  endDate?: Date;
+  cachedRecords: Awaited<ReturnType<typeof listPriceHistory>>;
+  cacheKey: string;
+  requestedAt: number;
+}) {
+  const { asset, profile, provider, range, interval, startDate, endDate, cachedRecords, cacheKey, requestedAt } = input;
 
   if (!env.marketDataProvider || !env.marketDataApiKey) {
-    return cachedRecords.length > 0
+    const response = cachedRecords.length > 0
       ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Market data provider not configured")
       : buildHistoryResponse(asset, range, interval, provider.name, "unavailable", [], "Market data provider not configured");
+    rememberHistoryResponse(cacheKey, response, range);
+    return response;
   }
 
   try {
+    const providerStartedAt = Date.now();
     const fetched = await provider.fetchHistoricalPrices({ asset, profile }, range, interval);
+    const providerDurationMs = Date.now() - providerStartedAt;
     const points = fetched.points.filter((point) => Number.isFinite(point.close) && point.close > 0);
 
     if (points.length === 0) {
-      return cachedRecords.length > 0
+      const response = cachedRecords.length > 0
         ? buildHistoryResponse(asset, range, interval, fetched.source, "stale", cachedRecords, "Provider returned no valid historical prices")
         : buildHistoryResponse(asset, range, interval, fetched.source, "unavailable", [], "Provider returned no valid historical prices");
+      rememberHistoryResponse(cacheKey, response, range);
+      return response;
     }
 
     await persistHistoricalPrices(asset, profile, { ...fetched, points });
-    const refreshedRecords = await listCachedHistoricalPrices(asset, range, interval);
-    return buildHistoryResponse(asset, range, interval, fetched.source, "updated", refreshedRecords.length > 0 ? refreshedRecords : cachedRecords);
+    const refreshedRecords = await listCachedHistoricalPrices(asset, range, interval, startDate, endDate);
+    const response = buildHistoryResponse(asset, range, interval, fetched.source, "updated", refreshedRecords.length > 0 ? refreshedRecords : cachedRecords);
+    rememberHistoryResponse(cacheKey, response, range);
+    console.info("Asset history provider refresh", {
+      assetId: asset.id,
+      ticker: normalizeTicker(asset.ticker),
+      period: range,
+      interval,
+      cache: "miss",
+      points: response.points.length,
+      providerDurationMs,
+      durationMs: Date.now() - requestedAt
+    });
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown historical price provider error";
-    return cachedRecords.length > 0
+    const response = cachedRecords.length > 0
       ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, message)
       : buildHistoryResponse(asset, range, interval, provider.name, "error", [], message);
+    rememberHistoryResponse(cacheKey, response, range);
+    return response;
   }
+}
+
+function scheduleHistoricalRefresh(input: Parameters<typeof refreshHistoricalPrices>[0]) {
+  const existing = historyRefreshPromises.get(input.cacheKey);
+  if (existing) return existing;
+
+  const promise = refreshHistoricalPrices(input)
+    .catch((error) => {
+      console.warn("Asset history background refresh failed", {
+        assetId: input.asset.id,
+        ticker: normalizeTicker(input.asset.ticker),
+        period: input.range,
+        interval: input.interval,
+        message: error instanceof Error ? error.message : "Unknown historical refresh error"
+      });
+      return buildHistoryResponse(input.asset, input.range, input.interval, input.provider.name, "stale", input.cachedRecords, "Background refresh failed");
+    })
+    .finally(() => {
+      historyRefreshPromises.delete(input.cacheKey);
+    });
+
+  historyRefreshPromises.set(input.cacheKey, promise);
+  return promise;
+}
+
+function logHistoryResponse(input: {
+  asset: AssetRecord;
+  range: HistoryRange;
+  interval: HistoryInterval;
+  cache: "hit" | "persistent-hit" | "stale" | "miss" | "unsupported" | "deduped";
+  response: HistoricalPriceResponse;
+  startedAt: number;
+}) {
+  console.info("Asset history response", {
+    assetId: input.asset.id,
+    ticker: normalizeTicker(input.asset.ticker),
+    period: input.range,
+    interval: input.interval,
+    cache: input.cache,
+    status: input.response.status,
+    points: input.response.points.length,
+    durationMs: Date.now() - input.startedAt
+  });
+}
+
+export async function getAssetPriceHistory(asset: AssetRecord, requestedRange?: string | AssetPriceHistoryRequest): Promise<HistoricalPriceResponse> {
+  const startedAt = Date.now();
+  const { range, interval, startDate, endDate, forceRefresh } = normalizeHistoryRequest(requestedRange);
+  const profile = getTickerProfile(asset);
+  const provider = getProvider();
+  const cacheKey = buildHistoryCacheKey(asset, range, interval, startDate, endDate);
+  const memoryCache = historyResponseCache.get(cacheKey);
+
+  if (!forceRefresh && memoryCache && Date.now() <= memoryCache.expiresAt) {
+    const response = cloneHistoryResponse(memoryCache.response, "cached");
+    logHistoryResponse({ asset, range, interval, cache: "hit", response, startedAt });
+    return response;
+  }
+
+  const cachedRecords = await listCachedHistoricalPrices(asset, range, interval, startDate, endDate);
+  const supportsHistory = profile.supported && profile.market === "b3";
+
+  if (!supportsHistory) {
+    const response = cachedRecords.length > 0
+      ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Asset is not supported by historical price provider")
+      : buildHistoryResponse(asset, range, interval, provider.name, "unsupported", [], "Asset is not supported by historical price provider");
+    rememberHistoryResponse(cacheKey, response, range);
+    logHistoryResponse({ asset, range, interval, cache: "unsupported", response, startedAt });
+    return response;
+  }
+
+  const hasUsablePersistentCache = cachedRecords.length > 0 && cacheCoversRange(cachedRecords, range, new Date(), startDate);
+  const persistentCacheIsFresh = hasUsablePersistentCache && cacheIsFresh(cachedRecords, range);
+
+  if (!forceRefresh && persistentCacheIsFresh) {
+    const response = buildHistoryResponse(asset, range, interval, provider.name, "cached", cachedRecords);
+    rememberHistoryResponse(cacheKey, response, range);
+    logHistoryResponse({ asset, range, interval, cache: "persistent-hit", response, startedAt });
+    return response;
+  }
+
+  if (!forceRefresh && hasUsablePersistentCache) {
+    const response = buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Exibindo dados salvos enquanto o historico atualiza em segundo plano.");
+    rememberHistoryResponse(cacheKey, response, range);
+    void scheduleHistoricalRefresh({ asset, profile, provider, range, interval, startDate, endDate, cachedRecords, cacheKey, requestedAt: startedAt });
+    logHistoryResponse({ asset, range, interval, cache: "stale", response, startedAt });
+    return response;
+  }
+
+  const refreshInput = { asset, profile, provider, range, interval, startDate, endDate, cachedRecords, cacheKey, requestedAt: startedAt };
+  const existingRefresh = historyRefreshPromises.get(cacheKey);
+  const response = existingRefresh ? await existingRefresh : await scheduleHistoricalRefresh(refreshInput);
+  logHistoryResponse({ asset, range, interval, cache: existingRefresh ? "deduped" : "miss", response, startedAt });
+  return response;
 }

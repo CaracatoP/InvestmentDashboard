@@ -37,6 +37,15 @@ CDI_RATE_FALLBACK=
 CDI_TIMEZONE=America/Sao_Paulo
 CDI_UPDATE_HOUR=8
 ENABLE_SCHEDULERS=true
+AI_ENABLED=true
+AI_PROVIDER=groq
+GROQ_API_KEY=
+GROQ_MODEL=openai/gpt-oss-120b
+GROQ_TIMEOUT_MS=120000
+AI_ANALYSIS_CACHE_MINUTES=30
+AI_MAX_REQUESTS_PER_HOUR=20
+AI_CHAT_MAX_MESSAGES=20
+AI_CHAT_MAX_CONTEXT_TOKENS=2200
 ```
 
 Create `apps/client/.env` from `apps/client/.env.example`.
@@ -46,6 +55,66 @@ VITE_API_URL=http://localhost:4000
 ```
 
 Do not put `MONGODB_URI`, `MARKET_DATA_API_KEY`, passwords, or tokens in the frontend. Only variables prefixed with `VITE_` are available to the Vite client bundle.
+
+## Inteligencia Artificial Com Groq
+
+The AI assistant runs only in the backend. The frontend never receives `GROQ_API_KEY` and never calls Groq directly.
+
+Backend variables:
+
+- `AI_ENABLED=true` enables AI endpoints. Use `AI_ENABLED=false` to keep the app online without AI.
+- `AI_PROVIDER=groq` uses Groq. Use `AI_PROVIDER=disabled` to force safe disabled mode.
+- `GROQ_API_KEY` is the secret key from Groq and must exist only in `apps/server/.env` or Railway variables.
+- `GROQ_MODEL=openai/gpt-oss-120b` is the default model.
+- `GROQ_TIMEOUT_MS=120000` gives long analyses enough time.
+- `AI_ANALYSIS_CACHE_MINUTES=30` reuses cached analyses when the backend context did not change.
+- `AI_MAX_REQUESTS_PER_HOUR=20` applies a simple backend rate limit.
+- `AI_CHAT_MAX_MESSAGES=20` limits messages per chat session.
+- `AI_CHAT_MAX_CONTEXT_TOKENS=2200` caps context sent to the model; the backend also enforces an internal ceiling to keep common calls below roughly 3,000 input tokens.
+
+If the key is missing, the deployment still works and the AI endpoints return friendly disabled responses instead of crashing.
+
+Health check:
+
+```bash
+curl http://localhost:4000/api/ai/health
+```
+
+Main AI endpoints:
+
+- `GET /api/ai/health`
+- `POST /api/ai/analyses`
+- `GET /api/ai/analyses`
+- `POST /api/ai/projections/explain`
+- `POST /api/ai/chat/sessions`
+- `GET /api/ai/chat/sessions`
+- `GET /api/ai/chat/sessions/:sessionId`
+- `POST /api/ai/chat/sessions/:sessionId/messages`
+- `DELETE /api/ai/chat/sessions/:sessionId`
+
+### Assistente Estruturado E Acoes Confirmaveis
+
+The financial assistant returns validated structured JSON instead of raw Markdown. The frontend renders the response as text, metric cards, tables, alerts, lists, suggestions, forms, confirmations, and success/error states. HTML returned by AI is not rendered.
+
+Operational mode uses a safe pending-action flow:
+
+1. The backend detects whether the message is a query or a write request.
+2. Write requests are converted into an `AiPendingAction`.
+3. Missing fields are requested as structured form fields.
+4. A complete preview is shown to the user.
+5. The action runs only after explicit confirmation (`Confirmar operacao` or a clear message such as `confirmo`).
+6. Execution uses authorized backend services and validators, never direct AI writes to MongoDB.
+7. The result is audited in `AiActionAudit` and returned as a structured success/error response.
+
+Initial authorized tools:
+
+- `createMonthlyExpense`
+- `createContribution`
+- `updateMonthlyIncome`
+- `createFinancialGoal`
+- `markExpenseAsCompleted`
+
+Pending actions expire, are tied to a session and idempotency key, and are not executed twice. Destructive operations remain intentionally out of this first version.
 
 ## Structure
 
@@ -72,6 +141,9 @@ Do not put `MONGODB_URI`, `MARKET_DATA_API_KEY`, passwords, or tokens in the fro
 - `PUT /api/settings/allocations`
 - `GET /api/cdi/status`
 - `POST /api/cdi/refresh`
+- `GET /api/ai/health`
+- `POST /api/ai/analyses`
+- `POST /api/ai/projections/explain`
 
 ## Market Data And Schedulers
 
@@ -115,6 +187,15 @@ Required variables:
 - `CDI_TIMEZONE=America/Sao_Paulo`
 - `CDI_UPDATE_HOUR=8`
 - `ENABLE_SCHEDULERS=true`
+- `AI_ENABLED=true`
+- `AI_PROVIDER=groq`
+- `GROQ_API_KEY`
+- `GROQ_MODEL=openai/gpt-oss-120b`
+- `GROQ_TIMEOUT_MS=120000`
+- `AI_ANALYSIS_CACHE_MINUTES=30`
+- `AI_MAX_REQUESTS_PER_HOUR=20`
+- `AI_CHAT_MAX_MESSAGES=20`
+- `AI_CHAT_MAX_CONTEXT_TOKENS=2200`
 
 The backend uses `process.env.PORT` and listens on `0.0.0.0`, so do not configure a fixed production port.
 
@@ -122,6 +203,7 @@ After Railway generates the public domain, test:
 
 ```bash
 curl https://YOUR-RAILWAY-DOMAIN/api/health
+curl https://YOUR-RAILWAY-DOMAIN/api/ai/health
 ```
 
 The health response includes only safe fields:

@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { BarChart } from "../charts/BarChart";
 import { LineChart } from "../charts/LineChart";
+import { AiAnalysisPanel } from "../ai/AiAnalysisPanel";
 import { ConfirmDelete, areaClass, fieldClass, ManagementModal } from "../ui/Management";
 import { PageHeader } from "../ui/PageHeader";
 import { ProgressBar } from "../ui/ProgressBar";
@@ -809,6 +810,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 <ContributionGoalSummary overview={overview} hasConfiguredIncome={hasConfiguredIncome} />
               </section>
               <PlanningSmartSummary alerts={alertItems} insights={insightItems} hasConfiguredIncome={hasConfiguredIncome} />
+              <AiAnalysisPanel year={selected.year} month={selected.month} analysisType="complete" compact />
               <PlanningQuickActions onAddExpense={() => openCreateExpense()} />
               <PlanningInvestmentSummary overview={overview} />
             </>
@@ -828,36 +830,39 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
           ) : null}
 
           {isAnalytics ? (
-          <section className="mb-4 grid gap-4 lg:grid-cols-2">
-            <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-semibold text-ink">Central de alertas</h2>
-                  <p className="mt-1 text-sm text-muted">Avisos gerados automaticamente pelos dados do mes.</p>
+          <>
+            <AiAnalysisPanel year={selected.year} month={selected.month} analysisType="planning" showTypeSelector title="Analises com IA" description="Escolha o tipo de analise e gere uma leitura contextual do seu planejamento." />
+            <section className="mb-4 grid gap-4 lg:grid-cols-2">
+              <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-ink">Central de alertas</h2>
+                    <p className="mt-1 text-sm text-muted">Avisos gerados automaticamente pelos dados do mes.</p>
+                  </div>
+                  <Bell size={18} className="text-accent" />
                 </div>
-                <Bell size={18} className="text-accent" />
-              </div>
-              <div className="mt-3 grid gap-2">
-                {alertItems.length > 0 ? alertItems.map((alert) => (
-                  <p key={alert.id} className={`rounded-lg border px-3 py-2 text-sm ${alertToneClass[alert.type]}`}>{alert.message}</p>
-                )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Nenhum alerta para este mes.</p>}
-              </div>
-            </article>
-            <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-base font-semibold text-ink">Resumo Inteligente</h2>
-                  <p className="mt-1 text-sm text-muted">Insights calculados a partir dos gastos, aportes e dividendos.</p>
+                <div className="mt-3 grid gap-2">
+                  {alertItems.length > 0 ? alertItems.map((alert) => (
+                    <p key={alert.id} className={`rounded-lg border px-3 py-2 text-sm ${alertToneClass[alert.type]}`}>{alert.message}</p>
+                  )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Nenhum alerta para este mes.</p>}
                 </div>
-                <BarChart3 size={18} className="text-aqua" />
-              </div>
-              <div className="mt-3 grid gap-2">
-                {insightItems.length > 0 ? insightItems.map((insight) => (
-                  <p key={insight} className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">{insight}</p>
-                )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Lance gastos e metas para gerar insights automaticos.</p>}
-              </div>
-            </article>
-          </section>
+              </article>
+              <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-ink">Resumo Inteligente</h2>
+                    <p className="mt-1 text-sm text-muted">Insights calculados a partir dos gastos, aportes e dividendos.</p>
+                  </div>
+                  <BarChart3 size={18} className="text-aqua" />
+                </div>
+                <div className="mt-3 grid gap-2">
+                  {insightItems.length > 0 ? insightItems.map((insight) => (
+                    <p key={insight} className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">{insight}</p>
+                  )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Lance gastos e metas para gerar insights automaticos.</p>}
+                </div>
+              </article>
+            </section>
+          </>
           ) : null}
 
           {isGoals ? (

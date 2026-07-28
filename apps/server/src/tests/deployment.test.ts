@@ -92,6 +92,7 @@ test("asset price history endpoint returns a standardized response", async () =>
   try {
     const { port } = server.address() as AddressInfo;
     const response = await fetch(`http://127.0.0.1:${port}/api/assets/${asset.ticker}/price-history?range=1A`);
+    const newEndpointResponse = await fetch(`http://127.0.0.1:${port}/api/assets/${asset.ticker}/history?period=1A`);
     const payload = (await response.json()) as {
       data?: {
         ticker?: string;
@@ -103,6 +104,7 @@ test("asset price history endpoint returns a standardized response", async () =>
     };
 
     assert.equal(response.status, 200);
+    assert.equal(newEndpointResponse.status, 200);
     assert.equal(payload.data?.ticker, "E2EH11");
     assert.equal(payload.data?.range, "1y");
     assert.equal(payload.data?.interval, "1d");

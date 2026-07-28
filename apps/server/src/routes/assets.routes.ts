@@ -4,6 +4,7 @@ import { createAssetRecord, deleteAssetRecord, listAssetPortfolio, showAsset, sh
 export const assetsRoutes = Router();
 
 assetsRoutes.get("/", listAssetPortfolio);
+assetsRoutes.get("/:id/history", showAssetPriceHistory);
 assetsRoutes.get("/:id/price-history", showAssetPriceHistory);
 assetsRoutes.get("/:id", showAsset);
 assetsRoutes.post("/", createAssetRecord);

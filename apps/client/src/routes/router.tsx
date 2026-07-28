@@ -15,6 +15,7 @@ const ProjectionsPage = lazy(() => import("../pages/ProjectionsPage").then((modu
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
 const SettingsPage = lazy(() => import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const RebalancingPage = lazy(() => import("../pages/RebalancingPage").then((module) => ({ default: module.RebalancingPage })));
+const AssistantPage = lazy(() => import("../pages/AssistantPage").then((module) => ({ default: module.AssistantPage })));
 const PlanningOverviewPage = lazy(() => import("../pages/planning/PlanningOverviewPage"));
 const PlanningBudgetPage = lazy(() => import("../pages/planning/PlanningBudgetPage"));
 const PlanningExpensesPage = lazy(() => import("../pages/planning/PlanningExpensesPage"));
@@ -67,6 +68,7 @@ export const router = createBrowserRouter([
       { path: "projecoes", element: lazyPage(<ProjectionsPage />) },
       { path: "calendario", element: <Navigate to="/historico" replace /> },
       { path: "historico", element: lazyPage(<HistoryPage />) },
+      { path: "assistente", element: lazyPage(<AssistantPage />) },
       { path: "configuracoes", element: lazyPage(<SettingsPage />) },
       { path: "alocacao", element: lazyPage(<RebalancingPage />) }
     ]

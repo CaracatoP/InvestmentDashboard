@@ -31,9 +31,15 @@ export const showAssetPriceHistory = asyncHandler(async (request, response) => {
   if (!asset) throw notFound("Asset not found");
 
   try {
-    ok(response, await getAssetPriceHistory(asset, String(request.query.range ?? "1y")));
+    ok(response, await getAssetPriceHistory(asset, {
+      period: String(request.query.period ?? request.query.range ?? "1y"),
+      interval: typeof request.query.interval === "string" ? request.query.interval : undefined,
+      startDate: typeof request.query.startDate === "string" ? request.query.startDate : undefined,
+      endDate: typeof request.query.endDate === "string" ? request.query.endDate : undefined,
+      forceRefresh: String(request.query.forceRefresh ?? "").toLowerCase() === "true"
+    }));
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Unsupported history range")) {
+    if (error instanceof Error && (error.message.startsWith("Unsupported history") || error.message.startsWith("Invalid history"))) {
       throw badRequest(error.message);
     }
 

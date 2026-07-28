@@ -54,9 +54,19 @@ export const env = {
   marketDataApiKey: process.env.MARKET_DATA_API_KEY ?? "",
   marketTimezone: process.env.MARKET_TIMEZONE ?? "America/Sao_Paulo",
   marketRefreshHours: parseList(process.env.MARKET_REFRESH_HOURS ?? "10:00,12:00,14:00,17:00"),
+  marketHistoryCacheTtlMinutes: parseNumber(process.env.MARKET_HISTORY_CACHE_TTL_MINUTES, -1),
   cdiProvider: (process.env.CDI_PROVIDER ?? "bcb").trim().toLowerCase(),
   cdiRateFallback: parseNumber(process.env.CDI_RATE_FALLBACK, 10.65),
   cdiTimezone: process.env.CDI_TIMEZONE ?? "America/Sao_Paulo",
   cdiUpdateHour: parseHour(process.env.CDI_UPDATE_HOUR, 8),
-  enableSchedulers: parseBoolean(process.env.ENABLE_SCHEDULERS, true)
+  enableSchedulers: parseBoolean(process.env.ENABLE_SCHEDULERS, true),
+  aiEnabled: parseBoolean(process.env.AI_ENABLED, true),
+  aiProvider: (process.env.AI_PROVIDER ?? "disabled").trim().toLowerCase(),
+  groqApiKey: process.env.GROQ_API_KEY ?? "",
+  groqModel: process.env.GROQ_MODEL ?? "openai/gpt-oss-120b",
+  groqTimeoutMs: parseNumber(process.env.GROQ_TIMEOUT_MS, 120000),
+  aiAnalysisCacheMinutes: parseNumber(process.env.AI_ANALYSIS_CACHE_MINUTES, 30),
+  aiMaxRequestsPerHour: parseNumber(process.env.AI_MAX_REQUESTS_PER_HOUR, 20),
+  aiChatMaxMessages: parseNumber(process.env.AI_CHAT_MAX_MESSAGES, 20),
+  aiChatMaxContextTokens: parseNumber(process.env.AI_CHAT_MAX_CONTEXT_TOKENS, 12000)
 };

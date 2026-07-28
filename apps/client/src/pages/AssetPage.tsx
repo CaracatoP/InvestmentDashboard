@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { PriceHistoryChart } from "../components/charts/PriceHistoryChart";
 import { DividendCard } from "../components/cards/DividendCard";
@@ -6,7 +6,8 @@ import { OperationCard } from "../components/cards/OperationCard";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { StatCard } from "../components/ui/StatCard";
-import { fetchAsset, fetchAssetPriceHistory } from "../services/api";
+import { fetchAsset, fetchAssetPriceHistory, prefetchAssetPriceHistory } from "../services/api";
+import { onWorkspaceCacheInvalidated } from "../services/cache-invalidation";
 import type { AssetDetails, AssetPriceHistoryResponse } from "../types/investments";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 import { BadgePercent, Coins, Layers3, TrendingUp, Wallet } from "lucide-react";
@@ -30,67 +31,86 @@ function getHistoryStateMessage(history: AssetPriceHistoryResponse | null, error
   return "";
 }
 
+function formatHistoryUpdatedAt(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
 export function AssetPage() {
   const { ticker = "" } = useParams();
   const [asset, setAsset] = useState<AssetDetails | null>(null);
-  const [selectedRange, setSelectedRange] = useState("1y");
+  const [selectedRange, setSelectedRange] = useState("3mo");
   const [priceHistory, setPriceHistory] = useState<AssetPriceHistoryResponse | null>(null);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const historyAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const loadAssetDetails = useCallback(async (showLoading = true) => {
+    if (!ticker) return;
+    if (showLoading) setIsLoading(true);
+    setError("");
 
-    async function loadAsset() {
-      setIsLoading(true);
-      setError("");
-
-      try {
-        const data = await fetchAsset(ticker);
-
-        if (isMounted) {
-          setAsset(data);
-          setIsLoading(false);
-        }
-      } catch {
-        if (isMounted) {
-          setAsset(null);
-          setError("Nao foi possivel carregar este ativo.");
-          setIsLoading(false);
-        }
-      }
+    try {
+      const data = await fetchAsset(ticker);
+      setAsset(data);
+    } catch {
+      setAsset(null);
+      setError("Nao foi possivel carregar este ativo.");
+    } finally {
+      if (showLoading) setIsLoading(false);
     }
-
-    void loadAsset();
-
-    return () => {
-      isMounted = false;
-    };
   }, [ticker]);
 
-  useEffect(() => {
+  const loadPriceHistory = useCallback(async (range: string, options?: { forceRefresh?: boolean }) => {
     if (!ticker) return;
-
+    historyAbortRef.current?.abort();
     const controller = new AbortController();
+    historyAbortRef.current = controller;
     setIsHistoryLoading(true);
     setHistoryError("");
 
-    void fetchAssetPriceHistory(ticker, selectedRange, controller.signal)
-      .then((history) => {
-        setPriceHistory(history);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        setHistoryError(error instanceof Error ? error.message : "Nao foi possivel carregar o historico de precos.");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsHistoryLoading(false);
-      });
+    try {
+      const history = await fetchAssetPriceHistory(ticker, range, { signal: controller.signal, forceRefresh: options?.forceRefresh });
+      setPriceHistory(history);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setHistoryError(error instanceof Error ? error.message : "Nao foi possivel carregar o historico de precos.");
+    } finally {
+      if (!controller.signal.aborted) setIsHistoryLoading(false);
+    }
+  }, [ticker]);
 
-    return () => controller.abort();
-  }, [selectedRange, ticker]);
+  useEffect(() => {
+    void loadAssetDetails();
+  }, [loadAssetDetails]);
+
+  useEffect(() => {
+    return onWorkspaceCacheInvalidated(() => {
+      void loadAssetDetails(false);
+    });
+  }, [loadAssetDetails]);
+
+  useEffect(() => {
+    void loadPriceHistory(selectedRange);
+
+    return () => {
+      historyAbortRef.current?.abort();
+    };
+  }, [loadPriceHistory, selectedRange]);
+
+  useEffect(() => {
+    if (!ticker || !priceHistory?.points.length) return;
+    const nextRange = selectedRange === "3mo" ? "1y" : "3mo";
+    prefetchAssetPriceHistory(ticker, nextRange);
+  }, [priceHistory?.points.length, selectedRange, ticker]);
+
+  useEffect(() => {
+    return () => historyAbortRef.current?.abort();
+  }, []);
 
   if (isLoading) {
     return <div className="rounded-lg border border-line bg-panel p-6 text-sm text-muted">Carregando ativo...</div>;
@@ -108,6 +128,8 @@ export function AssetPage() {
   const profitability = asset.profitabilityPercent ?? asset.returnPercentage;
   const historyMessage = getHistoryStateMessage(priceHistory, historyError);
   const hasHistoricalPrices = (priceHistory?.points.length ?? 0) > 0;
+  const isHistoryRefreshing = isHistoryLoading && hasHistoricalPrices;
+  const historyUpdatedAt = formatHistoryUpdatedAt(priceHistory?.updatedAt ?? priceHistory?.lastUpdatedAt);
 
   return (
     <div>
@@ -144,19 +166,29 @@ export function AssetPage() {
                 {range.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => void loadPriceHistory(selectedRange, { forceRefresh: true })}
+              disabled={isHistoryLoading}
+              className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-xs font-medium text-muted transition hover:border-aqua/50 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60 sm:ml-auto"
+            >
+              {isHistoryLoading ? "Atualizando..." : "Atualizar historico"}
+            </button>
           </div>
 
           <div className="mb-3 min-h-5 text-xs text-muted">
-            {isHistoryLoading ? <span>Carregando historico...</span> : null}
+            {isHistoryLoading && !hasHistoricalPrices ? <span>Carregando historico...</span> : null}
+            {isHistoryRefreshing ? <span>Atualizando historico em segundo plano...</span> : null}
+            {historyError && hasHistoricalPrices ? <span>Exibindo dados salvos. {historyUpdatedAt ? `Ultima atualizacao: ${historyUpdatedAt}.` : ""}</span> : null}
             {!isHistoryLoading && priceHistory?.status === "cached" ? <span>Usando historico em cache.</span> : null}
-            {!isHistoryLoading && priceHistory?.status === "stale" ? <span>Usando historico em cache porque a BRAPI nao respondeu agora.</span> : null}
+            {!isHistoryLoading && priceHistory?.status === "stale" ? <span>Usando historico salvo. {historyUpdatedAt ? `Ultima atualizacao: ${historyUpdatedAt}.` : ""}</span> : null}
             {!isHistoryLoading && priceHistory?.status === "updated" ? (
               <span>Historico atualizado pela {priceHistory.source.toUpperCase()}.</span>
             ) : null}
           </div>
 
           {hasHistoricalPrices ? (
-            <PriceHistoryChart data={priceHistory?.points ?? []} range={priceHistory?.range ?? selectedRange} />
+            <PriceHistoryChart data={priceHistory?.points ?? []} range={priceHistory?.range ?? selectedRange} operations={asset.operations} />
           ) : (
             <div className="rounded-lg border border-line bg-elevated p-6 text-sm text-muted">
               {historyMessage || "Carregando historico de precos..."}
