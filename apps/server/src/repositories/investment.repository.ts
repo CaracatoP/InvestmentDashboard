@@ -42,8 +42,8 @@ const baseAllocations: AllocationRecord[] = [
 function createEmptySettings(): SettingsRecord {
   return {
     theme: "dark",
-    profileName: "",
-    currency: "",
+    profileName: "Investidor",
+    currency: "BRL",
     expectedReturn: 0,
     inflation: 0,
     currentAge: 0,
@@ -62,6 +62,14 @@ function withDefaultAllocations(settings: SettingsRecord): SettingsRecord {
   }
 
   return { ...settings, allocations };
+}
+
+function withDefaultSettings(settings: SettingsRecord): SettingsRecord {
+  const theme = ["dark", "light", "system"].includes(settings.theme) ? settings.theme : "dark";
+  const profileName = settings.profileName?.trim() || "Investidor";
+  const currency = settings.currency === "BRL" ? settings.currency : "BRL";
+
+  return withDefaultAllocations({ ...settings, theme, profileName, currency });
 }
 
 let localAssets: AssetRecord[] = [];
@@ -696,16 +704,27 @@ export async function getSettingsRecord(): Promise<SettingsRecord> {
   if (isDatabaseConnected()) {
     const settings = await SettingsModel.findOne().lean();
     if (settings) {
-      const normalized = withDefaultAllocations(withId(settings) as unknown as SettingsRecord);
-      if (normalized.allocations.length !== ((settings as unknown as SettingsRecord).allocations ?? []).length) {
-        await SettingsModel.findByIdAndUpdate(normalized.id, { allocations: normalized.allocations });
+      const rawSettings = withId(settings) as unknown as SettingsRecord;
+      const normalized = withDefaultSettings(rawSettings);
+      if (
+        normalized.allocations.length !== (rawSettings.allocations ?? []).length ||
+        normalized.theme !== rawSettings.theme ||
+        normalized.profileName !== rawSettings.profileName ||
+        normalized.currency !== rawSettings.currency
+      ) {
+        await SettingsModel.findByIdAndUpdate(normalized.id, {
+          allocations: normalized.allocations,
+          theme: normalized.theme,
+          profileName: normalized.profileName,
+          currency: normalized.currency
+        });
       }
       return normalized;
     }
     return withId(await SettingsModel.create(createEmptySettings()).then((record) => record.toObject())) as unknown as SettingsRecord;
   }
 
-  localSettings = withDefaultAllocations(localSettings);
+  localSettings = withDefaultSettings(localSettings);
   return localSettings;
 }
 

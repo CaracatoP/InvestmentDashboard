@@ -28,6 +28,7 @@ interface InvestmentStore {
   settings: SettingsResponse | null;
   isLoading: boolean;
   error: string | null;
+  setSettings: (settings: SettingsResponse) => void;
   loadWorkspace: () => Promise<void>;
 }
 
@@ -41,6 +42,7 @@ export const useInvestmentStore = create<InvestmentStore>((set) => ({
   settings: null,
   isLoading: false,
   error: null,
+  setSettings: (settings) => set({ settings }),
   loadWorkspace: async () => {
     set({ isLoading: true, error: null });
 

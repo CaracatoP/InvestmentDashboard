@@ -18,6 +18,12 @@ export const createSettingsRecord = asyncHandler(async (request, response) => {
   created(response, await updateSettings(input));
 });
 
+export const updateCurrentSettings = asyncHandler(async (request, response) => {
+  const input = settingsUpdateSchema.parse(request.body);
+  await updateSettings(input);
+  ok(response, await getSettings());
+});
+
 export const updateSettingsRecordController = asyncHandler(async (request, response) => {
   const input = settingsUpdateSchema.parse(request.body);
   ok(response, await updateSettings(input));

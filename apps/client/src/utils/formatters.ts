@@ -1,16 +1,31 @@
-export const currencyFormatter = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-});
+export type CurrencyPreference = "BRL";
 
-export const compactCurrencyFormatter = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-  notation: "compact",
-  maximumFractionDigits: 1
-});
+let currencyPreference: CurrencyPreference = "BRL";
+
+function createCurrencyFormatter(options: Intl.NumberFormatOptions = {}) {
+  const minimumFractionDigits = options.minimumFractionDigits ?? 2;
+  const maximumFractionDigits = options.maximumFractionDigits ?? 2;
+
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: currencyPreference,
+    ...options,
+    minimumFractionDigits: Math.min(minimumFractionDigits, maximumFractionDigits),
+    maximumFractionDigits
+  });
+}
+
+export function setCurrencyPreference(currency?: string | null) {
+  currencyPreference = currency === "BRL" ? currency : "BRL";
+}
+
+export const currencyFormatter = {
+  format: (value: number) => createCurrencyFormatter().format(value)
+};
+
+export const compactCurrencyFormatter = {
+  format: (value: number) => createCurrencyFormatter({ notation: "compact", minimumFractionDigits: 0, maximumFractionDigits: 1 }).format(value)
+};
 
 export const percentFormatter = new Intl.NumberFormat("pt-BR", {
   style: "percent",

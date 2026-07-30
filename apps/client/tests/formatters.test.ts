@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCents, formatDate, parseBrazilianMoneyToCents } from "../src/utils/formatters";
+import { formatCents, formatCompactCurrency, formatCurrency, formatDate, parseBrazilianMoneyToCents, setCurrencyPreference } from "../src/utils/formatters";
 
 test("parseBrazilianMoneyToCents accepts common Brazilian money inputs", () => {
   assert.equal(parseBrazilianMoneyToCents("60"), 6000);
@@ -23,4 +23,15 @@ test("parseBrazilianMoneyToCents rejects invalid values", () => {
 test("formatDate keeps date-only financial events on the same calendar day", () => {
   assert.equal(formatDate("2026-07-28"), "28/07/2026");
   assert.equal(formatDate("2026-07-28T00:00:00.000Z"), "28/07/2026");
+});
+
+test("currency preference keeps BRL as the only safe display currency", () => {
+  setCurrencyPreference("USD");
+  assert.match(formatCurrency(10), /^R\$\s*10,00$/);
+  setCurrencyPreference("BRL");
+  assert.match(formatCurrency(10), /^R\$\s*10,00$/);
+});
+
+test("formatCompactCurrency supports compact values without fraction range errors", () => {
+  assert.match(formatCompactCurrency(1250000), /^R\$\s*1,3/);
 });

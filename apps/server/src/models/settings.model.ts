@@ -11,9 +11,9 @@ const allocationSchema = new Schema(
 
 const settingsSchema = new Schema(
   {
-    theme: { type: String, default: "dark" },
-    profileName: { type: String, default: "", trim: true },
-    currency: { type: String, default: "", trim: true },
+    theme: { type: String, enum: ["dark", "light", "system"], default: "dark" },
+    profileName: { type: String, default: "Investidor", trim: true },
+    currency: { type: String, enum: ["BRL"], default: "BRL", trim: true },
     expectedReturn: { type: Number, default: 0 },
     inflation: { type: Number, default: 0 },
     currentAge: { type: Number, default: 0 },

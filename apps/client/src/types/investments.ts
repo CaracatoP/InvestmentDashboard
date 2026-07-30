@@ -238,8 +238,8 @@ export interface Goal {
 export interface SettingsResponse {
   profile: {
     name: string;
-    currency: string;
-    theme: string;
+    currency: "BRL";
+    theme: "dark" | "light" | "system";
   };
   allocations: Array<{ category: string; targetPercentage: number; priority: number }>;
   categories: Array<{ name: string; color: string; targetPercentage: number }>;

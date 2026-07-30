@@ -241,6 +241,12 @@ export async function fetchSettings() {
   return unwrapData(data);
 }
 
+export async function updateSettingsProfile(input: { profileName: string; theme: SettingsResponse["profile"]["theme"]; currency: SettingsResponse["profile"]["currency"] }) {
+  const { data } = await api.put<ApiEnvelope<SettingsResponse>>("/settings", input);
+  invalidateWorkspaceCache();
+  return unwrapData(data);
+}
+
 export async function fetchMarketStatus() {
   const { data } = await api.get<ApiEnvelope<unknown>>("/market/status");
   return unwrapData(data);

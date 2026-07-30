@@ -13,6 +13,7 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
   const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
+  const profileName = useInvestmentStore((state) => state.settings?.profile.name);
   const isLoading = useInvestmentStore((state) => state.isLoading);
   const error = useInvestmentStore((state) => state.error);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -76,7 +77,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold">Invest Hub</p>
-            <p className="text-xs text-muted">Carteira pessoal</p>
+            <p className="truncate text-xs text-muted">{profileName || "Carteira pessoal"}</p>
           </div>
         </div>
         {navigation()}
@@ -93,7 +94,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">Invest Hub</p>
-                  <p className="truncate text-xs text-muted">Carteira pessoal</p>
+                  <p className="truncate text-xs text-muted">{profileName || "Carteira pessoal"}</p>
                 </div>
               </div>
               <button
