@@ -29,7 +29,7 @@ export const compactCurrencyFormatter = {
 
 export const percentFormatter = new Intl.NumberFormat("pt-BR", {
   style: "percent",
-  maximumFractionDigits: 1
+  maximumFractionDigits: 2
 });
 
 export function formatCurrency(value: number) {

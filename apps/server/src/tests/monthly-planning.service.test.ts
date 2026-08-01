@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addMonthlyExpense,
+  calculateBudgetDistribution,
   calculateCategoryLimit,
   calculateMonthlyPlanning,
   copyPreviousMonthlyPlan,
@@ -16,6 +17,99 @@ import type { MonthlyExpenseRecord, MonthlyPlanRecord } from "../types/investmen
 test("calculateCategoryLimit derives percentage and fixed budgets in cents", () => {
   assert.equal(calculateCategoryLimit({ budgetType: "percentage", percentage: 10, fixedAmountInCents: null }, 350000), 35000);
   assert.equal(calculateCategoryLimit({ budgetType: "fixed", percentage: 0, fixedAmountInCents: 12050 }, 350000), 12050);
+});
+
+test("budget distribution sums only percentage sectors correctly", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 200000,
+    sectors: [
+      { budgetType: "percentage", percentage: 20, fixedAmountInCents: null },
+      { budgetType: "percentage", percentage: 30, fixedAmountInCents: null }
+    ]
+  });
+
+  assert.equal(distribution.distributedPercentage, 50);
+  assert.equal(distribution.availablePercentage, 50);
+  assert.equal(distribution.distributedAmountInCents, 100000);
+  assert.equal(distribution.availableAmountInCents, 100000);
+  assert.equal(distribution.status, "within-limit");
+});
+
+test("budget distribution converts fixed sectors into income percentage", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 200000,
+    sectors: [
+      { budgetType: "fixed", percentage: 0, fixedAmountInCents: 30000 },
+      { budgetType: "fixed", percentage: 0, fixedAmountInCents: 150000 }
+    ]
+  });
+
+  assert.equal(distribution.distributedPercentage, 90);
+  assert.equal(distribution.availablePercentage, 10);
+  assert.equal(distribution.distributedAmountInCents, 180000);
+  assert.equal(distribution.availableAmountInCents, 20000);
+});
+
+test("budget distribution supports mixed fixed and percentage sectors", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 400000,
+    sectors: [
+      { budgetType: "fixed", percentage: 0, fixedAmountInCents: 100000 },
+      { budgetType: "percentage", percentage: 30, fixedAmountInCents: null }
+    ]
+  });
+
+  assert.equal(distribution.distributedPercentage, 55);
+  assert.equal(distribution.availablePercentage, 45);
+  assert.equal(distribution.distributedAmountInCents, 220000);
+  assert.equal(distribution.availableAmountInCents, 180000);
+});
+
+test("budget distribution reports over limit without capping percentages", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 200000,
+    sectors: [
+      { budgetType: "fixed", percentage: 0, fixedAmountInCents: 150000 },
+      { budgetType: "percentage", percentage: 40, fixedAmountInCents: null }
+    ]
+  });
+
+  assert.equal(distribution.distributedPercentage, 115);
+  assert.equal(distribution.availablePercentage, 0);
+  assert.equal(distribution.excessPercentage, 15);
+  assert.equal(distribution.excessAmountInCents, 30000);
+  assert.equal(distribution.status, "over-limit");
+});
+
+test("budget distribution requires income for fixed sectors when income is zero", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 0,
+    sectors: [{ budgetType: "fixed", percentage: 0, fixedAmountInCents: 30000 }]
+  });
+
+  assert.equal(distribution.distributedPercentage, null);
+  assert.equal(distribution.availablePercentage, null);
+  assert.equal(distribution.hasFixedBudgetWithoutIncome, true);
+  assert.equal(distribution.status, "income-required");
+  assert.equal(Number.isNaN(distribution.excessPercentage), false);
+  assert.equal(Number.isFinite(distribution.excessPercentage), true);
+});
+
+test("budget distribution recalculates fixed sector percentages when income changes", () => {
+  const sectors = [{ budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 30000 }];
+
+  assert.equal(calculateBudgetDistribution({ incomeInCents: 200000, sectors }).distributedPercentage, 15);
+  assert.equal(calculateBudgetDistribution({ incomeInCents: 300000, sectors }).distributedPercentage, 10);
+});
+
+test("budget distribution rounds recurring decimals to two decimal places", () => {
+  const distribution = calculateBudgetDistribution({
+    incomeInCents: 300000,
+    sectors: [{ budgetType: "fixed", percentage: 0, fixedAmountInCents: 100000 }]
+  });
+
+  assert.equal(distribution.distributedPercentage, 33.33);
+  assert.equal(distribution.availablePercentage, 66.67);
 });
 
 test("monthly summary separates completed and planned expenses", () => {

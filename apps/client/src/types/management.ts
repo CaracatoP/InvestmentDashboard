@@ -161,7 +161,7 @@ export interface MonthlyCategorySummary extends MonthlyPlanCategoryRecord {
   usedPercent: number;
   state: "ok" | "attention" | "near-limit" | "over-limit";
   stateLabel: string;
-  plannedPercentOfIncome: number;
+  plannedPercentOfIncome: number | null;
 }
 
 export interface MonthlyPlanningOverview {
@@ -178,9 +178,15 @@ export interface MonthlyPlanningOverview {
     remainingBudgetInCents: number;
     remainingBudgetAfterPlannedInCents: number;
     usedIncomePercent: number;
-    allocatedPercentage: number;
-    unallocatedPercentage: number;
+    allocatedPercentage: number | null;
+    unallocatedPercentage: number | null;
     percentageOverage: number;
+    allocationStatus: "within-limit" | "fully-distributed" | "over-limit" | "income-required";
+    allocationStatusLabel: string;
+    allocationRequiresIncome: boolean;
+    allocatedAmountInCents: number;
+    unallocatedAmountInCents: number;
+    allocationOverageAmountInCents: number;
     totalIncomeWithDividendsInCents: number;
     availableToInvestInCents: number;
     monthlyContributionGoalInCents: number;

@@ -285,6 +285,33 @@ function stateTone(state: string) {
   return "text-accent";
 }
 
+function allocationTone(status: MonthlyPlanningOverview["summary"]["allocationStatus"]) {
+  if (status === "over-limit") return "text-rose";
+  if (status === "income-required") return "text-amber";
+  if (status === "fully-distributed") return "text-accent";
+  return "text-aqua";
+}
+
+function formatOptionalPercentage(value: number | null) {
+  return value === null ? "Nao disponivel" : formatPercentage(value);
+}
+
+function formatIncomePercentage(value: number | null) {
+  return value === null ? "Cadastre renda" : formatPercentage(value);
+}
+
+function budgetDistributionBalanceText(summary: MonthlyPlanningOverview["summary"]) {
+  if (summary.allocationRequiresIncome) return "Ainda disponivel: Nao disponivel";
+  if (summary.percentageOverage > 0) return `Excesso: ${formatPercentage(summary.percentageOverage)}`;
+  return `Ainda disponivel: ${formatOptionalPercentage(summary.unallocatedPercentage)}`;
+}
+
+function budgetDistributionAmountText(summary: MonthlyPlanningOverview["summary"]) {
+  if (summary.allocationRequiresIncome) return "Cadastre a renda mensal para calcular os percentuais dos setores fixos.";
+  if (summary.percentageOverage > 0) return `Excesso em valor: ${formatCents(summary.allocationOverageAmountInCents)}`;
+  return `Valor ainda disponivel: ${formatCents(summary.unallocatedAmountInCents)}`;
+}
+
 function centsToChartValue(valueInCents: number) {
   return Math.round(valueInCents) / 100;
 }
@@ -907,7 +934,10 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               <div>
                 <h2 className="text-base font-semibold text-ink">Controle das porcentagens</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Total distribuido: {formatPercentage(overview.summary.allocatedPercentage)} Â· Ainda disponivel: {formatPercentage(overview.summary.unallocatedPercentage)}
+                  Total distribuido: {formatOptionalPercentage(overview.summary.allocatedPercentage)} · {budgetDistributionBalanceText(overview.summary)}
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Estado: <span className={allocationTone(overview.summary.allocationStatus)}>{overview.summary.allocationStatusLabel}</span> · {budgetDistributionAmountText(overview.summary)}
                 </p>
               </div>
               <button type="button" onClick={openCreateCategory} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
@@ -946,7 +976,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 </div>
                 <div className="mt-4 grid gap-2 text-sm text-muted">
                   <p className="flex justify-between gap-3"><span>Planejado</span><span className="text-ink"><MoneyValue value={formatCents(category.limitInCents)} /></span></p>
-                  {category.budgetType === "fixed" ? <p className="flex justify-between gap-3"><span>% da renda</span><span className="text-ink">{formatPercentage(category.plannedPercentOfIncome)}</span></p> : null}
+                  {category.budgetType === "fixed" ? <p className="flex justify-between gap-3"><span>% da renda</span><span className="text-ink">{formatIncomePercentage(category.plannedPercentOfIncome)}</span></p> : null}
                   <p className="flex justify-between gap-3"><span>Gasto realizado</span><span className="text-ink"><MoneyValue value={formatCents(category.completedInCents)} /></span></p>
                   <p className="flex justify-between gap-3"><span>Gasto previsto</span><span className="text-ink"><MoneyValue value={formatCents(category.plannedInCents)} /></span></p>
                   <p className="flex justify-between gap-3"><span>Restante atual</span><span className={category.remainingInCents < 0 ? "text-rose" : "text-accent"}><MoneyValue value={formatCents(category.remainingInCents)} /></span></p>
@@ -1421,3 +1451,4 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     </div>
   );
 }
+

@@ -48,7 +48,22 @@ export interface MonthlyCategorySummary extends MonthlyPlanCategoryRecord {
   usedPercent: number;
   state: "ok" | "attention" | "near-limit" | "over-limit";
   stateLabel: string;
-  plannedPercentOfIncome: number;
+  plannedPercentOfIncome: number | null;
+}
+
+type BudgetDistributionStatus = "within-limit" | "fully-distributed" | "over-limit" | "income-required";
+
+export interface BudgetDistributionSummary {
+  distributedPercentage: number | null;
+  availablePercentage: number | null;
+  excessPercentage: number;
+  distributedAmountInCents: number;
+  availableAmountInCents: number;
+  excessAmountInCents: number;
+  hasConfiguredIncome: boolean;
+  hasFixedBudgetWithoutIncome: boolean;
+  status: BudgetDistributionStatus;
+  statusLabel: string;
 }
 
 export interface MonthlyPlanningOverview {
@@ -65,9 +80,15 @@ export interface MonthlyPlanningOverview {
     remainingBudgetInCents: number;
     remainingBudgetAfterPlannedInCents: number;
     usedIncomePercent: number;
-    allocatedPercentage: number;
-    unallocatedPercentage: number;
+    allocatedPercentage: number | null;
+    unallocatedPercentage: number | null;
     percentageOverage: number;
+    allocationStatus: BudgetDistributionStatus;
+    allocationStatusLabel: string;
+    allocationRequiresIncome: boolean;
+    allocatedAmountInCents: number;
+    unallocatedAmountInCents: number;
+    allocationOverageAmountInCents: number;
     totalIncomeWithDividendsInCents: number;
     availableToInvestInCents: number;
     monthlyContributionGoalInCents: number;
@@ -206,6 +227,64 @@ export function calculateCategoryLimit(category: Pick<MonthlyPlanCategoryRecord,
   }
 
   return category.fixedAmountInCents ?? 0;
+}
+
+function roundPercentage(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function getBudgetDistributionStatus(distributedPercentage: number | null): Pick<BudgetDistributionSummary, "status" | "statusLabel"> {
+  if (distributedPercentage === null) return { status: "income-required", statusLabel: "Renda nao configurada" };
+  if (distributedPercentage > 100) return { status: "over-limit", statusLabel: "Acima do limite" };
+  if (distributedPercentage === 100) return { status: "fully-distributed", statusLabel: "Totalmente distribuido" };
+  return { status: "within-limit", statusLabel: "Dentro do limite" };
+}
+
+export function calculateBudgetDistribution(input: {
+  incomeInCents: number;
+  sectors: Array<Pick<MonthlyPlanCategoryRecord, "budgetType" | "percentage" | "fixedAmountInCents">>;
+}): BudgetDistributionSummary {
+  const incomeInCents = Math.max(Math.round(input.incomeInCents), 0);
+  const hasConfiguredIncome = incomeInCents > 0;
+  const hasFixedBudget = input.sectors.some((sector) => sector.budgetType === "fixed" && (sector.fixedAmountInCents ?? 0) > 0);
+  const hasFixedBudgetWithoutIncome = hasFixedBudget && !hasConfiguredIncome;
+  const directPercentage = sum(input.sectors.filter((sector) => sector.budgetType === "percentage").map((sector) => sector.percentage ?? 0));
+  const fixedAmountInCents = sum(input.sectors.filter((sector) => sector.budgetType === "fixed").map((sector) => sector.fixedAmountInCents ?? 0));
+  const percentageAmountInCents = sum(input.sectors.filter((sector) => sector.budgetType === "percentage").map((sector) => calculateCategoryLimit(sector, incomeInCents)));
+  const distributedAmountInCents = percentageAmountInCents + fixedAmountInCents;
+
+  if (hasFixedBudgetWithoutIncome) {
+    return {
+      distributedPercentage: null,
+      availablePercentage: null,
+      excessPercentage: 0,
+      distributedAmountInCents,
+      availableAmountInCents: 0,
+      excessAmountInCents: 0,
+      hasConfiguredIncome,
+      hasFixedBudgetWithoutIncome,
+      ...getBudgetDistributionStatus(null)
+    };
+  }
+
+  const fixedEquivalentPercentage = hasConfiguredIncome ? (fixedAmountInCents / incomeInCents) * 100 : 0;
+  const distributedPercentage = roundPercentage(directPercentage + fixedEquivalentPercentage);
+  const availablePercentage = roundPercentage(Math.max(100 - distributedPercentage, 0));
+  const excessPercentage = roundPercentage(Math.max(distributedPercentage - 100, 0));
+  const availableAmountInCents = hasConfiguredIncome ? Math.max(incomeInCents - distributedAmountInCents, 0) : 0;
+  const excessAmountInCents = hasConfiguredIncome ? Math.max(distributedAmountInCents - incomeInCents, 0) : 0;
+
+  return {
+    distributedPercentage,
+    availablePercentage,
+    excessPercentage,
+    distributedAmountInCents,
+    availableAmountInCents,
+    excessAmountInCents,
+    hasConfiguredIncome,
+    hasFixedBudgetWithoutIncome,
+    ...getBudgetDistributionStatus(distributedPercentage)
+  };
 }
 
 function sum(values: number[]) {
@@ -694,21 +773,25 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
       usedPercent,
       state,
       stateLabel: getCategoryStateLabel(state),
-      plannedPercentOfIncome: percentage(limitInCents, plan.incomeInCents)
+      plannedPercentOfIncome: plan.incomeInCents > 0 ? roundPercentage(percentage(limitInCents, plan.incomeInCents)) : category.budgetType === "percentage" ? category.percentage : null
     };
   });
 
   const totalPlannedInCents = sum(categories.map((category) => category.limitInCents));
   const completedInCents = sum(activeExpenses.filter((expense) => expense.status === "completed").map((expense) => expense.amountInCents));
   const plannedExpensesInCents = sum(activeExpenses.filter((expense) => expense.status === "planned").map((expense) => expense.amountInCents));
-  const allocatedPercentage = sum(plan.categories.filter((category) => category.budgetType === "percentage").map((category) => category.percentage));
-  const percentageOverage = Math.max(allocatedPercentage - 100, 0);
+  const budgetDistribution = calculateBudgetDistribution({ incomeInCents: plan.incomeInCents, sectors: plan.categories });
+  const allocatedPercentage = budgetDistribution.distributedPercentage;
+  const percentageOverage = budgetDistribution.excessPercentage;
   const warnings = [];
 
+  if (budgetDistribution.hasFixedBudgetWithoutIncome) {
+    warnings.push("Cadastre a renda mensal para calcular os percentuais dos setores fixos.");
+  }
   if (percentageOverage > 0) {
     warnings.push(`O planejamento ultrapassa a renda mensal em ${percentageOverage.toFixed(2)}%.`);
   }
-  if (totalPlannedInCents > plan.incomeInCents) {
+  if (plan.incomeInCents > 0 && totalPlannedInCents > plan.incomeInCents) {
     warnings.push("O total planejado em reais ultrapassa a renda mensal.");
   }
   const remainingIncomeAfterPlannedInCents = totalIncomeWithDividendsInCents - completedInCents - plannedExpensesInCents;
@@ -733,8 +816,14 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
       remainingBudgetAfterPlannedInCents: totalPlannedInCents - completedInCents - plannedExpensesInCents,
       usedIncomePercent: percentage(completedInCents, totalIncomeWithDividendsInCents),
       allocatedPercentage,
-      unallocatedPercentage: Math.max(100 - allocatedPercentage, 0),
+      unallocatedPercentage: budgetDistribution.availablePercentage,
       percentageOverage,
+      allocationStatus: budgetDistribution.status,
+      allocationStatusLabel: budgetDistribution.statusLabel,
+      allocationRequiresIncome: budgetDistribution.hasFixedBudgetWithoutIncome,
+      allocatedAmountInCents: budgetDistribution.distributedAmountInCents,
+      unallocatedAmountInCents: budgetDistribution.availableAmountInCents,
+      allocationOverageAmountInCents: budgetDistribution.excessAmountInCents,
       totalIncomeWithDividendsInCents,
       availableToInvestInCents,
       monthlyContributionGoalInCents,

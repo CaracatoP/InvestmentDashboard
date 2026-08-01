@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCents, formatCompactCurrency, formatCurrency, formatDate, parseBrazilianMoneyToCents, setCurrencyPreference } from "../src/utils/formatters";
+import { formatCents, formatCompactCurrency, formatCurrency, formatDate, formatPercentage, parseBrazilianMoneyToCents, setCurrencyPreference } from "../src/utils/formatters";
 
 test("parseBrazilianMoneyToCents accepts common Brazilian money inputs", () => {
   assert.equal(parseBrazilianMoneyToCents("60"), 6000);
@@ -34,4 +34,10 @@ test("currency preference keeps BRL as the only safe display currency", () => {
 
 test("formatCompactCurrency supports compact values without fraction range errors", () => {
   assert.match(formatCompactCurrency(1250000), /^R\$\s*1,3/);
+});
+
+test("formatPercentage keeps integers clean and recurring decimals readable", () => {
+  assert.equal(formatPercentage(15), "15%");
+  assert.equal(formatPercentage(12.5), "12,5%");
+  assert.equal(formatPercentage(33.33), "33,33%");
 });
