@@ -3,8 +3,8 @@ import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, Management
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { MoneyValue } from "../components/ui/ValueDisplay";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { assetRecordsApi, operationRecordsApi } from "../services/api";
-import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AssetRecord, OperationRecord, OperationType } from "../types/management";
 import { formatCurrency } from "../utils/formatters";
 
@@ -19,8 +19,19 @@ const emptyOperation: OperationRecord = {
   notes: ""
 };
 
+function operationIdentity(operation: OperationRecord) {
+  return operation.id ?? `${operation.type}-${operation.date}-${operation.assetTicker}`;
+}
+
+function sortOperations(items: OperationRecord[]) {
+  return [...items].sort((left, right) => {
+    const byDate = new Date(String(right.date)).getTime() - new Date(String(left.date)).getTime();
+    if (byDate !== 0) return byDate;
+    return `${left.assetTicker}-${left.type}`.localeCompare(`${right.assetTicker}-${right.type}`, "pt-BR");
+  });
+}
+
 export function OperationsPage() {
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [operations, setOperations] = useState<OperationRecord[]>([]);
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [search, setSearch] = useState("");
@@ -32,13 +43,15 @@ export function OperationsPage() {
 
   async function loadData() {
     const [operationData, assetData] = await Promise.all([operationRecordsApi.list(), assetRecordsApi.list()]);
-    setOperations(operationData);
+    setOperations(sortOperations(operationData));
     setAssets(assetData);
   }
 
   useEffect(() => {
     void loadData();
   }, []);
+
+  useWorkspaceInvalidation(["operations", "assets", "portfolio"], () => loadData());
 
   const types = useMemo(() => ["Todos", ...Array.from(new Set(operations.map((operation) => operation.type)))], [operations]);
   const filtered = useMemo(() => {
@@ -70,17 +83,21 @@ export function OperationsPage() {
     event.preventDefault();
     const asset = assets.find((item) => item.ticker === form.assetTicker);
     const payload = { ...form, assetId: asset?.id, assetTicker: form.assetTicker?.toUpperCase(), totalValue: form.quantity * form.price };
-    if (editing?.id) await operationRecordsApi.update(editing.id, payload);
-    else await operationRecordsApi.create(payload);
+    const saved = editing?.id
+      ? await operationRecordsApi.update(editing.id, payload)
+      : await operationRecordsApi.create(payload);
+
+    setOperations((current) => sortOperations([...current.filter((operation) => operationIdentity(operation) !== operationIdentity(saved)), saved]));
     setIsModalOpen(false);
-    await Promise.all([loadData(), loadWorkspace()]);
+    setEditing(null);
+    setForm(emptyOperation);
   }
 
   async function confirmDelete() {
     if (!deleteTarget?.id) return;
     await operationRecordsApi.remove(deleteTarget.id);
+    setOperations((current) => current.filter((operation) => operationIdentity(operation) !== operationIdentity(deleteTarget)));
     setDeleteTarget(null);
-    await Promise.all([loadData(), loadWorkspace()]);
   }
 
   return (

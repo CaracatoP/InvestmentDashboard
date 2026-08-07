@@ -1,6 +1,6 @@
 import { Bot, Calculator, Clock, Coins, RefreshCw, Target, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { LineChart } from "../components/charts/LineChart";
+import { LazyLineChart } from "../components/charts/LazyCharts";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
@@ -205,7 +205,7 @@ export function ProjectionsPage() {
             </section>
           ) : null}
           <ChartCard title="Grafico de crescimento">
-            <LineChart
+            <LazyLineChart
               data={projection?.series ?? []}
               xAxisKey="age"
               series={[

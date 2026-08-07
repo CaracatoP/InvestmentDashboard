@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { beforeEach, test } from "node:test";
 import { DisabledAiProvider } from "../ai/providers/disabled.provider";
 import { buildConversationContext, detectConversationIntent } from "../ai/builders/conversation-context.builder";
 import { buildContextHash } from "../ai/utils/ai-context-hash";
@@ -8,8 +8,14 @@ import { createFallbackAnalysis, parseAiAnalysis, parseAiAnalysisStrict, parseAi
 import { filterSensitiveData } from "../ai/utils/ai-sensitive-data-filter";
 import { handleOperationalChatMessage } from "../ai/tools/ai-action-tools";
 import { addAiChatMessage, findActiveAiPendingAction, updateAiPendingAction } from "../repositories/ai.repository";
+import { resetSettingsRecord } from "../repositories/investment.repository";
 import { listDividends, listOperations } from "../repositories/investment.repository";
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
+import { getSettings } from "../services/portfolio.service";
+
+beforeEach(async () => {
+  await resetSettingsRecord();
+});
 
 test("disabled AI provider reports safe disabled health", async () => {
   const provider = new DisabledAiProvider("off");
@@ -121,6 +127,16 @@ test("investment chat context provides compact portfolio summary", async () => {
   assert.ok(estimateAiTokens(serialized) < 1300);
 });
 
+test("settings chat context exposes safe configuration scope", async () => {
+  const { intent, context } = await buildConversationContext("Quais configuracoes estao ativas?");
+  const serialized = stringifyContextForAi(context, 1000);
+
+  assert.equal(intent, "settings");
+  assert.match(serialized, /"scope":\s*"settings"/);
+  assert.match(serialized, /"profile"/);
+  assert.match(serialized, /"ai"/);
+});
+
 test("operational chat creates pending contribution and requires confirmation", async () => {
   const sessionId = "ai-action-contribution-test";
   const prepared = await handleOperationalChatMessage({ sessionId, message: "Registre um aporte de R$ 2.000,00." });
@@ -217,6 +233,37 @@ test("monthly income does not invent description fields", async () => {
   assert.equal(action?.extractedFields.month, 8);
   assert.equal(action?.extractedFields.incomeInCents, 450000);
   assert.equal("description" in (action?.extractedFields ?? {}), false);
+});
+
+test("operational chat prepares settings update with confirmation", async () => {
+  const sessionId = "ai-action-settings-update";
+  const result = await handleOperationalChatMessage({ sessionId, message: "Mude meu nome para Joao Gabriel e troque para tema claro." });
+  const action = await findActiveAiPendingAction(sessionId);
+
+  assert.equal(result.handled, true);
+  assert.equal(result.response.responseType, "confirmation");
+  assert.equal(action?.toolName, "updateSettingsProfile");
+  assert.equal(action?.status, "awaiting_confirmation");
+  assert.equal(action?.extractedFields.profileName, "Joao Gabriel");
+  assert.equal(action?.extractedFields.theme, "light");
+});
+
+test("chat confirmation executes settings update with synchronization metadata", async () => {
+  const session = await createChatSession("Teste configuracoes IA");
+  assert.ok(session.id);
+
+  const first = await sendChatMessage(session.id, "Mude meu nome para Joao e troque para tema claro.");
+  assert.equal(first.assistantMessage.structuredResponse?.responseType, "confirmation");
+
+  const confirmed = await sendChatMessage(session.id, "confirmo");
+  assert.equal(confirmed.assistantMessage.structuredResponse?.responseType, "success");
+  assert.deepEqual(confirmed.assistantMessage.structuredResponse?.metadata.affectedDomains, ["settings"]);
+  assert.equal(confirmed.assistantMessage.structuredResponse?.metadata.mutationKey, "settings.profile.update");
+  assert.deepEqual(confirmed.assistantMessage.structuredResponse?.metadata.affectedEntities, [{ type: "settings" }]);
+
+  const settings = await getSettings();
+  assert.equal(settings.profile.name, "Joao");
+  assert.equal(settings.profile.theme, "light");
 });
 
 test("missing required operational fields stay collecting and cannot be confirmed", async () => {

@@ -1,9 +1,11 @@
 import { randomUUID } from "crypto";
 import {
   createMonthlyExpense,
+  createMonthlyExpenseIfMissing,
   deleteMonthlyExpense,
   deleteMonthlyExpensesByRecurrenceId,
   findMonthlyExpenseById,
+  findMonthlyExpenseByIdempotencyKey,
   findMonthlyPlanById,
   findMonthlyPlanByMonth,
   listAllMonthlyExpenses,
@@ -14,20 +16,43 @@ import {
   updateMonthlyPlan,
   upsertMonthlyPlan
 } from "../repositories/monthly-planning.repository";
-import { listCashBoxes, listContributions, listDividends } from "../repositories/investment.repository";
+import {
+  createOperation,
+  deleteOperation,
+  findAssetById,
+  findAssetByTicker,
+  findCashBoxById,
+  findOperationByPlanningExpenseId,
+  findOperationById,
+  listCashBoxes,
+  listContributions,
+  listDividends,
+  updateOperation
+} from "../repositories/investment.repository";
 import type {
+  CashBoxMovementRecord,
   CashBoxRecord,
   ContributionRecord,
   DividendRecord,
   MonthlyBudgetType,
+  MonthlyExpenseAllocationKind,
+  MonthlyExpenseIntegrationRecord,
   MonthlyExpenseRecord,
+  MonthlyExpenseInvestmentDestination,
   MonthlyExpenseStatus,
   MonthlyExpenseType,
   MonthlyFinancialGoalRecord,
   MonthlyPlanCategoryRecord,
-  MonthlyPlanRecord
+  MonthlyPlanRecord,
+  OperationRecord
 } from "../types/investment";
 import { badRequest, notFound } from "../utils/http-error";
+import {
+  addCashBoxMovement,
+  findCashBoxMovementByPlanningExpenseId,
+  removeCashBoxMovement,
+  updateCashBoxMovement
+} from "./cash-box.service";
 import { getDashboard } from "./portfolio.service";
 
 type MonthlyPlanCategoryInput = Omit<MonthlyPlanCategoryRecord, "id"> & { id?: string };
@@ -38,6 +63,21 @@ type MonthlyExpenseInput = Omit<MonthlyExpenseRecord, "id" | "status" | "expense
   Partial<Pick<MonthlyExpenseRecord, "status" | "expenseType" | "recurring">>;
 type MonthlyExpenseCreateInput = Omit<MonthlyExpenseInput, "planId">;
 type MonthlyExpensePatchInput = Partial<MonthlyExpenseInput>;
+type MonthlyExpenseCompletionInput = Pick<MonthlyExpenseRecord, "completedAt">;
+type NormalizeExpenseOptions = { allowFutureCompletion?: boolean; defaultCompletedAt?: string | null };
+type ExpenseIntegrationInput = NonNullable<MonthlyExpenseRecord["integration"]>;
+
+export interface MonthlyExpenseCompletionResult {
+  expense: MonthlyExpenseRecord;
+  overview: MonthlyPlanningOverview;
+  summary: {
+    completedExpensesInCents: number;
+    plannedExpensesInCents: number;
+    balanceInCents: number;
+  };
+  alreadyCompleted: boolean;
+  message: string;
+}
 
 export interface MonthlyCategorySummary extends MonthlyPlanCategoryRecord {
   limitInCents: number;
@@ -95,6 +135,10 @@ export interface MonthlyPlanningOverview {
     contributedThisMonthInCents: number;
     contributionGoalPercent: number;
     contributionGoalRemainingInCents: number;
+    completedConsumptionInCents: number;
+    completedInvestmentsInCents: number;
+    plannedConsumptionInCents: number;
+    plannedInvestmentsInCents: number;
     canSpendPerDayInCents: number;
     remainingDays: number;
   };
@@ -114,6 +158,8 @@ export interface MonthlyPlanningOverview {
     profitabilityPercent: number;
     monthlyDividendYieldPercent: number;
     contributionsThisMonthInCents: number;
+    assetContributionsThisMonthInCents: number;
+    cashBoxContributionsThisMonthInCents: number;
     dividendsThisMonthInCents: number;
     plannedSimulationAmountInCents: number;
     simulatedContributionTotalInCents: number;
@@ -144,6 +190,9 @@ const paymentMethodLabels: Record<string, string> = {
   "conta bancaria": "Conta bancaria",
   "conta bancária": "Conta bancaria"
 };
+
+const monthlyExpenseCompletionLocks = new Map<string, Promise<MonthlyExpenseCompletionResult>>();
+const integratedExpenseMutationLocks = new Map<string, Promise<MonthlyExpenseRecord>>();
 
 export function getLocalTimestampWithOffset(date = new Date()) {
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -212,11 +261,82 @@ function normalizePaymentMethod(paymentMethod?: string | null) {
   return paymentMethodLabels[key] ?? value;
 }
 
+function trimNullable(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isInvestmentCategoryRecord(category?: Pick<MonthlyPlanCategoryRecord, "id" | "name"> | null) {
+  if (!category) return false;
+  return category.id === "investimentos" || normalizeText(category.name) === "investimentos";
+}
+
+function toMoneyValue(amountInCents: number) {
+  return Math.round(amountInCents) / 100;
+}
+
+function expenseReferenceDate(expense: Pick<MonthlyExpenseRecord, "date" | "completedAt">) {
+  return trimNullable(expense.completedAt)?.slice(0, 10) ?? expense.date;
+}
+
+function clearLinkedEntityFromIntegration(integration?: MonthlyExpenseIntegrationRecord | null): MonthlyExpenseIntegrationRecord | null {
+  if (!integration) return null;
+
+  return {
+    ...integration,
+    linkedEntityType: null,
+    linkedEntityId: null
+  };
+}
+
+function isIntegratedInvestmentExpense(expense?: MonthlyExpenseRecord | null) {
+  return expense?.allocationKind === "investment_contribution" || expense?.allocationKind === "cash_box_contribution";
+}
+
 export function isFutureExpense(date: string, time: string, now = new Date()) {
   return parseLocalExpenseDate(date, time).getTime() > now.getTime();
 }
 
-export function determineExpenseStatus(date: string, time: string, requestedStatus?: MonthlyExpenseStatus, now = new Date()): MonthlyExpenseStatus {
+function normalizeTimestampWithOffset(timestamp: string) {
+  const value = new Date(timestamp);
+  if (Number.isNaN(value.getTime())) throw badRequest("Invalid completedAt timestamp");
+  return getLocalTimestampWithOffset(value);
+}
+
+function occurrenceTimestamp(date: string, time: string) {
+  return getLocalTimestampWithOffset(parseLocalExpenseDate(date, time));
+}
+
+function resolveCompletedAt(
+  date: string,
+  time: string,
+  status: MonthlyExpenseStatus,
+  requestedCompletedAt: string | null | undefined,
+  existing?: MonthlyExpenseRecord | null,
+  options: NormalizeExpenseOptions = {}
+) {
+  if (status !== "completed") return null;
+  if (requestedCompletedAt) return normalizeTimestampWithOffset(requestedCompletedAt);
+  if (existing?.status === "completed") return existing.completedAt ?? null;
+  return options.defaultCompletedAt ?? occurrenceTimestamp(date, time);
+}
+
+export function determineExpenseStatus(
+  date: string,
+  time: string,
+  requestedStatus?: MonthlyExpenseStatus,
+  now = new Date(),
+  options: { allowFutureCompletion?: boolean; completedAt?: string | null; wasCompleted?: boolean } = {}
+): MonthlyExpenseStatus {
+  if (requestedStatus === "completed" && (options.allowFutureCompletion || options.wasCompleted || Boolean(options.completedAt))) return "completed";
   if (isFutureExpense(date, time, now)) return "planned";
   return requestedStatus ?? "completed";
 }
@@ -323,6 +443,14 @@ function dividendAmount(dividend: DividendRecord) {
 
 function isReceivedDividend(dividend: DividendRecord) {
   return (dividend.status ?? "received") === "received";
+}
+
+function isCompletedAssetContributionExpense(expense: MonthlyExpenseRecord, year: number, month: number) {
+  return expense.status === "completed" && expense.allocationKind === "investment_contribution" && isDateInMonth(expenseReferenceDate(expense), year, month);
+}
+
+function isCompletedCashBoxContributionExpense(expense: MonthlyExpenseRecord, year: number, month: number) {
+  return expense.status === "completed" && expense.allocationKind === "cash_box_contribution" && isDateInMonth(expenseReferenceDate(expense), year, month);
 }
 
 type MonthlyCalculationContext = {
@@ -469,7 +597,15 @@ function buildCalendarDays(
   }
 
   for (const expense of expenses) {
-    addEvent(expense.date, { id: expense.id ?? `${expense.date}-${expense.description}`, type: expense.recurring ? "recurring-expense" : "expense", label: expense.description, amountInCents: expense.amountInCents, status: expense.status });
+    const expenseEventType =
+      expense.allocationKind === "investment_contribution"
+        ? "investment-contribution"
+        : expense.allocationKind === "cash_box_contribution"
+          ? "cashbox-contribution"
+          : expense.recurring
+            ? "recurring-expense"
+            : "expense";
+    addEvent(expense.date, { id: expense.id ?? `${expense.date}-${expense.description}`, type: expenseEventType, label: expense.description, amountInCents: expense.amountInCents, status: expense.status });
   }
   for (const contribution of contributions.filter((item) => isDateInMonth(item.date, year, month))) {
     addEvent(dateKey(contribution.date), { id: contribution.id ?? String(contribution.date), type: "contribution", label: contribution.description || "Aporte", amountInCents: toCents(contributionAmount(contribution)), status: "completed" });
@@ -580,11 +716,16 @@ function normalizePlan(input: MonthlyPlanInput, existing?: MonthlyPlanRecord | n
   };
 }
 
-function normalizeExpense(input: MonthlyExpenseInput, existing?: MonthlyExpenseRecord | null): Omit<MonthlyExpenseRecord, "id"> {
+function normalizeExpense(input: MonthlyExpenseInput, existing?: MonthlyExpenseRecord | null, options: NormalizeExpenseOptions = {}): Omit<MonthlyExpenseRecord, "id"> {
   const timestamp = getLocalTimestampWithOffset();
   const date = input.date;
   const time = input.time;
-  const status = determineExpenseStatus(date, time, input.status);
+  const status = determineExpenseStatus(date, time, input.status, new Date(), {
+    allowFutureCompletion: options.allowFutureCompletion,
+    completedAt: input.completedAt,
+    wasCompleted: existing?.status === "completed"
+  });
+  const completedAt = resolveCompletedAt(date, time, status, input.completedAt, existing, options);
   const expenseType: MonthlyExpenseType = input.recurring ? "recurring" : input.expenseType ?? "single";
   const recurring = expenseType === "recurring" || Boolean(input.recurring);
   const recurrenceFrequency = recurring ? input.recurrenceFrequency ?? existing?.recurrenceFrequency ?? "monthly" : null;
@@ -610,13 +751,123 @@ function normalizeExpense(input: MonthlyExpenseInput, existing?: MonthlyExpenseR
     recurrenceOriginalDate: input.recurrenceOriginalDate ?? existing?.recurrenceOriginalDate ?? date,
     recurrenceCancelled: input.recurrenceCancelled ?? existing?.recurrenceCancelled ?? false,
     status,
+    completedAt,
     createdAt: existing?.createdAt ?? input.createdAt ?? timestamp,
     updatedAt: timestamp
   };
 }
 
+function normalizeExpenseIntegration(
+  category: MonthlyPlanCategoryRecord | undefined,
+  amountInCents: number,
+  inputIntegration?: MonthlyExpenseIntegrationRecord | null,
+  existingIntegration?: MonthlyExpenseIntegrationRecord | null
+): MonthlyExpenseIntegrationRecord | null {
+  if (!isInvestmentCategoryRecord(category)) return null;
+
+  const merged = inputIntegration ? { ...existingIntegration, ...inputIntegration } : existingIntegration ? { ...existingIntegration } : null;
+  if (!merged) return existingIntegration ?? null;
+
+  const destination = merged.destination;
+  const linkedEntityType = merged.linkedEntityType ?? existingIntegration?.linkedEntityType ?? null;
+  const linkedEntityId = trimNullable(merged.linkedEntityId) ?? trimNullable(existingIntegration?.linkedEntityId) ?? null;
+  const integrationId = trimNullable(merged.integrationId) ?? trimNullable(existingIntegration?.integrationId) ?? null;
+  const idempotencyKey = trimNullable(merged.idempotencyKey) ?? trimNullable(existingIntegration?.idempotencyKey) ?? null;
+
+  if (destination === "asset") {
+    const assetId = trimNullable(merged.assetId);
+    const assetTicker = trimNullable(merged.assetTicker)?.toUpperCase() ?? null;
+    const operationType = merged.operationType ?? "COMPRA";
+    const quantity = Number(merged.quantity ?? 0);
+    const price = Number(merged.price ?? 0);
+    const fees = Math.max(Number(merged.fees ?? 0), 0);
+
+    if (!assetId && !assetTicker) throw badRequest("Selecione um ativo valido.");
+    if (operationType !== "COMPRA") {
+      throw badRequest("O fluxo integrado do planejamento para ativos usa operacoes de compra.");
+    }
+    if (!(quantity > 0) || !(price > 0)) {
+      throw badRequest("Informe quantidade e preco validos para o aporte em ativo.");
+    }
+
+    const expectedAmountInCents = Math.round((quantity * price + fees) * 100);
+    if (expectedAmountInCents !== amountInCents) {
+      throw badRequest("O valor do gasto precisa ser igual ao total da operacao (quantidade x preco + taxas).");
+    }
+
+    return {
+      destination,
+      linkedEntityType,
+      linkedEntityId,
+      assetId,
+      assetTicker,
+      cashBoxId: null,
+      operationType,
+      quantity,
+      price,
+      fees,
+      integrationId,
+      idempotencyKey
+    };
+  }
+
+  const cashBoxId = trimNullable(merged.cashBoxId);
+  if (!cashBoxId) throw badRequest("Selecione uma caixinha valida.");
+
+  return {
+    destination,
+    linkedEntityType,
+    linkedEntityId,
+    assetId: null,
+    assetTicker: null,
+    cashBoxId,
+    operationType: null,
+    quantity: null,
+    price: null,
+    fees: null,
+    integrationId,
+    idempotencyKey
+  };
+}
+
+function resolveExpenseAllocationKind(
+  category: MonthlyPlanCategoryRecord | undefined,
+  integration?: MonthlyExpenseIntegrationRecord | null,
+  existing?: MonthlyExpenseRecord | null
+): MonthlyExpenseAllocationKind {
+  if (!isInvestmentCategoryRecord(category)) return "expense";
+  if (!integration) return existing?.allocationKind ?? "expense";
+  return integration.destination === "asset" ? "investment_contribution" : "cash_box_contribution";
+}
+
+function normalizeExpenseForPersistence(
+  category: MonthlyPlanCategoryRecord | undefined,
+  input: MonthlyExpenseInput,
+  existing?: MonthlyExpenseRecord | null,
+  options: NormalizeExpenseOptions = {}
+): Omit<MonthlyExpenseRecord, "id"> {
+  const normalizedExpense = normalizeExpense(input, existing, options);
+  const integration = normalizeExpenseIntegration(category, normalizedExpense.amountInCents, input.integration, existing?.integration);
+  if (isInvestmentCategoryRecord(category) && !integration && !existing) {
+    throw badRequest("Selecione se o valor vai para um ativo ou para uma caixinha.");
+  }
+  const allocationKind = resolveExpenseAllocationKind(category, integration, existing);
+
+  return {
+    ...normalizedExpense,
+    allocationKind,
+    integration: allocationKind === "expense" ? null : integration
+  };
+}
+
 function isRecurringTemplate(expense: MonthlyExpenseRecord) {
   return expense.recurring && expense.recurrenceId && !expense.recurrenceSourceId;
+}
+
+function stripExpenseIdentityForClone(expense: MonthlyExpenseRecord) {
+  const source = expense as MonthlyExpenseRecord & { _id?: unknown };
+  const { id: _ignoredId, _id: _ignoredMongoId, ...clone } = source;
+  return clone;
 }
 
 function buildMonthlyOccurrenceDate(template: MonthlyExpenseRecord, year: number, month: number) {
@@ -673,6 +924,7 @@ function buildOccurrenceDates(template: MonthlyExpenseRecord, year: number, mont
 
 function buildGeneratedExpense(template: MonthlyExpenseRecord, planId: string, date: string): Omit<MonthlyExpenseRecord, "id"> {
   const timestamp = getLocalTimestampWithOffset();
+  const clearedIntegration = template.integration ? clearLinkedEntityFromIntegration(template.integration) : null;
 
   return {
     planId,
@@ -695,9 +947,191 @@ function buildGeneratedExpense(template: MonthlyExpenseRecord, planId: string, d
     recurrenceOriginalDate: date,
     recurrenceCancelled: false,
     status: "planned",
+    allocationKind: template.allocationKind ?? "expense",
+    integration: clearedIntegration
+      ? {
+          ...clearedIntegration,
+          integrationId: null,
+          idempotencyKey: null
+        }
+      : null,
+    completedAt: null,
     createdAt: timestamp,
     updatedAt: timestamp
   };
+}
+
+function ensureExpenseIdentity(expense: MonthlyExpenseRecord) {
+  if (!expense.id) throw new Error("Integrated expense requires a persisted id");
+  return expense.id;
+}
+
+function applyLinkedEntityToExpense(
+  expense: MonthlyExpenseRecord,
+  linkedEntity: { linkedEntityType: "operation" | "cashBoxMovement"; linkedEntityId: string; assetId?: string | null; assetTicker?: string | null; cashBoxId?: string | null }
+): MonthlyExpenseRecord {
+  const integration = expense.integration;
+  if (!integration) return expense;
+
+  return {
+    ...expense,
+    integration: {
+      ...integration,
+      linkedEntityType: linkedEntity.linkedEntityType,
+      linkedEntityId: linkedEntity.linkedEntityId,
+      assetId: linkedEntity.assetId ?? integration.assetId ?? null,
+      assetTicker: linkedEntity.assetTicker ?? integration.assetTicker ?? null,
+      cashBoxId: linkedEntity.cashBoxId ?? integration.cashBoxId ?? null,
+      integrationId: integration.integrationId ?? ensureExpenseIdentity(expense)
+    }
+  };
+}
+
+async function resolveAssetForExpenseIntegration(expense: MonthlyExpenseRecord) {
+  const integration = expense.integration;
+  if (!integration || integration.destination !== "asset") throw badRequest("Selecione um ativo valido.");
+
+  const asset =
+    (integration.assetId ? await findAssetById(integration.assetId) : null) ??
+    (integration.assetTicker ? await findAssetByTicker(integration.assetTicker) : null);
+  if (!asset?.id) throw badRequest("Selecione um ativo valido.");
+  return asset;
+}
+
+async function resolveCashBoxForExpenseIntegration(expense: MonthlyExpenseRecord) {
+  const integration = expense.integration;
+  if (!integration || integration.destination !== "cashbox" || !integration.cashBoxId) {
+    throw badRequest("Selecione uma caixinha valida.");
+  }
+
+  const cashBox = await findCashBoxById(integration.cashBoxId);
+  if (!cashBox?.id) throw badRequest("Selecione uma caixinha valida.");
+  return cashBox;
+}
+
+async function removeLinkedEntityForExpense(expense?: MonthlyExpenseRecord | null) {
+  if (!expense?.integration?.linkedEntityId || !expense.integration.linkedEntityType) return;
+
+  if (expense.integration.linkedEntityType === "operation") {
+    const operation = (await findOperationByPlanningExpenseId(ensureExpenseIdentity(expense))) ?? (await findOperationById(expense.integration.linkedEntityId));
+    if (operation?.id) await deleteOperation(operation.id);
+    return;
+  }
+
+  const movement = await findCashBoxMovementByPlanningExpenseId(ensureExpenseIdentity(expense));
+  if (movement?.movement.id && movement.cashBox.id) {
+    await removeCashBoxMovement(movement.cashBox.id, movement.movement.id);
+  }
+}
+
+async function syncAssetExpenseLinkedEntity(expense: MonthlyExpenseRecord) {
+  const expenseId = ensureExpenseIdentity(expense);
+  const integration = expense.integration;
+  if (!integration || integration.destination !== "asset") throw badRequest("Selecione um ativo valido.");
+
+  const asset = await resolveAssetForExpenseIntegration(expense);
+  const quantity = Number(integration.quantity ?? 0);
+  const price = Number(integration.price ?? 0);
+  const fees = Math.max(Number(integration.fees ?? 0), 0);
+  const date = expenseReferenceDate(expense);
+  const payload: Omit<OperationRecord, "id"> = {
+    assetId: asset.id,
+    assetTicker: asset.ticker,
+    type: "COMPRA",
+    date,
+    quantity,
+    price,
+    fees,
+    totalValue: quantity * price,
+    notes: trimNullable(expense.note) ?? expense.description,
+    origin: "monthly-planning",
+    planningLink: {
+      expenseId,
+      planId: expense.planId,
+      integrationId: integration.integrationId ?? expenseId,
+      idempotencyKey: integration.idempotencyKey ?? null
+    }
+  };
+
+  const existing = (await findOperationByPlanningExpenseId(expenseId)) ?? (integration.linkedEntityId ? await findOperationById(integration.linkedEntityId) : null);
+  const operation = existing?.id ? await updateOperation(existing.id, payload) : await createOperation(payload);
+  if (!operation?.id) throw badRequest("Nao foi possivel registrar o aporte no ativo.");
+
+  return {
+    linkedEntityType: "operation" as const,
+    linkedEntityId: operation.id,
+    assetId: asset.id,
+    assetTicker: asset.ticker,
+    cashBoxId: null
+  };
+}
+
+async function syncCashBoxExpenseLinkedEntity(expense: MonthlyExpenseRecord) {
+  const expenseId = ensureExpenseIdentity(expense);
+  const integration = expense.integration;
+  if (!integration || integration.destination !== "cashbox") throw badRequest("Selecione uma caixinha valida.");
+
+  const cashBox = await resolveCashBoxForExpenseIntegration(expense);
+  const cashBoxId = cashBox.id;
+  if (!cashBoxId) throw badRequest("Selecione uma caixinha valida.");
+  const movementId = integration.linkedEntityId ?? `cashbox-movement-${randomUUID()}`;
+  const payload: CashBoxMovementRecord = {
+    id: movementId,
+    type: "contribution",
+    value: toMoneyValue(expense.amountInCents),
+    date: expenseReferenceDate(expense),
+    description: trimNullable(expense.note) ?? expense.description,
+    origin: "monthly-planning",
+    planningLink: {
+      expenseId,
+      planId: expense.planId,
+      integrationId: integration.integrationId ?? expenseId,
+      idempotencyKey: integration.idempotencyKey ?? null
+    }
+  };
+
+  const existing = await findCashBoxMovementByPlanningExpenseId(expenseId);
+  if (existing?.movement.id && existing.cashBox.id && existing.cashBox.id !== cashBoxId) {
+    await addCashBoxMovement(cashBoxId, payload);
+    await removeCashBoxMovement(existing.cashBox.id, existing.movement.id);
+  } else if (existing?.movement.id && existing.cashBox.id) {
+    await updateCashBoxMovement(existing.cashBox.id, existing.movement.id, payload);
+  } else {
+    await addCashBoxMovement(cashBoxId, payload);
+  }
+
+  return {
+    linkedEntityType: "cashBoxMovement" as const,
+    linkedEntityId: movementId,
+    assetId: null,
+    assetTicker: null,
+    cashBoxId
+  };
+}
+
+async function syncIntegratedExpenseEntity(expense: MonthlyExpenseRecord, previousExpense?: MonthlyExpenseRecord | null) {
+  if (expense.status !== "completed" || !isIntegratedInvestmentExpense(expense) || !expense.integration) {
+    if (previousExpense?.integration?.linkedEntityId) await removeLinkedEntityForExpense(previousExpense);
+    return {
+      ...expense,
+      integration: clearLinkedEntityFromIntegration(expense.integration)
+    };
+  }
+
+  const currentLink =
+    expense.integration.destination === "asset"
+      ? await syncAssetExpenseLinkedEntity(expense)
+      : await syncCashBoxExpenseLinkedEntity(expense);
+
+  if (
+    previousExpense?.integration?.linkedEntityId &&
+    previousExpense.integration.linkedEntityType &&
+    previousExpense.integration.linkedEntityType !== currentLink.linkedEntityType
+  ) {
+    await removeLinkedEntityForExpense(previousExpense);
+  }
+
+  return applyLinkedEntityToExpense(expense, currentLink);
 }
 
 async function ensureRecurringExpensesForMonth(plan: MonthlyPlanRecord, year: number, month: number) {
@@ -717,9 +1151,9 @@ async function ensureRecurringExpensesForMonth(plan: MonthlyPlanRecord, year: nu
     for (const occurrenceDate of occurrenceDates) {
       const key = `${template.recurrenceId}-${occurrenceDate}`;
       if (existingKeys.has(key)) continue;
-      const expense = await createMonthlyExpense(buildGeneratedExpense(template, plan.id, occurrenceDate));
+      const { expense, created: wasCreated } = await createMonthlyExpenseIfMissing(buildGeneratedExpense(template, plan.id, occurrenceDate));
       existingKeys.add(key);
-      created.push(expense);
+      if (wasCreated) created.push(expense);
     }
   }
 
@@ -731,12 +1165,43 @@ async function createHiddenRecurringTemplate(expense: MonthlyExpenseRecord) {
 
   const timestamp = getLocalTimestampWithOffset();
   return createMonthlyExpense({
-    ...expense,
+    ...stripExpenseIdentityForClone(expense),
     recurrenceSourceId: null,
     recurrenceCancelled: true,
+    status: "planned",
+    completedAt: null,
     createdAt: expense.createdAt ?? timestamp,
     updatedAt: timestamp
   });
+}
+
+function buildCompletionSummary(overview: MonthlyPlanningOverview) {
+  return {
+    completedExpensesInCents: overview.summary.completedInCents,
+    plannedExpensesInCents: overview.summary.plannedExpensesInCents,
+    balanceInCents: overview.summary.remainingIncomeInCents
+  };
+}
+
+async function buildExpenseCompletionResult(
+  expense: MonthlyExpenseRecord,
+  comparisonRange: number,
+  alreadyCompleted: boolean,
+  message: string
+): Promise<MonthlyExpenseCompletionResult> {
+  const plan = await findMonthlyPlanById(expense.planId);
+  if (!plan) throw notFound("Monthly plan not found");
+
+  const overview = await getMonthlyPlanningOverview(plan.year, plan.month, comparisonRange);
+  const updatedExpense = overview.expenses.find((item) => item.id === expense.id) ?? expense;
+
+  return {
+    expense: updatedExpense,
+    overview,
+    summary: buildCompletionSummary(overview),
+    alreadyCompleted,
+    message
+  };
 }
 
 export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: MonthlyExpenseRecord[], context: MonthlyCalculationContext = {}): MonthlyPlanningOverview {
@@ -747,7 +1212,10 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
   const dashboard = context.dashboard;
   const activeExpenses = expenses.filter((expense) => !expense.recurrenceCancelled);
   const monthlyDividendsInCents = sum(dividends.filter((dividend) => isReceivedDividend(dividend) && isDateInMonth(dividend.paymentDate, year, month)).map((dividend) => toCents(dividendAmount(dividend))));
-  const monthlyContributionsInCents = sum(contributions.filter((contribution) => isDateInMonth(contribution.date, year, month)).map((contribution) => toCents(contributionAmount(contribution))));
+  const manualMonthlyContributionsInCents = sum(contributions.filter((contribution) => isDateInMonth(contribution.date, year, month)).map((contribution) => toCents(contributionAmount(contribution))));
+  const monthlyIntegratedAssetContributionsInCents = sum(activeExpenses.filter((expense) => isCompletedAssetContributionExpense(expense, year, month)).map((expense) => expense.amountInCents));
+  const monthlyIntegratedCashBoxContributionsInCents = sum(activeExpenses.filter((expense) => isCompletedCashBoxContributionExpense(expense, year, month)).map((expense) => expense.amountInCents));
+  const monthlyContributionsInCents = manualMonthlyContributionsInCents + monthlyIntegratedAssetContributionsInCents;
   const totalIncomeWithDividendsInCents = plan.incomeInCents + (plan.includeDividendsAsIncome ? monthlyDividendsInCents : 0);
   const monthlyContributionGoalInCents = plan.monthlyContributionGoalInCents ?? 0;
   const goalsReserveInCents = sum((plan.goals ?? []).filter((goal) => goal.active).map((goal) => goal.monthlyContributionInCents ?? 0));
@@ -780,6 +1248,10 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
   const totalPlannedInCents = sum(categories.map((category) => category.limitInCents));
   const completedInCents = sum(activeExpenses.filter((expense) => expense.status === "completed").map((expense) => expense.amountInCents));
   const plannedExpensesInCents = sum(activeExpenses.filter((expense) => expense.status === "planned").map((expense) => expense.amountInCents));
+  const completedInvestmentsInCents = sum(activeExpenses.filter((expense) => expense.status === "completed" && expense.allocationKind !== "expense").map((expense) => expense.amountInCents));
+  const plannedInvestmentsInCents = sum(activeExpenses.filter((expense) => expense.status === "planned" && expense.allocationKind !== "expense").map((expense) => expense.amountInCents));
+  const completedConsumptionInCents = completedInCents - completedInvestmentsInCents;
+  const plannedConsumptionInCents = plannedExpensesInCents - plannedInvestmentsInCents;
   const budgetDistribution = calculateBudgetDistribution({ incomeInCents: plan.incomeInCents, sectors: plan.categories });
   const allocatedPercentage = budgetDistribution.distributedPercentage;
   const percentageOverage = budgetDistribution.excessPercentage;
@@ -830,6 +1302,10 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
       contributedThisMonthInCents: monthlyContributionsInCents,
       contributionGoalPercent: percentage(monthlyContributionsInCents, monthlyContributionGoalInCents),
       contributionGoalRemainingInCents: Math.max(monthlyContributionGoalInCents - monthlyContributionsInCents, 0),
+      completedConsumptionInCents,
+      completedInvestmentsInCents,
+      plannedConsumptionInCents,
+      plannedInvestmentsInCents,
       canSpendPerDayInCents: remainingDays > 0 ? Math.floor(Math.max(remainingIncomeAfterPlannedInCents, 0) / remainingDays) : Math.max(remainingIncomeAfterPlannedInCents, 0),
       remainingDays
     },
@@ -845,6 +1321,8 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
       profitabilityPercent: dashboard?.metrics.totalReturnPercent ?? dashboard?.metrics.returnPercentage ?? 0,
       monthlyDividendYieldPercent: dashboard?.metrics.currentValue ? ((dashboard.metrics.monthlyDividends ?? 0) / dashboard.metrics.currentValue) * 100 : 0,
       contributionsThisMonthInCents: monthlyContributionsInCents,
+      assetContributionsThisMonthInCents: monthlyIntegratedAssetContributionsInCents,
+      cashBoxContributionsThisMonthInCents: monthlyIntegratedCashBoxContributionsInCents,
       dividendsThisMonthInCents: monthlyDividendsInCents,
       plannedSimulationAmountInCents,
       simulatedContributionTotalInCents: monthlyContributionsInCents + plannedSimulationAmountInCents,
@@ -952,12 +1430,78 @@ export async function copyPreviousMonthlyPlan(year: number, month: number) {
   return upsertMonthlyPlan(copied);
 }
 
-export async function addMonthlyExpense(planId: string, input: MonthlyExpenseCreateInput) {
+async function resolvePlanAndCategory(planId: string, categoryId: string) {
   const plan = await findMonthlyPlanById(planId);
   if (!plan) throw notFound("Monthly plan not found");
-  if (!plan.categories.some((category) => category.id === input.categoryId)) throw badRequest("Expense category does not exist in this monthly plan");
 
-  return createMonthlyExpense(normalizeExpense({ ...input, planId }));
+  const category = plan.categories.find((item) => item.id === categoryId);
+  if (!category) throw badRequest("Expense category does not exist in this monthly plan");
+
+  return { plan, category };
+}
+
+export async function addMonthlyExpense(planId: string, input: MonthlyExpenseCreateInput) {
+  const { category } = await resolvePlanAndCategory(planId, input.categoryId);
+  const lockKey = trimNullable(input.integration?.idempotencyKey) ?? "";
+  const createWithIntegration = async () => {
+    if (lockKey) {
+      const existingByKey = await findMonthlyExpenseByIdempotencyKey(lockKey);
+      if (existingByKey) {
+        if (existingByKey.status === "completed" && isIntegratedInvestmentExpense(existingByKey)) {
+          const repaired = await syncIntegratedExpenseEntity(existingByKey, existingByKey);
+          if (JSON.stringify(repaired.integration) !== JSON.stringify(existingByKey.integration)) {
+            const persistedRepair = await updateMonthlyExpense(existingByKey.id ?? "", {
+              integration: repaired.integration,
+              updatedAt: repaired.updatedAt
+            });
+            return persistedRepair ?? repaired;
+          }
+        }
+
+        return existingByKey;
+      }
+    }
+
+    const normalized = normalizeExpenseForPersistence(category, { ...input, planId });
+    const created = await createMonthlyExpense({
+      ...normalized,
+      integration: normalized.integration
+        ? {
+            ...normalized.integration,
+            integrationId: normalized.integration.integrationId ?? randomUUID(),
+            idempotencyKey: normalized.integration.idempotencyKey ?? lockKey ?? null
+          }
+        : null
+    });
+
+    if (created.status !== "completed" || !isIntegratedInvestmentExpense(created)) return created;
+
+    let synced: MonthlyExpenseRecord | null = null;
+    try {
+      synced = await syncIntegratedExpenseEntity(created);
+      const persisted = await updateMonthlyExpense(created.id ?? "", {
+        integration: synced.integration,
+        allocationKind: synced.allocationKind,
+        updatedAt: synced.updatedAt
+      });
+      return persisted ?? synced;
+    } catch (error) {
+      if (synced) await removeLinkedEntityForExpense(synced).catch(() => undefined);
+      await deleteMonthlyExpense(created.id ?? "").catch(() => undefined);
+      throw error;
+    }
+  };
+
+  if (!lockKey) return createWithIntegration();
+
+  const existingLock = integratedExpenseMutationLocks.get(lockKey);
+  if (existingLock) return existingLock;
+
+  const mutation = createWithIntegration().finally(() => {
+    integratedExpenseMutationLocks.delete(lockKey);
+  });
+  integratedExpenseMutationLocks.set(lockKey, mutation);
+  return mutation;
 }
 
 export async function editMonthlyExpense(id: string, input: MonthlyExpensePatchInput) {
@@ -969,11 +1513,73 @@ export async function editMonthlyExpense(id: string, input: MonthlyExpensePatchI
     ...input,
     recurrenceSourceId: hiddenTemplate?.id ?? existing.recurrenceSourceId ?? null
   } as Omit<MonthlyExpenseRecord, "id">;
-  const plan = await findMonthlyPlanById(merged.planId);
-  if (!plan) throw notFound("Monthly plan not found");
-  if (!plan.categories.some((category) => category.id === merged.categoryId)) throw badRequest("Expense category does not exist in this monthly plan");
+  const { category } = await resolvePlanAndCategory(merged.planId, merged.categoryId);
+  const normalized = normalizeExpenseForPersistence(category, merged, existing);
+  const draft = { ...normalized, id } as MonthlyExpenseRecord;
+  const synced = await syncIntegratedExpenseEntity(draft, existing);
+  const { id: _ignoredId, ...payload } = synced;
 
-  return updateMonthlyExpense(id, normalizeExpense(merged, existing));
+  try {
+    const updated = await updateMonthlyExpense(id, payload);
+    if (!updated) throw notFound("Monthly expense not found");
+    return updated;
+  } catch (error) {
+    await syncIntegratedExpenseEntity(existing, synced).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function completeMonthlyExpense(id: string, input: MonthlyExpenseCompletionInput = {}, comparisonRange = 1) {
+  const existingLock = monthlyExpenseCompletionLocks.get(id);
+  if (existingLock) return existingLock;
+
+  const completion = (async () => {
+    const existing = await findMonthlyExpenseById(id);
+    if (!existing) throw notFound("Monthly expense not found");
+    const { category } = await resolvePlanAndCategory(existing.planId, existing.categoryId);
+
+    const normalizedCompletedAt = input.completedAt ? normalizeTimestampWithOffset(input.completedAt) : null;
+    if (existing.status === "completed" && (!normalizedCompletedAt || normalizedCompletedAt === (existing.completedAt ?? null))) {
+      return buildExpenseCompletionResult(existing, comparisonRange, true, "O gasto ja estava pago.");
+    }
+
+    const normalized = normalizeExpenseForPersistence(
+      category,
+      {
+        ...existing,
+        status: "completed",
+        completedAt: normalizedCompletedAt ?? undefined
+      },
+      existing,
+      {
+        allowFutureCompletion: true,
+        defaultCompletedAt: normalizedCompletedAt ?? existing.completedAt ?? getLocalTimestampWithOffset()
+      }
+    );
+    const draft = { ...normalized, id } as MonthlyExpenseRecord;
+    const synced = await syncIntegratedExpenseEntity(draft, existing);
+    const { id: _ignoredId, ...payload } = synced;
+    let updated: MonthlyExpenseRecord | null = null;
+    try {
+      updated = await updateMonthlyExpense(id, payload);
+    } catch (error) {
+      await syncIntegratedExpenseEntity(existing, synced).catch(() => undefined);
+      throw error;
+    }
+
+    if (!updated) {
+      await syncIntegratedExpenseEntity(existing, synced).catch(() => undefined);
+      throw notFound("Monthly expense not found");
+    }
+
+    const message = existing.status === "completed" ? "Data de pagamento atualizada." : "Gasto marcado como pago.";
+    return buildExpenseCompletionResult(updated, comparisonRange, false, message);
+  })().finally(() => {
+    monthlyExpenseCompletionLocks.delete(id);
+  });
+
+  monthlyExpenseCompletionLocks.set(id, completion);
+  return completion;
 }
 
 export async function editMonthlyExpenseSeries(id: string, input: MonthlyExpensePatchInput) {
@@ -1008,22 +1614,29 @@ export async function removeMonthlyExpense(id: string) {
   const existing = await findMonthlyExpenseById(id);
   if (!existing) throw notFound("Monthly expense not found");
   if (existing.recurrenceId) {
+    await removeLinkedEntityForExpense(existing);
     await updateMonthlyExpense(id, { recurrenceCancelled: true, updatedAt: getLocalTimestampWithOffset() });
-    return;
+    return existing;
   }
 
+  await removeLinkedEntityForExpense(existing);
   const deleted = await deleteMonthlyExpense(id);
   if (!deleted) throw notFound("Monthly expense not found");
+  return existing;
 }
 
 export async function removeMonthlyExpenseSeries(id: string) {
   const existing = await findMonthlyExpenseById(id);
   if (!existing) throw notFound("Monthly expense not found");
   if (!existing.recurrenceId) {
-    await removeMonthlyExpense(id);
-    return;
+    return [await removeMonthlyExpense(id)];
   }
 
+  const seriesExpenses = (await listAllMonthlyExpenses()).filter((expense) => expense.recurrenceId === existing.recurrenceId);
+  for (const expense of seriesExpenses) {
+    await removeLinkedEntityForExpense(expense);
+  }
   const deleted = await deleteMonthlyExpensesByRecurrenceId(existing.recurrenceId);
   if (deleted === 0) throw notFound("Monthly expense not found");
+  return seriesExpenses;
 }

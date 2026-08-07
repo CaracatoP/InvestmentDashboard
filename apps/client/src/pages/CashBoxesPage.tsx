@@ -1,14 +1,14 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Edit2, Landmark, Percent, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Wallet } from "lucide-react";
-import { AreaChart } from "../components/charts/AreaChart";
+import { LazyAreaChart } from "../components/charts/LazyCharts";
 import { ChartCard } from "../components/ui/ChartCard";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
 import { MoneyValue } from "../components/ui/ValueDisplay";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { cashBoxRecordsApi, fetchCdiStatus, refreshCdiData } from "../services/api";
-import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { CdiStatusResponse } from "../types/investments";
 import type { CashBoxMovementRecord, CashBoxMovementType, CashBoxRecord } from "../types/management";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
@@ -69,7 +69,6 @@ function cdiSourceLabel(source?: CdiStatusResponse["source"]) {
 }
 
 export function CashBoxesPage() {
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [overview, setOverview] = useState<CashBoxesOverview | null>(null);
   const [cdiStatus, setCdiStatus] = useState<CdiStatusResponse | null>(null);
   const [search, setSearch] = useState("");
@@ -101,6 +100,9 @@ export function CashBoxesPage() {
     void loadCashBoxes();
     void loadCdiOverview();
   }, []);
+
+  useWorkspaceInvalidation(["cashBoxes"], () => loadCashBoxes());
+  useWorkspaceInvalidation(["cdi"], () => loadCdiOverview());
 
   const cashBoxes = overview?.cashBoxes ?? [];
   const history = overview?.history ?? [];
@@ -138,7 +140,7 @@ export function CashBoxesPage() {
     else await cashBoxRecordsApi.create(form);
     setIsModalOpen(false);
     setEditing(null);
-    await Promise.all([loadCashBoxes(), loadWorkspace()]);
+    setForm(emptyCashBox);
   }
 
   async function handleMovementSubmit(event: FormEvent<HTMLFormElement>) {
@@ -154,14 +156,13 @@ export function CashBoxesPage() {
     else await cashBoxRecordsApi.contribution(movementTarget.id, payload);
     setIsMovementModalOpen(false);
     setMovementTarget(null);
-    await Promise.all([loadCashBoxes(), loadWorkspace()]);
+    setMovementForm(emptyMovement);
   }
 
   async function confirmDelete() {
     if (!deleteTarget?.id) return;
     await cashBoxRecordsApi.remove(deleteTarget.id);
     setDeleteTarget(null);
-    await Promise.all([loadCashBoxes(), loadWorkspace()]);
   }
 
   async function handleCdiRefresh() {
@@ -172,7 +173,6 @@ export function CashBoxesPage() {
 
     try {
       const result = await refreshCdiData();
-      await Promise.all([loadCashBoxes(), loadWorkspace(), loadCdiOverview()]);
       setCdiFeedback(
         `${cdiSourceLabel(result.rate.source)} em ${new Date(result.rate.updatedAt).toLocaleString("pt-BR")} · ${result.recalculation.applied} rendimentos recalculados`
       );
@@ -254,7 +254,7 @@ export function CashBoxesPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <ChartCard title="Grafico de evolucao">
-          <AreaChart data={overview.evolution} dataKey="value" name="Saldo" color="#38bdf8" />
+          <LazyAreaChart data={overview.evolution} dataKey="value" name="Saldo" color="#38bdf8" />
         </ChartCard>
         <ChartCard title="Historico">
           <div className="space-y-3">

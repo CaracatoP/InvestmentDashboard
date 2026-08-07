@@ -1,6 +1,9 @@
 export type AssetCategory = "FII" | "ACAO" | "ETF" | "CRIPTO" | "RENDA_FIXA";
 export type OperationType = "COMPRA" | "VENDA" | "BONIFICACAO" | "DESDOBRAMENTO" | "GRUPAMENTO";
 export type GoalType = "wealth" | "dividend" | "shares" | "invested";
+export type MonthlyExpenseAllocationKind = "expense" | "investment_contribution" | "cash_box_contribution";
+export type MonthlyExpenseInvestmentDestination = "asset" | "cashbox";
+export type MonthlyExpenseLinkedEntityType = "operation" | "cashBoxMovement";
 
 export interface AssetRecord {
   id?: string;
@@ -24,6 +27,13 @@ export interface OperationRecord {
   totalValue: number;
   date: string;
   notes?: string;
+  origin?: "manual" | "monthly-planning";
+  planningLink?: {
+    expenseId: string;
+    planId: string;
+    integrationId: string;
+    idempotencyKey?: string | null;
+  } | null;
 }
 
 export interface DividendRecord {
@@ -72,6 +82,28 @@ export interface CashBoxMovementRecord {
   description?: string;
   cashBoxId?: string;
   cashBoxName?: string;
+  origin?: "manual" | "monthly-planning";
+  planningLink?: {
+    expenseId: string;
+    planId: string;
+    integrationId: string;
+    idempotencyKey?: string | null;
+  } | null;
+}
+
+export interface MonthlyExpenseIntegrationRecord {
+  destination: MonthlyExpenseInvestmentDestination;
+  linkedEntityType?: MonthlyExpenseLinkedEntityType | null;
+  linkedEntityId?: string | null;
+  assetId?: string | null;
+  assetTicker?: string | null;
+  cashBoxId?: string | null;
+  operationType?: OperationType | null;
+  quantity?: number | null;
+  price?: number | null;
+  fees?: number | null;
+  integrationId?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface GoalRecord {
@@ -148,6 +180,9 @@ export interface MonthlyExpenseRecord {
   recurrenceOriginalDate?: string | null;
   recurrenceCancelled?: boolean;
   status: MonthlyExpenseStatus;
+  allocationKind?: MonthlyExpenseAllocationKind;
+  integration?: MonthlyExpenseIntegrationRecord | null;
+  completedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -193,6 +228,10 @@ export interface MonthlyPlanningOverview {
     contributedThisMonthInCents: number;
     contributionGoalPercent: number;
     contributionGoalRemainingInCents: number;
+    completedConsumptionInCents: number;
+    completedInvestmentsInCents: number;
+    plannedConsumptionInCents: number;
+    plannedInvestmentsInCents: number;
     canSpendPerDayInCents: number;
     remainingDays: number;
   };
@@ -212,9 +251,23 @@ export interface MonthlyPlanningOverview {
     profitabilityPercent: number;
     monthlyDividendYieldPercent: number;
     contributionsThisMonthInCents: number;
+    assetContributionsThisMonthInCents: number;
+    cashBoxContributionsThisMonthInCents: number;
     dividendsThisMonthInCents: number;
     plannedSimulationAmountInCents: number;
     simulatedContributionTotalInCents: number;
     simulatedContributionGoalPercent: number;
   };
+}
+
+export interface MonthlyExpenseCompletionResult {
+  expense: MonthlyExpenseRecord;
+  overview: MonthlyPlanningOverview;
+  summary: {
+    completedExpensesInCents: number;
+    plannedExpensesInCents: number;
+    balanceInCents: number;
+  };
+  alreadyCompleted: boolean;
+  message: string;
 }

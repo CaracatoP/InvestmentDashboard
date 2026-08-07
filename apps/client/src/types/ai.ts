@@ -149,6 +149,11 @@ export interface AiStructuredPendingAction {
   editLabel?: string;
 }
 
+export interface AiAffectedEntity {
+  type: string;
+  id?: string | null;
+}
+
 export interface AiChatStructuredResponse {
   message: string;
   responseType: "text" | "summary" | "table" | "cards" | "confirmation" | "form" | "success" | "error";
@@ -160,6 +165,9 @@ export interface AiChatStructuredResponse {
     provider?: string;
     model?: string;
     generatedAt?: string;
+    affectedDomains?: string[];
+    affectedEntities?: AiAffectedEntity[];
+    mutationKey?: string;
   };
 }
 

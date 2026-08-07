@@ -14,10 +14,22 @@ const operationSchema = new Schema(
     price: { type: Number, default: 0, min: 0 },
     fees: { type: Number, default: 0, min: 0 },
     totalValue: { type: Number, required: true, min: 0 },
-    notes: { type: String, default: "" }
+    notes: { type: String, default: "" },
+    origin: { type: String, enum: ["manual", "monthly-planning"], default: "manual", index: true },
+    planningLink: {
+      expenseId: { type: String, default: null, index: true },
+      planId: { type: String, default: null },
+      integrationId: { type: String, default: null, index: true },
+      idempotencyKey: { type: String, default: null }
+    }
   },
   { timestamps: true }
 );
+
+operationSchema.index({ type: 1, date: -1 });
+operationSchema.index({ assetTicker: 1, date: -1 });
+operationSchema.index({ assetId: 1, date: -1 });
+operationSchema.index({ "planningLink.idempotencyKey": 1 }, { sparse: true });
 
 export type OperationDocument = InferSchemaType<typeof operationSchema>;
 export const OperationModel = models.Operation ?? model("Operation", operationSchema);

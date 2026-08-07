@@ -1,7 +1,7 @@
 import { RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { PieChart } from "../components/charts/PieChart";
+import { LazyPieChart } from "../components/charts/LazyCharts";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { EmptyState, MobileDataCard } from "../components/ui/Responsive";
@@ -72,7 +72,6 @@ function quoteStatusClass(asset: Asset) {
 
 export function PortfolioPage() {
   const portfolio = useInvestmentStore((state) => state.portfolio);
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("Todas");
   const [positionFilter, setPositionFilter] = useState("Com posicao");
@@ -145,7 +144,6 @@ export function PortfolioPage() {
 
     try {
       const result = await refreshMarketData();
-      await loadWorkspace();
       const refreshedAt = new Date(result.refreshedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
       setRefreshFeedback(`${result.updated} ativos atualizados · ${result.failed + result.unsupported} cotacoes indisponiveis · ultima atualizacao as ${refreshedAt}`);
     } catch (error) {
@@ -436,7 +434,7 @@ export function PortfolioPage() {
           <article className="min-w-0 rounded-lg border border-line bg-panel p-4 sm:p-5">
             <h2 className="text-base font-semibold text-ink">Carteira ideal x atual</h2>
             <div className="mt-4">
-              <PieChart data={allocationChartData} height={220} />
+              <LazyPieChart data={allocationChartData} height={220} />
             </div>
             <div className="mt-4 space-y-4">
               {portfolio.allocationComparison.map((item) => (

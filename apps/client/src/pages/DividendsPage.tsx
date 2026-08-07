@@ -1,6 +1,5 @@
 import { Award, CalendarDays, Coins, TrendingUp } from "lucide-react";
-import { BarChart } from "../components/charts/BarChart";
-import { PieChart } from "../components/charts/PieChart";
+import { LazyBarChart, LazyPieChart } from "../components/charts/LazyCharts";
 import { DividendCard } from "../components/cards/DividendCard";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -50,16 +49,16 @@ export function DividendsPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-2">
         <ChartCard title="Grafico mensal">
-          <BarChart data={dividends.monthly} name="Dividendos" color="#22c55e" />
+          <LazyBarChart data={dividends.monthly} name="Dividendos" color="#22c55e" />
         </ChartCard>
         <ChartCard title="Grafico anual">
-          <BarChart data={dividends.annual} xAxisKey="year" name="Dividendos" color="#38bdf8" />
+          <LazyBarChart data={dividends.annual} xAxisKey="year" name="Dividendos" color="#38bdf8" />
         </ChartCard>
       </section>
 
       <section className="mt-4 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <ChartCard title="Dividendos por ativo">
-          <PieChart data={pieData} />
+          <LazyPieChart data={pieData} />
         </ChartCard>
         <ChartCard title="Calendario">
           <div className="space-y-3">

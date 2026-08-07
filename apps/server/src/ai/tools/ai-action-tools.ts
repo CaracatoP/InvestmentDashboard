@@ -1,23 +1,23 @@
 import { randomUUID } from "crypto";
 import {
   addMonthlyExpense,
-  editMonthlyExpense,
+  completeMonthlyExpense,
   getLocalTimestampWithOffset,
   getOrCreateMonthlyPlan,
   saveMonthlyPlan
 } from "../../services/monthly-planning.service";
-import { registerContribution, registerGoal } from "../../services/portfolio.service";
+import { registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
 import { listAllMonthlyExpenses } from "../../repositories/monthly-planning.repository";
 import {
   createDividend,
   createOperation,
-  listAssets
+  listAssets,
+  listCashBoxes
 } from "../../repositories/investment.repository";
 import {
   appendAiActionAudit,
   createAiPendingAction,
   findActiveAiPendingAction,
-  findAiPendingActionById,
   findExecutedAiPendingActionByIdempotencyKey,
   updateAiPendingAction
 } from "../../repositories/ai.repository";
@@ -26,6 +26,7 @@ import { dividendSchema } from "../../validators/dividend.validator";
 import { goalSchema } from "../../validators/goal.validator";
 import { monthlyExpenseSchema, monthlyPlanSchema } from "../../validators/monthly-planning.validator";
 import { operationSchema } from "../../validators/operation.validator";
+import { settingsUpdateSchema } from "../../validators/settings.validator";
 import type {
   AiChatStructuredResponse,
   AiPendingActionRecord,
@@ -33,6 +34,7 @@ import type {
   AiToolName
 } from "../schemas/ai.schema";
 import { createErrorResponse, createStructuredResponse } from "../utils/ai-structured-response";
+import { aiToolCatalog, getAiToolCatalogEntry, getAiToolPrimaryRoute } from "./ai-tool-catalog";
 
 type PreparedAction = {
   handled: true;
@@ -51,28 +53,21 @@ type ToolInput = {
 
 type ExtractedFields = Record<string, unknown>;
 type MissingField = AiPendingActionRecord["missingFields"][number];
+type AiAffectedEntity = NonNullable<AiChatStructuredResponse["metadata"]["affectedEntities"]>[number];
 
 const pendingActionTtlMs = 15 * 60 * 1000;
 const confirmationPattern = /^(confirmo|pode registrar|pode confirmar|confirmar|sim,?\s*pode|sim pode|ok pode|pode executar)(\s|$)/i;
 const cancelPattern = /^(cancelar|cancele|nao confirmar|não confirmar|desistir)(\s|$)/i;
 const writeIntentPattern = /(registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|alterar|altere|atualize|minha renda|gastei|gasto|despesa|aporte|meta|compre|comprei|compra|vendi|venda|dividendo|jcp|juros sobre capital|bonifica|desdobramento|split|grupamento|reverse split|transferir|transferencia|preco medio|preço medio|quantidade)/i;
 
-const toolRequirements: Record<AiToolName, { required: string[]; optional: string[] }> = {
-  createContribution: { required: ["amountInCents", "date"], optional: ["description", "note"] },
-  createMonthlyExpense: { required: ["planId", "categoryId", "description", "amountInCents", "date", "time"], optional: ["note", "paymentMethod", "status", "expenseType", "recurring"] },
-  updateMonthlyIncome: { required: ["year", "month", "incomeInCents"], optional: [] },
-  createFinancialGoal: { required: ["title", "type", "targetInCents"], optional: ["description", "assetTicker", "deadline"] },
-  markExpenseAsCompleted: { required: ["expenseId"], optional: ["completedAt"] },
-  createInvestmentPurchase: { required: ["assetTicker", "quantity", "price", "date"], optional: ["fees", "notes"] },
-  createInvestmentSale: { required: ["assetTicker", "quantity", "price", "date"], optional: ["fees", "notes"] },
-  registerDividend: { required: ["assetTicker", "amountInCents", "paymentDate"], optional: ["amountPerShare", "quantityEligible", "notes"] },
-  registerJCP: { required: ["assetTicker", "amountInCents", "paymentDate"], optional: ["amountPerShare", "quantityEligible", "notes"] },
-  registerBonus: { required: ["assetTicker", "quantity", "date"], optional: ["notes"] },
-  registerSplit: { required: ["assetTicker", "quantity", "date"], optional: ["notes"] },
-  registerReverseSplit: { required: ["assetTicker", "quantity", "date"], optional: ["notes"] },
-  transferAsset: { required: ["assetTicker", "fromWalletId", "toWalletId", "quantity", "date"], optional: ["notes"] },
-  updateAveragePrice: { required: ["assetTicker", "averagePrice", "date"], optional: ["notes"] }
-};
+const settingsWriteIntentPattern = /(tema|moeda|configur|perfil|nome)/i;
+
+const toolRequirements = Object.fromEntries(
+  (Object.keys(aiToolCatalog) as AiToolName[]).map((toolName) => {
+    const entry = getAiToolCatalogEntry(toolName);
+    return [toolName, { required: [...entry.required], optional: [...entry.optional] }];
+  })
+) as Record<AiToolName, { required: string[]; optional: string[] }>;
 
 const missingFieldDefinitions: Record<string, MissingField> = {
   amountInCents: { name: "amountInCents", label: "Valor", type: "currency", required: true },
@@ -80,6 +75,16 @@ const missingFieldDefinitions: Record<string, MissingField> = {
   time: { name: "time", label: "Horario", type: "text", required: true },
   description: { name: "description", label: "Descricao", type: "text", required: true },
   categoryId: { name: "categoryId", label: "Setor", type: "select", required: true },
+  investmentDestination: {
+    name: "investmentDestination",
+    label: "Destino",
+    type: "select",
+    required: true,
+    options: [
+      { value: "asset", label: "Aporte em ativo" },
+      { value: "cashbox", label: "Transferencia para caixinha" }
+    ]
+  },
   planId: { name: "planId", label: "Planejamento mensal", type: "text", required: true },
   year: { name: "year", label: "Ano", type: "number", required: true },
   month: { name: "month", label: "Mes", type: "number", required: true },
@@ -94,9 +99,29 @@ const missingFieldDefinitions: Record<string, MissingField> = {
   fees: { name: "fees", label: "Taxas", type: "currency", required: false },
   paymentDate: { name: "paymentDate", label: "Data de pagamento", type: "date", required: true },
   amountPerShare: { name: "amountPerShare", label: "Valor por cota", type: "currency", required: false },
+  cashBoxId: { name: "cashBoxId", label: "Caixinha", type: "select", required: true },
   fromWalletId: { name: "fromWalletId", label: "Carteira origem", type: "select", required: true },
   toWalletId: { name: "toWalletId", label: "Carteira destino", type: "select", required: true },
-  averagePrice: { name: "averagePrice", label: "Preco medio", type: "currency", required: true }
+  averagePrice: { name: "averagePrice", label: "Preco medio", type: "currency", required: true },
+  profileName: { name: "profileName", label: "Nome", type: "text", required: false },
+  theme: {
+    name: "theme",
+    label: "Tema",
+    type: "select",
+    required: false,
+    options: [
+      { value: "dark", label: "Escuro" },
+      { value: "light", label: "Claro" },
+      { value: "system", label: "Sistema" }
+    ]
+  },
+  currency: {
+    name: "currency",
+    label: "Moeda",
+    type: "select",
+    required: false,
+    options: [{ value: "BRL", label: "Real brasileiro (BRL)" }]
+  }
 };
 
 const controlPhrasePatterns = [
@@ -278,6 +303,61 @@ function extractExplicitContributionDescription(message: string) {
   return sanitizeExtractedDescription(candidate);
 }
 
+function sanitizeProfileName(value?: string | null) {
+  if (!value) return null;
+  const cleaned = stripControlInstructions(value)
+    .replace(/\s+e\s+(?:troque|mude|altere|atualize)\b.+$/i, "")
+    .replace(/^[\s,.;:!?()[\]{}"'`-]+|[\s,.;:!?()[\]{}"'`-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned
+    ? cleaned
+        .split(" ")
+        .filter(Boolean)
+        .map((part) => titleCaseDescription(part))
+        .join(" ")
+    : null;
+}
+
+function extractProfileName(message: string) {
+  const match =
+    message.match(/\b(?:atualize|altere|mude|troque)?\s*(?:o\s+)?(?:meu\s+)?nome(?:\s+do\s+perfil)?(?:\s+(?:para|como))\s+(.+)$/i) ??
+    message.match(/\bme\s+chame\s+de\s+(.+)$/i);
+  return sanitizeProfileName(match?.[1] ?? null);
+}
+
+function parseThemePreference(message: string): "dark" | "light" | "system" | null {
+  const normalized = normalizeText(message);
+  if (/(tema|modo).*(escuro)|\bdark\b/.test(normalized)) return "dark";
+  if (/(tema|modo).*(claro)|\blight\b/.test(normalized)) return "light";
+  if (/(tema|modo).*(sistema)|seguir.*sistema|\bsystem\b/.test(normalized)) return "system";
+  return null;
+}
+
+function parseCurrencyPreference(message: string): "BRL" | null {
+  const normalized = normalizeText(message);
+  return /\b(brl|real|reais|moeda brasileira)\b/.test(normalized) ? "BRL" : null;
+}
+
+function themeLabel(theme: string) {
+  if (theme === "dark") return "Escuro";
+  if (theme === "light") return "Claro";
+  if (theme === "system") return "Sistema";
+  return theme;
+}
+
+function currencyLabel(currency: string) {
+  return currency === "BRL" ? "Real brasileiro (BRL)" : currency;
+}
+
+function buildSettingsPreviewFields(fields: ExtractedFields) {
+  return [
+    ...(typeof fields.profileName === "string" ? [{ label: "Nome", value: fields.profileName }] : []),
+    ...(typeof fields.theme === "string" ? [{ label: "Tema", value: themeLabel(fields.theme) }] : []),
+    ...(typeof fields.currency === "string" ? [{ label: "Moeda", value: currencyLabel(fields.currency) }] : [])
+  ];
+}
+
 function extractExpenseDescription(message: string) {
   const withoutControl = stripControlInstructions(message);
   const withMatch = withoutControl.match(/\bcom\s+(.+?)(?:,|\s+agora\b|\s+hoje\b|\s+ontem\b|$)/i);
@@ -303,6 +383,7 @@ function inferCategoryName(message: string) {
   if (/(gasolina|uber|transporte|combustivel|combustivel)/.test(normalized)) return "Transporte";
   if (/(spotify|netflix|assinatura)/.test(normalized)) return "Assinaturas";
   if (/(mercado|alimentacao|comida|restaurante)/.test(normalized)) return "Alimentacao";
+  if (/(investimento|investir|aporte|aplicar|caixinha|carteira)/.test(normalized)) return "Investimentos";
   return "";
 }
 
@@ -329,6 +410,13 @@ async function resolveBudgetCategory(year: number, month: number, message: strin
   };
 }
 
+function isInvestmentPlanCategory(plan: Awaited<ReturnType<typeof getOrCreateMonthlyPlan>>, categoryId?: unknown) {
+  if (typeof categoryId !== "string" || !categoryId) return false;
+  const category = plan.categories.find((item) => item.id === categoryId);
+  if (!category) return false;
+  return normalizeText(category.id) === "investimentos" || normalizeText(category.name) === "investimentos";
+}
+
 function isPresent(value: unknown) {
   if (value === null || value === undefined) return false;
   if (typeof value === "string") return value.trim().length > 0;
@@ -344,6 +432,68 @@ async function assetMissingField(): Promise<MissingField> {
   return {
     ...fieldDefinition("assetTicker"),
     options: assets.slice(0, 12).map((asset) => ({ value: asset.ticker, label: asset.ticker }))
+  };
+}
+
+async function cashBoxMissingField(): Promise<MissingField> {
+  const cashBoxes = await listCashBoxes();
+  return {
+    ...fieldDefinition("cashBoxId"),
+    options: cashBoxes.slice(0, 12).map((cashBox) => ({ value: String(cashBox.id ?? cashBox.name), label: cashBox.name }))
+  };
+}
+
+async function expenseCustomMissingFields(fields: ExtractedFields) {
+  const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
+  if (!isInvestmentPlanCategory(plan, fields.categoryId)) return [];
+
+  const destination = typeof fields.investmentDestination === "string" ? fields.investmentDestination : "";
+  if (!destination) return [fieldDefinition("investmentDestination")];
+
+  if (destination === "asset") {
+    const missing: MissingField[] = [];
+    if (!isPresent(fields.assetTicker)) missing.push(await assetMissingField());
+    if (!isPresent(fields.quantity)) missing.push(fieldDefinition("quantity"));
+    if (!isPresent(fields.price)) missing.push(fieldDefinition("price"));
+    return missing;
+  }
+
+  if (destination === "cashbox" && !isPresent(fields.cashBoxId)) {
+    return [await cashBoxMissingField()];
+  }
+
+  return [];
+}
+
+function buildExpenseIntegrationFromFields(fields: ExtractedFields, idempotencyKey?: string) {
+  const destination = typeof fields.investmentDestination === "string" ? fields.investmentDestination : "";
+  if (destination === "asset") {
+    return {
+      destination: "asset" as const,
+      assetTicker: typeof fields.assetTicker === "string" ? fields.assetTicker : undefined,
+      operationType: "COMPRA" as const,
+      quantity: isPresent(fields.quantity) ? Number(fields.quantity) : undefined,
+      price: isPresent(fields.price) ? Number(fields.price) : undefined,
+      fees: isPresent(fields.fees) ? Number(fields.fees) : 0,
+      idempotencyKey
+    };
+  }
+
+  if (destination === "cashbox") {
+    return {
+      destination: "cashbox" as const,
+      cashBoxId: typeof fields.cashBoxId === "string" ? fields.cashBoxId : undefined,
+      idempotencyKey
+    };
+  }
+
+  return undefined;
+}
+
+function buildMonthlyExpenseToolPayload(fields: ExtractedFields, idempotencyKey?: string) {
+  return {
+    ...fields,
+    integration: buildExpenseIntegrationFromFields(fields, idempotencyKey)
   };
 }
 
@@ -367,7 +517,7 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
   }
 
   if (toolName === "createMonthlyExpense") {
-    monthlyExpenseSchema.parse(fields);
+    monthlyExpenseSchema.parse(buildMonthlyExpenseToolPayload(fields));
     return;
   }
 
@@ -437,6 +587,14 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
       source: "manual",
       notes: typeof fields.notes === "string" ? fields.notes : undefined
     });
+    return;
+  }
+
+  if (toolName === "updateSettingsProfile") {
+    const parsed = settingsUpdateSchema.parse(fields);
+    if (Object.keys(parsed).length === 0) {
+      throw new Error("At least one settings field is required");
+    }
   }
 }
 
@@ -481,7 +639,7 @@ async function createPendingAction(input: {
     missingFields,
     preview: null,
     status,
-    riskLevel: input.riskLevel ?? "low",
+    riskLevel: input.riskLevel ?? getAiToolCatalogEntry(input.toolName).risk,
     expiresAt: new Date(Date.now() + pendingActionTtlMs),
     idempotencyKey
   });
@@ -520,21 +678,140 @@ function actionResponse(action: AiPendingActionRecord, message: string): AiChatS
   });
 }
 
+function inferEntityId(value: unknown) {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id === "string" && record.id.length > 0) return record.id;
+  if (typeof record._id === "string" && record._id.length > 0) return record._id;
+  return undefined;
+}
+
+function normalizeAffectedEntities(entities: AiAffectedEntity[]) {
+  const unique = new Map<string, AiAffectedEntity>();
+
+  for (const entity of entities) {
+    if (!entity.type) continue;
+    const id = entity.id ?? undefined;
+    const key = `${entity.type}:${id ?? ""}`;
+    if (!unique.has(key)) unique.set(key, id ? { type: entity.type, id } : { type: entity.type });
+  }
+
+  return [...unique.values()];
+}
+
+function inferAffectedEntities(action: AiPendingActionRecord, result: unknown): AiAffectedEntity[] {
+  const fields = action.extractedFields;
+
+  if (action.toolName === "createContribution") {
+    return normalizeAffectedEntities([{ type: "contribution", id: inferEntityId(result) }]);
+  }
+
+  if (action.toolName === "createMonthlyExpense") {
+    const expenseRecord = result as { id?: string; integration?: { linkedEntityType?: string | null; linkedEntityId?: string | null; assetTicker?: string | null; cashBoxId?: string | null } } | null;
+    return normalizeAffectedEntities([
+      { type: "monthlyExpense", id: inferEntityId(result) },
+      ...(expenseRecord?.integration?.linkedEntityType === "operation"
+        ? [
+            { type: "operation", id: expenseRecord.integration.linkedEntityId ?? undefined },
+            { type: "asset", id: expenseRecord.integration.assetTicker ?? undefined }
+          ]
+        : []),
+      ...(expenseRecord?.integration?.linkedEntityType === "cashBoxMovement"
+        ? [
+            { type: "cashBoxMovement", id: expenseRecord.integration.linkedEntityId ?? undefined },
+            { type: "cashBox", id: expenseRecord.integration.cashBoxId ?? undefined }
+          ]
+        : [])
+    ]);
+  }
+
+  if (action.toolName === "updateMonthlyIncome") {
+    return normalizeAffectedEntities([{ type: "monthlyPlan", id: inferEntityId(result) }]);
+  }
+
+  if (action.toolName === "createFinancialGoal") {
+    return normalizeAffectedEntities([{ type: "goal", id: inferEntityId(result) }]);
+  }
+
+  if (action.toolName === "markExpenseAsCompleted") {
+    const completionResult = result as { expense?: unknown } | null;
+    return normalizeAffectedEntities([
+      {
+        type: "monthlyExpense",
+        id: inferEntityId(completionResult?.expense) ?? (typeof fields.expenseId === "string" ? fields.expenseId : undefined)
+      }
+    ]);
+  }
+
+  if (
+    action.toolName === "createInvestmentPurchase" ||
+    action.toolName === "createInvestmentSale" ||
+    action.toolName === "registerBonus" ||
+    action.toolName === "registerSplit" ||
+    action.toolName === "registerReverseSplit"
+  ) {
+    return normalizeAffectedEntities([
+      { type: "operation", id: inferEntityId(result) },
+      { type: "asset", id: typeof fields.assetTicker === "string" ? fields.assetTicker : undefined }
+    ]);
+  }
+
+  if (action.toolName === "registerDividend" || action.toolName === "registerJCP") {
+    return normalizeAffectedEntities([
+      { type: "dividend", id: inferEntityId(result) },
+      { type: "asset", id: typeof fields.assetTicker === "string" ? fields.assetTicker : undefined }
+    ]);
+  }
+
+  if (action.toolName === "updateSettingsProfile") {
+    return normalizeAffectedEntities([{ type: "settings" }]);
+  }
+
+  return [];
+}
+
+function successSuggestions(route?: string) {
+  if (route === "/investimentos/aportes") return ["Como ficaram meus aportes?"];
+  if (route === "/operacoes") return ["Como ficou minha carteira?"];
+  if (route === "/dividendos") return ["Como ficaram meus dividendos?"];
+  if (route === "/configuracoes") return ["Quais configuracoes estao ativas agora?"];
+  return [];
+}
+
+function resolveSuccessRouteLabel(route?: string) {
+  if (route === "/investimentos/aportes") return "Ver aportes";
+  if (route === "/operacoes") return "Ver operacoes";
+  if (route === "/dividendos") return "Ver dividendos";
+  if (route === "/planejamento-mensal/gastos") return "Ver gastos";
+  if (route === "/metas") return "Ver metas";
+  if (route === "/planejamento-mensal/orcamento") return "Ver orcamento";
+  if (route === "/configuracoes") return "Ver configuracoes";
+  return "Ver dados";
+}
+
 function successResponse(message: string, action: AiPendingActionRecord, result: unknown, route?: string): AiChatStructuredResponse {
-  const routeLabel =
-    route === "/investimentos/aportes"
-      ? "Ver aportes"
-      : route === "/operacoes"
-        ? "Ver operacoes"
-        : route === "/dividendos"
-          ? "Ver dividendos"
-          : route === "/planejamento-mensal/gastos"
-            ? "Ver gastos"
-            : route === "/metas"
-              ? "Ver metas"
-              : route === "/planejamento-mensal/orcamento"
-                ? "Ver orcamento"
-                : "Ver dados";
+  const catalogEntry = getAiToolCatalogEntry(action.toolName);
+  const resolvedRoute = route ?? getAiToolPrimaryRoute(action.toolName);
+  const affectedEntities = inferAffectedEntities(action, result);
+  const dynamicDomains = new Set(catalogEntry.affectedDomains);
+
+  if (action.toolName === "createMonthlyExpense" || action.toolName === "markExpenseAsCompleted") {
+    const expenseRecord =
+      action.toolName === "markExpenseAsCompleted"
+        ? ((result as { expense?: { allocationKind?: string } | null } | null)?.expense ?? null)
+        : (result as { allocationKind?: string } | null);
+    if (expenseRecord?.allocationKind === "investment_contribution") {
+      dynamicDomains.add("dashboard");
+      dynamicDomains.add("portfolio");
+      dynamicDomains.add("operations");
+    }
+    if (expenseRecord?.allocationKind === "cash_box_contribution") {
+      dynamicDomains.add("dashboard");
+      dynamicDomains.add("portfolio");
+      dynamicDomains.add("cashBoxes");
+    }
+  }
+
   return createStructuredResponse({
     responseType: "success",
     title: "Operacao concluida",
@@ -550,15 +827,25 @@ function successResponse(message: string, action: AiPendingActionRecord, result:
           status: "neutral"
         }))
       },
-      ...(route
+      ...(resolvedRoute
         ? [{
             type: "actions" as const,
-            actions: [{ id: "view-result", label: routeLabel, type: "navigate" as const, route }]
+            actions: [{
+              id: catalogEntry.uiActionId ?? "view-result",
+              label: resolveSuccessRouteLabel(resolvedRoute),
+              type: "navigate" as const,
+              route: resolvedRoute
+            }]
           }]
         : [])
     ],
-    suggestions: route === "/investimentos/aportes" ? ["Como ficaram meus aportes?"] : route === "/operacoes" ? ["Como ficou minha carteira?"] : route === "/dividendos" ? ["Como ficaram meus dividendos?"] : [],
-    metadata: { generatedAt: new Date().toISOString() },
+    suggestions: successSuggestions(resolvedRoute),
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      affectedDomains: [...dynamicDomains],
+      affectedEntities,
+      mutationKey: catalogEntry.clientMutationKey
+    },
     pendingAction: {
       ...(action.preview ?? {
         id: action.id ?? "",
@@ -622,12 +909,13 @@ async function prepareExpense(sessionId: string, message: string) {
     status: "completed",
     ...(note ? { note } : {})
   };
+  const customMissing = [...category.missing, ...(await expenseCustomMissingFields(fields))];
   const action = await createPendingAction({
     sessionId,
     actionType: "create_monthly_expense",
     toolName: fields.recurring ? "createMonthlyExpense" : "createMonthlyExpense",
     extractedFields: fields,
-    missingFields: category.missing,
+    missingFields: customMissing,
     title: "Registrar gasto",
     previewFields: [
       ...(description ? [{ label: "Descricao", value: description }] : []),
@@ -640,6 +928,16 @@ async function prepareExpense(sessionId: string, message: string) {
   const missingNames = new Set(action.missingFields.map((field) => field.name));
   const messageText = missingNames.has("categoryId")
     ? "Em qual setor deseja registrar este gasto?"
+    : missingNames.has("investmentDestination")
+      ? "Esse valor foi para um aporte em ativo ou para uma caixinha?"
+      : missingNames.has("assetTicker")
+        ? "Em qual ativo deseja registrar este aporte?"
+        : missingNames.has("cashBoxId")
+          ? "Em qual caixinha deseja registrar essa transferencia?"
+          : missingNames.has("quantity")
+            ? "Qual foi a quantidade comprada?"
+            : missingNames.has("price")
+              ? "Qual foi o preco unitario?"
     : missingNames.has("description")
       ? "Qual descricao deseja usar para este gasto?"
       : "Confirme o registro deste gasto.";
@@ -687,6 +985,39 @@ async function prepareGoal(sessionId: string, message: string) {
   return actionResponse(action, action.status === "collecting" ? "Qual nome deseja usar para esta meta?" : "Confirme a criacao desta meta financeira.");
 }
 
+async function prepareSettingsUpdate(sessionId: string, message: string) {
+  const extractedFields: ExtractedFields = {};
+  const profileName = extractProfileName(message);
+  const theme = parseThemePreference(message);
+  const currency = parseCurrencyPreference(message);
+
+  if (profileName) extractedFields.profileName = profileName;
+  if (theme) extractedFields.theme = theme;
+  if (currency) extractedFields.currency = currency;
+
+  if (Object.keys(extractedFields).length === 0) {
+    if (!settingsWriteIntentPattern.test(message)) return null;
+
+    return createStructuredResponse({
+      responseType: "form",
+      title: "Qual configuracao deseja alterar?",
+      message: "Posso atualizar nome, tema ou moeda com confirmacao. Diga, por exemplo: mude meu nome para Joao ou troque para tema claro.",
+      pendingAction: null,
+      suggestions: ["Mudar meu nome", "Trocar para tema claro", "Usar moeda BRL"]
+    });
+  }
+
+  const action = await createPendingAction({
+    sessionId,
+    actionType: "update_settings_profile",
+    toolName: "updateSettingsProfile",
+    extractedFields,
+    title: "Atualizar configuracoes",
+    previewFields: buildSettingsPreviewFields(extractedFields)
+  });
+  return actionResponse(action, "Confirme a atualizacao dessas configuracoes.");
+}
+
 async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|paga|pago|paguei)/.test(normalized)) return null;
@@ -721,20 +1052,61 @@ async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
   }
 
   const expense = candidates[0];
+  const completedAt = parseCompletedAtInput(message);
   const action = await createPendingAction({
     sessionId,
     actionType: "mark_expense_completed",
     toolName: "markExpenseAsCompleted",
-    extractedFields: { expenseId: expense.id, description: expense.description, amountInCents: expense.amountInCents },
+    extractedFields: { expenseId: expense.id, description: expense.description, amountInCents: expense.amountInCents, completedAt },
     riskLevel: "medium",
     title: "Marcar gasto como pago",
     previewFields: [
       { label: "Descricao", value: expense.description },
       { label: "Valor", value: formatCurrencyFromCents(expense.amountInCents) },
-      { label: "Data", value: formatDateBr(expense.date) }
+      { label: "Data", value: formatDateBr(expense.date) },
+      ...(completedAt ? [{ label: "Pagamento", value: formatDateBr(String(completedAt).slice(0, 10)) }] : [])
     ]
   });
   return actionResponse(action, "Confirme para marcar este gasto como pago.");
+}
+
+function expenseCollectingMessage(missingFields: MissingField[]) {
+  const missingNames = new Set(missingFields.map((field) => field.name));
+  if (missingNames.has("categoryId")) return "Em qual setor deseja registrar este gasto?";
+  if (missingNames.has("investmentDestination")) return "Esse valor foi para um aporte em ativo ou para uma caixinha?";
+  if (missingNames.has("assetTicker")) return "Em qual ativo deseja registrar este aporte?";
+  if (missingNames.has("cashBoxId")) return "Em qual caixinha deseja registrar essa transferencia?";
+  if (missingNames.has("quantity")) return "Qual foi a quantidade comprada?";
+  if (missingNames.has("price")) return "Qual foi o preco unitario?";
+  if (missingNames.has("description")) return "Qual descricao deseja usar para este gasto?";
+  return "Confirme o registro deste gasto.";
+}
+
+async function refreshExpenseCollectingAction(action: AiPendingActionRecord, extractedFields: ExtractedFields, categoryName?: string) {
+  const customMissing = await expenseCustomMissingFields(extractedFields);
+  const missingFields = getMissingRequiredFields(action.toolName, extractedFields, customMissing);
+  if (missingFields.length === 0) validateToolFieldsForPreview(action.toolName, extractedFields);
+  const status = missingFields.length ? "collecting" : "awaiting_confirmation";
+  const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status });
+  if (!updated) return null;
+  const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
+  const resolvedCategoryName = categoryName ?? plan.categories.find((item) => item.id === extractedFields.categoryId)?.name ?? "Pendente";
+  const preview = buildPreview(updated, [
+    ...(isPresent(extractedFields.description) ? [{ label: "Descricao", value: String(extractedFields.description) }] : []),
+    { label: "Valor", value: formatCurrencyFromCents(Number(extractedFields.amountInCents)) },
+    { label: "Data", value: `${formatDateBr(String(extractedFields.date))} ${String(extractedFields.time ?? "")}` },
+    { label: "Setor", value: resolvedCategoryName },
+    ...(typeof extractedFields.investmentDestination === "string"
+      ? [{ label: "Destino", value: extractedFields.investmentDestination === "asset" ? "Aporte em ativo" : "Caixinha" }]
+      : []),
+    ...(typeof extractedFields.assetTicker === "string" ? [{ label: "Ativo", value: extractedFields.assetTicker }] : []),
+    ...(typeof extractedFields.cashBoxId === "string" ? [{ label: "Caixinha", value: extractedFields.cashBoxId }] : []),
+    ...(isPresent(extractedFields.quantity) ? [{ label: "Quantidade", value: String(extractedFields.quantity) }] : []),
+    ...(isPresent(extractedFields.price) ? [{ label: "Preco", value: formatCurrencyFromCents(Math.round(Number(extractedFields.price) * 100)) }] : []),
+    ...(isPresent(extractedFields.note) ? [{ label: "Observacao", value: String(extractedFields.note) }] : [])
+  ], "Registrar gasto");
+  const withPreview = await updateAiPendingAction(action.id ?? "", { preview });
+  return { action: withPreview ?? { ...updated, preview }, missingFields, status };
 }
 
 async function prepareInvestmentOperation(sessionId: string, message: string, operationType: "COMPRA" | "VENDA" | "BONIFICACAO" | "DESDOBRAMENTO" | "GRUPAMENTO") {
@@ -865,6 +1237,20 @@ function parseDateInput(message: string) {
   return `${year}-${pad(Number(br[2]))}-${pad(Number(br[1]))}`;
 }
 
+function parseCompletedAtInput(message: string) {
+  const normalized = normalizeText(message);
+  if (!/\b(agora|hoje|ontem)\b/.test(normalized) && !parseDateInput(message)) return undefined;
+  if (/\bagora\b/.test(normalized)) return getLocalTimestampWithOffset();
+
+  const paymentDate = parseDateInput(message);
+  if (!paymentDate) return undefined;
+
+  const now = nowFields();
+  const [year, month, day] = paymentDate.split("-").map(Number);
+  const [hour, minute] = now.time.split(":").map(Number);
+  return getLocalTimestampWithOffset(new Date(year, month - 1, day, hour, minute, 0, 0));
+}
+
 function parseLooseNumber(message: string) {
   const match = message.match(/(\d+(?:[.,]\d+)?)/);
   return match ? parseBrazilianNumber(match[1]) : null;
@@ -932,6 +1318,18 @@ async function resolveTickerFromMessage(message: string) {
   const assets = await listAssets();
   const selected = assets.find((asset) => normalizeText(asset.ticker) === normalized || normalizeText(asset.name) === normalized || normalized.includes(normalizeText(asset.ticker)));
   return selected?.ticker ?? null;
+}
+
+async function resolveCashBoxFromMessage(message: string) {
+  const normalized = normalizeText(message).trim();
+  const cashBoxes = await listCashBoxes();
+  const selected = cashBoxes.find(
+    (cashBox) =>
+      normalizeText(cashBox.name) === normalized ||
+      normalized.includes(normalizeText(cashBox.name)) ||
+      normalizeText(cashBox.type).includes(normalized)
+  );
+  return selected?.id ?? null;
 }
 
 async function updateInvestmentCollectingAction(action: AiPendingActionRecord, message: string) {
@@ -1008,7 +1406,7 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     result = await registerContribution({ date: String(parsed.date), amount: parsed.value, notes: parsed.description });
     route = "/investimentos/aportes";
   } else if (action.toolName === "createMonthlyExpense") {
-    const parsed = monthlyExpenseSchema.parse(fields);
+    const parsed = monthlyExpenseSchema.parse(buildMonthlyExpenseToolPayload(fields, action.idempotencyKey));
     result = await addMonthlyExpense(String(parsed.planId), parsed);
     route = "/planejamento-mensal/gastos";
   } else if (action.toolName === "updateMonthlyIncome") {
@@ -1027,7 +1425,7 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     result = await registerGoal({ title: parsed.title, type: parsed.type, target: parsed.targetValue ?? 0, category: parsed.description });
     route = "/metas";
   } else if (action.toolName === "markExpenseAsCompleted") {
-    result = await editMonthlyExpense(String(fields.expenseId), { status: "completed" });
+    result = await completeMonthlyExpense(String(fields.expenseId), { completedAt: fields.completedAt ? String(fields.completedAt) : undefined });
     route = "/planejamento-mensal/gastos";
   } else if (
     action.toolName === "createInvestmentPurchase" ||
@@ -1072,6 +1470,10 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     });
     result = await createDividend(parsed);
     route = "/dividendos";
+  } else if (action.toolName === "updateSettingsProfile") {
+    const parsed = settingsUpdateSchema.parse(fields);
+    result = await updateSettings(parsed);
+    route = "/configuracoes";
   } else {
     throw new Error(`Ferramenta nao autorizada: ${action.toolName}`);
   }
@@ -1089,32 +1491,7 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     executedAt: new Date()
   });
 
-  const successMessage =
-    action.toolName === "createContribution"
-      ? "Aporte registrado com sucesso."
-      : action.toolName === "createMonthlyExpense"
-        ? "Gasto registrado com sucesso."
-        : action.toolName === "updateMonthlyIncome"
-          ? "Renda mensal atualizada com sucesso."
-          : action.toolName === "createFinancialGoal"
-            ? "Meta criada com sucesso."
-            : action.toolName === "createInvestmentPurchase"
-              ? "Compra registrada com sucesso."
-              : action.toolName === "createInvestmentSale"
-                ? "Venda registrada com sucesso."
-                : action.toolName === "registerDividend"
-                  ? "Dividendo registrado com sucesso."
-                  : action.toolName === "registerJCP"
-                    ? "JCP registrado com sucesso."
-                    : action.toolName === "registerBonus"
-                      ? "Bonificacao registrada com sucesso."
-                      : action.toolName === "registerSplit"
-                        ? "Desdobramento registrado com sucesso."
-                        : action.toolName === "registerReverseSplit"
-                          ? "Grupamento registrado com sucesso."
-                          : "Gasto marcado como pago.";
-
-  return successResponse(successMessage, executed ?? action, result, route);
+  return successResponse(getAiToolCatalogEntry(action.toolName).successMessage, executed ?? action, result, route);
 }
 
 async function updateCollectingAction(action: AiPendingActionRecord, message: string) {
@@ -1131,40 +1508,60 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
     const selected = plan.categories.find((category) => normalizeText(category.name) === normalized || normalized.includes(normalizeText(category.name)));
     if (!selected) return actionResponse(action, "Nao encontrei esse setor. Escolha uma das opcoes exibidas.");
     const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>), planId: planId || plan.id, categoryId: selected.id };
-    const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
-    if (missingFields.length === 0) validateToolFieldsForPreview(action.toolName, extractedFields);
-    const status = missingFields.length ? "collecting" : "awaiting_confirmation";
-    const updated = await updateAiPendingAction(action.id, { extractedFields, missingFields, status });
-    if (!updated) return createErrorResponse("Nao consegui atualizar a acao pendente.");
-    const extractedRecord = extractedFields as Record<string, unknown>;
-    const preview = buildPreview(updated, [
-      ...(isPresent(extractedRecord.description) ? [{ label: "Descricao", value: String(extractedRecord.description) }] : []),
-      { label: "Valor", value: formatCurrencyFromCents(Number(extractedRecord.amountInCents)) },
-      { label: "Data", value: `${formatDateBr(String(extractedRecord.date))} ${String(extractedRecord.time ?? "")}` },
-      { label: "Setor", value: selected.name }
-    ], "Registrar gasto");
-    const withPreview = await updateAiPendingAction(action.id, { preview });
-    return actionResponse(withPreview ?? { ...updated, preview }, status === "collecting" ? "Qual descricao deseja usar para este gasto?" : "Confirme o registro deste gasto.");
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields, selected.name);
+    if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
+    return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
   }
 
   if (action.toolName === "createMonthlyExpense" && action.missingFields.some((field) => field.name === "description")) {
     const description = sanitizeExtractedDescription(message);
     if (!description) return actionResponse(action, "Informe uma descricao curta e clara para este gasto.");
     const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>), description };
-    const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
-    if (missingFields.length === 0) validateToolFieldsForPreview(action.toolName, extractedFields);
-    const status = missingFields.length ? "collecting" : "awaiting_confirmation";
-    const updated = await updateAiPendingAction(action.id, { extractedFields, missingFields, status });
-    if (!updated) return createErrorResponse("Nao consegui atualizar a acao pendente.");
-    const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
-    const preview = buildPreview(updated, [
-      { label: "Descricao", value: description },
-      { label: "Valor", value: formatCurrencyFromCents(Number(extractedFields.amountInCents)) },
-      { label: "Data", value: `${formatDateBr(String(extractedFields.date))} ${String(extractedFields.time ?? "")}` },
-      { label: "Setor", value: plan.categories.find((item) => item.id === extractedFields.categoryId)?.name ?? "Pendente" }
-    ], "Registrar gasto");
-    const withPreview = await updateAiPendingAction(action.id, { preview });
-    return actionResponse(withPreview ?? { ...updated, preview }, status === "collecting" ? "Em qual setor deseja registrar este gasto?" : "Confirme o registro deste gasto.");
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields);
+    if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
+    return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
+  }
+
+  if (
+    action.toolName === "createMonthlyExpense" &&
+    action.missingFields.some((field) => ["investmentDestination", "assetTicker", "cashBoxId", "quantity", "price"].includes(field.name))
+  ) {
+    const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>) };
+    const normalized = normalizeText(message);
+
+    if (action.missingFields.some((field) => field.name === "investmentDestination")) {
+      if (/(caixinha|reserva|cash)/.test(normalized)) extractedFields.investmentDestination = "cashbox";
+      else if (/(ativo|acao|acao|fii|etf|ticker|compra|carteira)/.test(normalized)) extractedFields.investmentDestination = "asset";
+      else return actionResponse(action, "Responda com ativo ou caixinha para eu seguir com o destino correto.");
+    }
+
+    if (action.missingFields.some((field) => field.name === "assetTicker") && extractedFields.investmentDestination === "asset") {
+      const ticker = await resolveTickerFromMessage(message);
+      if (!ticker) return actionResponse(action, "Nao encontrei esse ativo. Informe o ticker, por exemplo VGIR11.");
+      extractedFields.assetTicker = ticker;
+    }
+
+    if (action.missingFields.some((field) => field.name === "cashBoxId") && extractedFields.investmentDestination === "cashbox") {
+      const cashBoxId = await resolveCashBoxFromMessage(message);
+      if (!cashBoxId) return actionResponse(action, "Nao encontrei essa caixinha. Informe o nome exato da reserva.");
+      extractedFields.cashBoxId = cashBoxId;
+    }
+
+    if (action.missingFields.some((field) => field.name === "quantity") && extractedFields.investmentDestination === "asset") {
+      const quantity = parseQuantity(message) ?? parseLooseNumber(message);
+      if (!quantity || quantity <= 0) return actionResponse(action, "Informe uma quantidade maior que zero.");
+      extractedFields.quantity = quantity;
+    }
+
+    if (action.missingFields.some((field) => field.name === "price") && extractedFields.investmentDestination === "asset") {
+      const price = parseInvestmentPrice(message) ?? parseLooseNumber(message);
+      if (!price || price <= 0) return actionResponse(action, "Informe um preco unitario maior que zero.");
+      extractedFields.price = price;
+    }
+
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields);
+    if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
+    return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
   }
 
   if (action.toolName === "createFinancialGoal" && action.missingFields.some((field) => field.name === "title")) {
@@ -1221,7 +1618,7 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
     return { handled: true, response: await updateCollectingAction(activeAction, input.message) };
   }
 
-  if (!writeIntentPattern.test(input.message)) return { handled: false };
+  if (!writeIntentPattern.test(input.message) && !settingsWriteIntentPattern.test(input.message)) return { handled: false };
 
   if (activeAction && activeAction.status === "awaiting_confirmation") {
     return {
@@ -1248,6 +1645,7 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   else if (/(dividendo|rendimento).*(registr|cadast|receb|lanc|lanç|adic)|(?:registr|cadast|receb|lanc|lanç|adic).*(dividendo|rendimento)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "dividendo");
   else if (/(aporte|contribuicao|contribuicao|depositei|deposito)/.test(normalized)) response = await prepareContribution(input.sessionId, input.message);
   else if (/(renda|salario|salario)/.test(normalized)) response = await prepareIncome(input.sessionId, input.message);
+  else if (/(tema|moeda|configur|perfil|nome)/.test(normalized)) response = await prepareSettingsUpdate(input.sessionId, input.message);
   else if (/(meta|objetivo)/.test(normalized)) response = await prepareGoal(input.sessionId, input.message);
   else if (/(marque|paga|pago|paguei)/.test(normalized)) response = await prepareMarkExpenseCompleted(input.sessionId, input.message);
   else if (/(gastei|gasto|despesa|assinatura|gasolina|spotify|mercado|uber)/.test(normalized)) response = await prepareExpense(input.sessionId, input.message);

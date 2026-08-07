@@ -401,6 +401,15 @@ export async function findOperationById(id: string): Promise<OperationRecord | n
   return localOperations.find((operation) => operation.id === id) ?? null;
 }
 
+export async function findOperationByPlanningExpenseId(expenseId: string): Promise<OperationRecord | null> {
+  if (isDatabaseConnected()) {
+    const operation = await OperationModel.findOne({ "planningLink.expenseId": expenseId }).lean();
+    return operation ? (withId(operation) as unknown as OperationRecord) : null;
+  }
+
+  return localOperations.find((operation) => operation.planningLink?.expenseId === expenseId) ?? null;
+}
+
 export async function createOperation(input: Omit<OperationRecord, "id">): Promise<OperationRecord> {
   const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
 

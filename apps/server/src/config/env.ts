@@ -68,5 +68,6 @@ export const env = {
   aiAnalysisCacheMinutes: parseNumber(process.env.AI_ANALYSIS_CACHE_MINUTES, 30),
   aiMaxRequestsPerHour: parseNumber(process.env.AI_MAX_REQUESTS_PER_HOUR, 20),
   aiChatMaxMessages: parseNumber(process.env.AI_CHAT_MAX_MESSAGES, 20),
-  aiChatMaxContextTokens: parseNumber(process.env.AI_CHAT_MAX_CONTEXT_TOKENS, 12000)
+  aiChatMaxContextTokens: parseNumber(process.env.AI_CHAT_MAX_CONTEXT_TOKENS, 12000),
+  performanceLogs: parseBoolean(process.env.PERFORMANCE_LOGS, false)
 };

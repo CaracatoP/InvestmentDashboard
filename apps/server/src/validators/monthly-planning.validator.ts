@@ -4,6 +4,21 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-M
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must use HH:mm");
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color must use #RRGGBB");
 const recurrenceFrequencySchema = z.enum(["weekly", "biweekly", "monthly", "annual", "custom"]);
+const timestampSchema = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/, "Timestamp must use ISO 8601 with timezone");
+const expenseIntegrationSchema = z.object({
+  destination: z.enum(["asset", "cashbox"]),
+  linkedEntityType: z.enum(["operation", "cashBoxMovement"]).nullable().optional(),
+  linkedEntityId: z.string().trim().nullable().optional(),
+  assetId: z.string().trim().nullable().optional(),
+  assetTicker: z.string().trim().nullable().optional().transform((value) => value?.toUpperCase() ?? value),
+  cashBoxId: z.string().trim().nullable().optional(),
+  operationType: z.enum(["COMPRA", "VENDA", "BONIFICACAO", "DESDOBRAMENTO", "GRUPAMENTO"]).nullable().optional(),
+  quantity: z.number().positive().nullable().optional(),
+  price: z.number().positive().nullable().optional(),
+  fees: z.number().nonnegative().nullable().optional(),
+  integrationId: z.string().trim().nullable().optional(),
+  idempotencyKey: z.string().trim().min(8).nullable().optional()
+});
 
 const monthlyFinancialGoalSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -98,6 +113,8 @@ export const monthlyExpenseSchema = z.object({
   recurrenceOriginalDate: dateSchema.nullable().optional(),
   recurrenceCancelled: z.boolean().optional(),
   status: z.enum(["completed", "planned"]).optional(),
+  integration: expenseIntegrationSchema.nullable().optional(),
+  completedAt: timestampSchema.nullable().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional()
 });
@@ -123,9 +140,19 @@ export const monthlyExpenseUpdateSchema = z.object({
   recurrenceOriginalDate: dateSchema.nullable().optional(),
   recurrenceCancelled: z.boolean().optional(),
   status: z.enum(["completed", "planned"]).optional(),
+  integration: expenseIntegrationSchema.nullable().optional(),
+  completedAt: timestampSchema.nullable().optional(),
   updatedAt: z.string().optional()
 });
 
 export const monthlyExpenseMutationQuerySchema = z.object({
   scope: z.enum(["single", "series"]).default("single")
+});
+
+export const monthlyExpenseCompletionSchema = z.object({
+  completedAt: timestampSchema.optional()
+});
+
+export const monthlyExpenseCompletionQuerySchema = z.object({
+  comparisonRange: z.coerce.number().int().min(1).max(12).default(1)
 });

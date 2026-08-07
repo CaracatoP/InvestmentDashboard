@@ -1,6 +1,5 @@
 import { ArrowDownCircle, ArrowUpCircle, GitCompareArrows, Target } from "lucide-react";
-import { BarChart } from "../components/charts/BarChart";
-import { PieChart } from "../components/charts/PieChart";
+import { LazyBarChart, LazyPieChart } from "../components/charts/LazyCharts";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
@@ -79,14 +78,14 @@ export function RebalancingPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <ChartCard title="Distribuicao atual">
-          <PieChart data={comparison} />
+          <LazyPieChart data={comparison} />
         </ChartCard>
         <ChartCard title="Distribuicao ideal e diferenca">
-          <PieChart data={idealData} height={170} />
-          <BarChart data={differenceData} name="Diferenca" color="#38bdf8" height={170} />
+          <LazyPieChart data={idealData} height={170} />
+          <LazyBarChart data={differenceData} name="Diferenca" color="#38bdf8" height={170} />
         </ChartCard>
         <ChartCard title="Quanto falta por categoria">
-          <BarChart data={missingData} name="Quanto falta" color="#38bdf8" />
+          <LazyBarChart data={missingData} name="Quanto falta" color="#38bdf8" />
         </ChartCard>
       </section>
 

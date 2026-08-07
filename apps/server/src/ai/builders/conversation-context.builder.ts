@@ -17,6 +17,7 @@ export type AiConversationIntent =
   | "history"
   | "cashboxes"
   | "compare_periods"
+  | "settings"
   | "general";
 
 function nowPeriod() {
@@ -51,6 +52,7 @@ export function detectConversationIntent(message: string): AiConversationIntent 
   if (/(historico|timeline|moviment)/.test(text)) return "history";
   if (/(caixinha|reserva|nubank|cdi)/.test(text)) return "cashboxes";
   if (/(compar|mes anterior|periodo)/.test(text)) return "compare_periods";
+  if (/(configur|perfil|tema|moeda|preferenc|nome|status da ia|ia configurada|alocacao ideal)/.test(text)) return "settings";
   return "general";
 }
 
@@ -83,6 +85,7 @@ export async function buildConversationContext(message: string) {
   if (intent === "cashboxes") return { intent, context: await buildInvestmentContext("cashboxes") };
   if (intent === "history") return { intent, context: await buildInvestmentContext("history") };
   if (intent === "projections") return { intent, context: await buildInvestmentContext("projections") };
+  if (intent === "settings") return { intent, context: await buildInvestmentContext("settings") };
 
   return {
     intent,

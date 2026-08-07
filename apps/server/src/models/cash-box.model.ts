@@ -2,6 +2,7 @@ import { Schema, model, models, InferSchemaType } from "mongoose";
 
 const cashBoxMovementSchema = new Schema(
   {
+    id: { type: String, default: null, index: true },
     type: {
       type: String,
       enum: ["DEPOSITO", "RESGATE", "RENDIMENTO", "contribution", "withdrawal", "yield", "adjustment"],
@@ -9,7 +10,14 @@ const cashBoxMovementSchema = new Schema(
     },
     value: { type: Number, required: true, min: 0 },
     date: { type: Date, required: true },
-    description: { type: String, default: "" }
+    description: { type: String, default: "" },
+    origin: { type: String, enum: ["manual", "monthly-planning"], default: "manual" },
+    planningLink: {
+      expenseId: { type: String, default: null },
+      planId: { type: String, default: null },
+      integrationId: { type: String, default: null },
+      idempotencyKey: { type: String, default: null }
+    }
   },
   { _id: true }
 );

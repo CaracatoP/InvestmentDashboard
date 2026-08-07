@@ -1,7 +1,9 @@
 import { Bot, Clock, RefreshCw, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useWorkspaceInvalidation } from "../../hooks/useWorkspaceInvalidation";
 import { fetchAiAnalyses, generateAiAnalysis } from "../../services/api";
+import { analysisDependencyDomains } from "../../services/workspace-mutation-effects";
 import type { AiAnalysisResult, AiAnalysisType, AiStoredAnalysis } from "../../types/ai";
 
 const analysisTypeLabels: Record<AiAnalysisType, string> = {
@@ -27,7 +29,7 @@ const statusClasses: Record<AiAnalysisResult["analysis"]["status"], string> = {
   insufficient_data: "bg-elevated text-muted"
 };
 
-type AiAnalysisPanelProps = {
+export type AiAnalysisPanelProps = {
   year: number;
   month: number;
   analysisType?: AiAnalysisType;
@@ -84,6 +86,7 @@ export function AiAnalysisPanel({
   const [history, setHistory] = useState<AiStoredAnalysis[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isStale, setIsStale] = useState(false);
 
   useEffect(() => {
     setSelectedType(analysisType);
@@ -113,6 +116,19 @@ export function AiAnalysisPanel({
     };
   }, [categoryId, month, selectedType, year]);
 
+  useEffect(() => {
+    setIsStale(false);
+  }, [categoryId, month, selectedType, year]);
+
+  useWorkspaceInvalidation(["ai"], async () => {
+    const items = await fetchAiAnalyses(30);
+    setHistory(items);
+  });
+
+  useWorkspaceInvalidation(analysisDependencyDomains[selectedType], () => {
+    if (analysis) setIsStale(true);
+  });
+
   async function handleGenerate(forceRefresh = false) {
     setIsLoading(true);
     setError("");
@@ -126,6 +142,7 @@ export function AiAnalysisPanel({
       });
       setAnalysis(result);
       setHistory(await fetchAiAnalyses(30));
+      setIsStale(false);
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Nao foi possivel gerar a analise.");
     } finally {
@@ -192,6 +209,11 @@ export function AiAnalysisPanel({
       </div>
 
       {error ? <p className="mt-3 rounded-lg bg-amber/10 px-3 py-2 text-sm text-amber">{error}</p> : null}
+      {isStale ? (
+        <p className="mt-3 rounded-lg border border-amber/30 bg-amber/10 px-3 py-2 text-sm text-amber">
+          Dados alterados desde a ultima analise. Atualize para sincronizar este resumo com o estado atual do sistema.
+        </p>
+      ) : null}
 
       <div className="mt-4 grid gap-3">
         {analysis ? (

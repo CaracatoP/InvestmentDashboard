@@ -1,17 +1,27 @@
-import { AlertTriangle, BarChart3, Bell, CalendarDays, ChevronLeft, ChevronRight, ClipboardCopy, Coins, CreditCard, Download, Plus, Search, Target, TrendingUp, WalletCards } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, BarChart3, Bell, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Coins, CreditCard, Download, Loader2, MoreHorizontal, Plus, Search, Target, TrendingUp, WalletCards } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { BarChart } from "../charts/BarChart";
-import { LineChart } from "../charts/LineChart";
-import { AiAnalysisPanel } from "../ai/AiAnalysisPanel";
+import { LazyBarChart, LazyLineChart } from "../charts/LazyCharts";
+import { LazyAiAnalysisPanel } from "../ai/LazyAiAnalysisPanel";
 import { ConfirmDelete, areaClass, fieldClass, ManagementModal } from "../ui/Management";
 import { PageHeader } from "../ui/PageHeader";
 import { ProgressBar } from "../ui/ProgressBar";
-import { MobileDataCard } from "../ui/Responsive";
 import { StatCard } from "../ui/StatCard";
 import { MoneyValue } from "../ui/ValueDisplay";
-import { monthlyPlanningApi } from "../../services/api";
-import type { MonthlyBudgetType, MonthlyExpenseRecord, MonthlyExpenseStatus, MonthlyFinancialGoalRecord, MonthlyPlanCategoryRecord, MonthlyPlanningOverview, MonthlyPlanRecord, MonthlyRecurrenceFrequency } from "../../types/management";
+import { assetRecordsApi, cashBoxRecordsApi, monthlyPlanningApi } from "../../services/api";
+import type {
+  AssetRecord,
+  CashBoxRecord,
+  MonthlyBudgetType,
+  MonthlyExpenseInvestmentDestination,
+  MonthlyExpenseRecord,
+  MonthlyExpenseStatus,
+  MonthlyFinancialGoalRecord,
+  MonthlyPlanCategoryRecord,
+  MonthlyPlanningOverview,
+  MonthlyPlanRecord,
+  MonthlyRecurrenceFrequency
+} from "../../types/management";
 import { exportCsv, formatCents, formatPercentage, parseBrazilianMoneyToCents } from "../../utils/formatters";
 import {
   ContributionGoalSummary,
@@ -24,6 +34,15 @@ import {
   PlanningSmartSummary
 } from "./PlanningOverviewBlocks";
 import { PlanningSubnav } from "./PlanningSubnav";
+import {
+  buildLocalTimestampFromDateTime,
+  canMarkExpenseAsPaid,
+  formatCompletedAt,
+  getExpenseDueState,
+  matchesExpenseStatusFilter,
+  type ExpenseDueState,
+  type ExpenseStatusFilter
+} from "./planning-expense-utils";
 
 type CategoryForm = {
   id?: string;
@@ -53,6 +72,14 @@ type ExpenseForm = {
   editScope: "single" | "series";
   status: MonthlyExpenseStatus;
   useCurrentMoment: boolean;
+  investmentDestination: MonthlyExpenseInvestmentDestination | "";
+  assetId: string;
+  assetSearch: string;
+  quantity: string;
+  price: string;
+  fees: string;
+  cashBoxId: string;
+  idempotencyKey: string;
 };
 
 type GoalForm = {
@@ -66,26 +93,39 @@ type GoalForm = {
   active: boolean;
 };
 
+type ExpenseCompletionForm = {
+  useCurrentMoment: boolean;
+  completedDate: string;
+  completedTime: string;
+};
+
 type CalendarEvent = MonthlyPlanningOverview["calendarDays"][number]["events"][number];
 
 const categoryIcons = [
-  { value: "home", label: "🏠 Moradia" },
-  { value: "utensils", label: "🍽️ Alimentacao" },
-  { value: "car", label: "🚗 Transporte" },
-  { value: "smile", label: "🎮 Lazer" },
-  { value: "trending-up", label: "📈 Investimentos" },
-  { value: "heart", label: "❤️ Saude" },
-  { value: "repeat", label: "🔁 Assinaturas" },
-  { value: "book-open", label: "📚 Educacao" },
-  { value: "tag", label: "🏷️ Outros" }
+  { value: "home", label: "ðŸ  Moradia" },
+  { value: "utensils", label: "ðŸ½ï¸ Alimentacao" },
+  { value: "car", label: "ðŸš— Transporte" },
+  { value: "smile", label: "ðŸŽ® Lazer" },
+  { value: "trending-up", label: "ðŸ“ˆ Investimentos" },
+  { value: "heart", label: "â¤ï¸ Saude" },
+  { value: "repeat", label: "ðŸ” Assinaturas" },
+  { value: "book-open", label: "ðŸ“š Educacao" },
+  { value: "tag", label: "ðŸ·ï¸ Outros" }
 ];
 
 const categoryColors = ["#22c55e", "#38bdf8", "#a78bfa", "#f59e0b", "#fb7185", "#14b8a6", "#3b82f6", "#8b9491"];
 
 const statusLabels: Record<MonthlyExpenseStatus, string> = {
-  completed: "Realizado",
+  completed: "Pago",
   planned: "Previsto"
 };
+
+const expenseStatusFilters: Array<{ value: ExpenseStatusFilter; label: string }> = [
+  { value: "all", label: "Todos" },
+  { value: "pending", label: "Pendentes" },
+  { value: "paid", label: "Pagos" },
+  { value: "future", label: "Futuros" }
+];
 
 const recurrenceFrequencyLabels: Record<MonthlyRecurrenceFrequency, string> = {
   weekly: "Semanal",
@@ -105,13 +145,13 @@ const comparisonRangeOptions = [
 const paymentMethodLabels: Record<string, string> = {
   pix: "Pix",
   debito: "Debito",
-  "débito": "Debito",
+  "dÃ©bito": "Debito",
   credito: "Credito",
-  "crédito": "Credito",
+  "crÃ©dito": "Credito",
   dinheiro: "Dinheiro",
   conta: "Conta bancaria",
   "conta bancaria": "Conta bancaria",
-  "conta bancária": "Conta bancaria"
+  "conta bancÃ¡ria": "Conta bancaria"
 };
 
 const alertToneClass = {
@@ -125,6 +165,8 @@ const eventToneClass: Record<string, string> = {
   salary: "bg-accent/15 text-accent",
   dividend: "bg-aqua/15 text-aqua",
   contribution: "bg-violet/15 text-violet",
+  "investment-contribution": "bg-violet/15 text-violet",
+  "cashbox-contribution": "bg-aqua/15 text-aqua",
   "recurring-expense": "bg-amber/15 text-amber",
   expense: "bg-rose/15 text-rose"
 };
@@ -133,6 +175,8 @@ const eventTypeLabels: Record<string, string> = {
   salary: "Salario",
   dividend: "Dividendo",
   contribution: "Aporte",
+  "investment-contribution": "Aporte em ativo",
+  "cashbox-contribution": "Caixinha",
   "recurring-expense": "Recorrente",
   expense: "Gasto"
 };
@@ -215,8 +259,30 @@ function formatMoneyInput(valueInCents: number) {
   return (valueInCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function createExpenseIdempotencyKey() {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `expense-${Date.now()}`;
+}
+
+function normalizeCategoryName(value?: string) {
+  return value
+    ?.trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") ?? "";
+}
+
+function isInvestmentCategory(category?: Pick<MonthlyPlanCategoryRecord, "id" | "name"> | null) {
+  if (!category) return false;
+  return category.id === "investimentos" || normalizeCategoryName(category.name) === "investimentos";
+}
+
+function formatNumberInput(value?: number | null, decimals = 2) {
+  if (!Number.isFinite(value)) return "";
+  return Number(value).toFixed(decimals);
+}
+
 function iconLabel(icon: string) {
-  return categoryIcons.find((item) => item.value === icon)?.label.split(" ")[0] ?? "🏷️";
+  return categoryIcons.find((item) => item.value === icon)?.label.split(" ")[0] ?? "ðŸ·ï¸";
 }
 
 function slugify(value: string) {
@@ -244,6 +310,7 @@ function categoryFormFromRecord(category?: MonthlyPlanCategoryRecord): CategoryF
 function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""): ExpenseForm {
   const now = getLocalDateTimeFields();
   const dayOfMonth = expense?.recurrenceDayOfMonth ?? Number((expense?.date ?? now.date).slice(8, 10));
+  const integration = expense?.integration;
   return {
     description: expense?.description ?? "",
     amount: formatMoneyInput(expense?.amountInCents ?? 0),
@@ -261,7 +328,15 @@ function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""):
     recurrenceEndDate: expense?.recurrenceEndDate ?? "",
     editScope: "single",
     status: expense?.status ?? "completed",
-    useCurrentMoment: !expense
+    useCurrentMoment: !expense,
+    investmentDestination: integration?.destination ?? "",
+    assetId: integration?.assetId ?? "",
+    assetSearch: integration?.assetTicker ?? "",
+    quantity: formatNumberInput(integration?.quantity, 6),
+    price: formatNumberInput(integration?.price, 2),
+    fees: formatNumberInput(integration?.fees ?? 0, 2),
+    cashBoxId: integration?.cashBoxId ?? "",
+    idempotencyKey: integration?.idempotencyKey ?? createExpenseIdempotencyKey()
   };
 }
 
@@ -275,6 +350,15 @@ function goalFormFromRecord(goal?: MonthlyFinancialGoalRecord): GoalForm {
     linkedSource: goal?.linkedSource ?? "manual",
     linkedSourceId: goal?.linkedSourceId ?? "",
     active: goal?.active ?? true
+  };
+}
+
+function expenseCompletionFormFromRecord() {
+  const now = getLocalDateTimeFields();
+  return {
+    useCurrentMoment: true,
+    completedDate: now.date,
+    completedTime: now.time
   };
 }
 
@@ -332,6 +416,172 @@ function normalizePaymentMethodLabel(paymentMethod?: string | null) {
   return paymentMethodLabels[value.toLowerCase()] ?? value;
 }
 
+function expenseStatusToneClass(state: ExpenseDueState["key"]) {
+  if (state === "paid") return "border-accent/30 bg-accent/10 text-accent";
+  if (state === "overdue") return "border-rose/30 bg-rose/10 text-rose";
+  if (state === "today") return "border-amber/30 bg-amber/10 text-amber";
+  if (state === "soon") return "border-aqua/30 bg-aqua/10 text-aqua";
+  return "border-line bg-elevated text-muted";
+}
+
+function expenseStatusLabel(expense: MonthlyExpenseRecord, dueState: ExpenseDueState) {
+  return expense.status === "completed" ? "Pago" : dueState.label;
+}
+
+function expenseStatusIcon(state: ExpenseDueState["key"]) {
+  if (state === "paid") return <CheckCircle2 size={14} strokeWidth={2.25} />;
+  if (state === "overdue") return <AlertTriangle size={14} strokeWidth={2.25} />;
+  if (state === "today") return <Bell size={14} strokeWidth={2.25} />;
+  return <CalendarDays size={14} strokeWidth={2.25} />;
+}
+
+type ExpenseStatusBadgeProps = {
+  expense: MonthlyExpenseRecord;
+  dueState: ExpenseDueState;
+};
+
+function ExpenseStatusBadge({ expense, dueState }: ExpenseStatusBadgeProps) {
+  const statusLabel = expenseStatusLabel(expense, dueState);
+
+  return (
+    <span className={`inline-grid h-9 w-[12.5rem] max-w-full grid-cols-[0.875rem_minmax(0,1fr)] items-center gap-2 rounded-full border px-3 text-xs font-medium leading-none ${expenseStatusToneClass(dueState.key)}`}>
+      <span className="flex h-3.5 w-3.5 items-center justify-center">
+        {expenseStatusIcon(dueState.key)}
+      </span>
+      <span className="truncate text-left">{statusLabel}</span>
+    </span>
+  );
+}
+
+function expenseMetaLabel(expense: MonthlyExpenseRecord, categoryName: string) {
+  const items = [categoryName];
+  if (expense.paymentMethod) items.push(normalizePaymentMethodLabel(expense.paymentMethod));
+  items.push(expense.recurring ? `Recorrente ${recurrenceFrequencyLabels[expense.recurrenceFrequency ?? "monthly"].toLowerCase()}` : "Unico");
+  return items.join(" / ");
+}
+
+function expenseIntegrationLabel(expense: MonthlyExpenseRecord) {
+  if (expense.allocationKind === "investment_contribution") {
+    const assetTicker = expense.integration?.assetTicker?.trim();
+    return assetTicker ? `Compra vinculada em ${assetTicker}` : "Compra vinculada";
+  }
+
+  if (expense.allocationKind === "cash_box_contribution") {
+    return "Movimentacao vinculada em caixinha";
+  }
+
+  return "";
+}
+
+function expenseIntegrationRoute(expense: MonthlyExpenseRecord) {
+  if (!expense.integration?.linkedEntityId) return "";
+  if (expense.allocationKind === "investment_contribution") return "/operacoes";
+  if (expense.allocationKind === "cash_box_contribution") return "/caixinhas";
+  return "";
+}
+
+type ExpenseListItemProps = {
+  expense: MonthlyExpenseRecord;
+  categoryName: string;
+  dueState: ExpenseDueState;
+  isCompleting: boolean;
+  onComplete: (expense: MonthlyExpenseRecord) => void;
+  onEdit: (expense: MonthlyExpenseRecord) => void;
+  onDelete: (expense: MonthlyExpenseRecord) => void;
+  onDeleteSeries: (expense: MonthlyExpenseRecord) => void;
+};
+
+function ExpenseListItem({
+  expense,
+  categoryName,
+  dueState,
+  isCompleting,
+  onComplete,
+  onEdit,
+  onDelete,
+  onDeleteSeries
+}: ExpenseListItemProps) {
+  const integrationLabel = expenseIntegrationLabel(expense);
+  const integrationRoute = expenseIntegrationRoute(expense);
+
+  return (
+    <article className="rounded-xl border border-line bg-elevated/60 p-3 shadow-soft sm:p-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,2.45fr)_minmax(10rem,0.9fr)_minmax(12.5rem,1fr)_minmax(8.5rem,0.75fr)_minmax(12rem,1fr)]">
+        <div className="min-w-0 md:col-span-2 xl:col-span-1">
+          <div className="flex items-start justify-between gap-3 md:block">
+            <div className="min-w-0">
+              <p title={expense.description} className="truncate text-base font-semibold text-ink">{expense.description}</p>
+              <p className="mt-1 text-sm text-muted">{expenseMetaLabel(expense, categoryName)}</p>
+            </div>
+            <div className="text-right md:hidden">
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Valor</p>
+              <div className="mt-1 font-semibold text-ink">
+                <MoneyValue value={formatCents(expense.amountInCents)} size="card" />
+              </div>
+            </div>
+          </div>
+          {expense.note ? <p title={expense.note} className="mt-2 truncate text-sm text-muted">{expense.note}</p> : null}
+          {integrationLabel ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+              <span className="rounded-full border border-line bg-panel px-2.5 py-1">{integrationLabel}</span>
+              {integrationRoute ? <Link to={integrationRoute} className="text-accent transition hover:text-accent/80">Abrir destino</Link> : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-1 text-sm">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Vencimento</p>
+          <p className="font-medium text-ink">{formatLocalDate(expense.date)}</p>
+          <p className="text-xs text-muted">as {expense.time}</p>
+        </div>
+
+        <div className="grid gap-2 text-sm xl:justify-items-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Status</p>
+          <ExpenseStatusBadge expense={expense} dueState={dueState} />
+          {expense.status === "completed" && expense.completedAt ? <p className="text-xs text-muted xl:w-[12.5rem] xl:text-center">{formatCompletedAt(expense.completedAt)}</p> : null}
+        </div>
+
+        <div className="hidden gap-1 text-sm md:grid xl:text-right">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Valor</p>
+          <div className="font-semibold text-ink">
+            <MoneyValue value={formatCents(expense.amountInCents)} size="table" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 xl:items-end">
+          <p className="hidden text-[11px] font-medium uppercase tracking-[0.14em] text-muted md:block xl:hidden">Acoes</p>
+          {canMarkExpenseAsPaid(expense) ? (
+            <button
+              type="button"
+              onClick={() => onComplete(expense)}
+              disabled={isCompleting}
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
+            >
+              {isCompleting ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+              Marcar como pago
+            </button>
+          ) : (
+            <div className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent xl:min-w-[11rem]">
+              Pago
+            </div>
+          )}
+          <details className="relative w-full xl:w-auto">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-center rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/40 hover:text-ink">
+              <MoreHorizontal size={16} />
+              <span className="sr-only">Mais acoes</span>
+            </summary>
+            <div className="absolute right-0 top-[calc(100%+0.5rem)] z-10 flex w-48 flex-col rounded-lg border border-line bg-panel p-2 shadow-soft">
+              <button type="button" onClick={() => onEdit(expense)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-ink">Editar</button>
+              <button type="button" onClick={() => onDelete(expense)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-rose">Excluir</button>
+              {expense.recurring ? <button type="button" onClick={() => onDeleteSeries(expense)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-rose">Excluir serie</button> : null}
+            </div>
+          </details>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export type PlanningView = "overview" | "budget" | "expenses" | "calendar" | "goals" | "analytics";
 
 type PlanningWorkspaceProps = {
@@ -353,13 +603,14 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const [comparisonRange, setComparisonRange] = useState(1);
   const [search, setSearch] = useState("");
   const [sectorFilter, setSectorFilter] = useState("Todos");
-  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [statusFilter, setStatusFilter] = useState<ExpenseStatusFilter>("all");
   const [paymentFilter, setPaymentFilter] = useState("Todos");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [categoryForm, setCategoryForm] = useState<CategoryForm>(categoryFormFromRecord());
   const [expenseForm, setExpenseForm] = useState<ExpenseForm>(expenseFormFromRecord());
   const [goalForm, setGoalForm] = useState<GoalForm>(goalFormFromRecord());
+  const [completeExpenseForm, setCompleteExpenseForm] = useState<ExpenseCompletionForm>(expenseCompletionFormFromRecord());
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [editingExpense, setEditingExpense] = useState<MonthlyExpenseRecord | null>(null);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
@@ -367,16 +618,22 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const [deleteExpense, setDeleteExpense] = useState<MonthlyExpenseRecord | null>(null);
   const [deleteExpenseSeries, setDeleteExpenseSeries] = useState<MonthlyExpenseRecord | null>(null);
   const [deleteGoal, setDeleteGoal] = useState<MonthlyFinancialGoalRecord | null>(null);
+  const [completeExpenseTarget, setCompleteExpenseTarget] = useState<MonthlyExpenseRecord | null>(null);
   const [categoryDetails, setCategoryDetails] = useState<MonthlyPlanningOverview["categories"][number] | null>(null);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [completingExpenseIds, setCompletingExpenseIds] = useState<string[]>([]);
+  const [completionMessage, setCompletionMessage] = useState("");
   const [error, setError] = useState("");
+  const [assets, setAssets] = useState<AssetRecord[]>([]);
+  const [cashBoxes, setCashBoxes] = useState<CashBoxRecord[]>([]);
+  const [isLoadingInvestmentTargets, setIsLoadingInvestmentTargets] = useState(false);
+  const overviewRequestIdRef = useRef(0);
 
-  async function loadOverview(year = selected.year, month = selected.month) {
-    const data = await monthlyPlanningApi.overview(year, month, comparisonRange);
+  function applyOverview(data: MonthlyPlanningOverview, year: number, month: number) {
     setOverview(data);
     setIncomeInput(formatMoneyInput(data.plan.incomeInCents));
     setMonthlyContributionGoalInput(formatMoneyInput(data.plan.monthlyContributionGoalInCents ?? 0));
@@ -385,31 +642,102 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     setSelectedCalendarDate((current) => current?.startsWith(`${year}-${pad(month)}`) ? current : data.calendarDays[0]?.date ?? `${year}-${pad(month)}-01`);
   }
 
+  async function loadOverview(year = selected.year, month = selected.month, options: { suppressThrow?: boolean } = {}) {
+    const requestId = overviewRequestIdRef.current + 1;
+    overviewRequestIdRef.current = requestId;
+
+    try {
+      const data = await monthlyPlanningApi.overview(year, month, comparisonRange);
+      if (requestId !== overviewRequestIdRef.current) return;
+      applyOverview(data, year, month);
+      setError("");
+    } catch (loadError) {
+      if (requestId !== overviewRequestIdRef.current) return;
+      setError(loadError instanceof Error ? loadError.message : "Falha ao carregar planejamento.");
+      if (!options.suppressThrow) throw loadError;
+    }
+  }
+
   useEffect(() => {
-    void loadOverview(selected.year, selected.month).catch((loadError) => setError(loadError instanceof Error ? loadError.message : "Falha ao carregar planejamento."));
+    void loadOverview(selected.year, selected.month, { suppressThrow: true });
   }, [comparisonRange, selected.month, selected.year]);
 
+  async function loadInvestmentTargets() {
+    setIsLoadingInvestmentTargets(true);
+    try {
+      const [assetData, cashBoxData] = await Promise.all([assetRecordsApi.list(), cashBoxRecordsApi.list()]);
+      setAssets(assetData.filter((asset) => asset.active));
+      setCashBoxes(cashBoxData.filter((cashBox) => cashBox.active));
+    } finally {
+      setIsLoadingInvestmentTargets(false);
+    }
+  }
+
   const categoryById = useMemo(() => new Map(overview?.categories.map((category) => [category.id, category]) ?? []), [overview]);
+  const selectedExpenseCategory = useMemo(() => categoryById.get(expenseForm.categoryId) ?? null, [categoryById, expenseForm.categoryId]);
+  const expenseTargetsInvestments = useMemo(() => isInvestmentCategory(selectedExpenseCategory), [selectedExpenseCategory]);
+  const filteredAssets = useMemo(() => {
+    const term = expenseForm.assetSearch.trim().toLowerCase();
+    return assets.filter((asset) => {
+      if (!term) return true;
+      return asset.ticker.toLowerCase().includes(term) || asset.name.toLowerCase().includes(term);
+    });
+  }, [assets, expenseForm.assetSearch]);
+  const selectedExpenseAsset = useMemo(
+    () => assets.find((asset) => asset.id === expenseForm.assetId) ?? assets.find((asset) => asset.ticker === expenseForm.assetSearch.toUpperCase()) ?? null,
+    [assets, expenseForm.assetId, expenseForm.assetSearch]
+  );
+  const selectedExpenseCashBox = useMemo(() => cashBoxes.find((cashBox) => cashBox.id === expenseForm.cashBoxId) ?? null, [cashBoxes, expenseForm.cashBoxId]);
+  const assetOperationTotalInCents = useMemo(() => {
+    const quantity = Number(expenseForm.quantity.replace(",", "."));
+    const price = Number(expenseForm.price.replace(",", "."));
+    const fees = Number(expenseForm.fees.replace(",", "."));
+    if (!(quantity > 0) || !(price > 0)) return 0;
+    return Math.round((quantity * price + (Number.isFinite(fees) ? Math.max(fees, 0) : 0)) * 100);
+  }, [expenseForm.fees, expenseForm.price, expenseForm.quantity]);
+
+  useEffect(() => {
+    if (!isExpenseModalOpen) return;
+    if (!expenseTargetsInvestments) return;
+    void loadInvestmentTargets().catch(() => undefined);
+  }, [expenseTargetsInvestments, isExpenseModalOpen]);
+  const expensesByCategoryId = useMemo(() => {
+    const grouped = new Map<string, MonthlyExpenseRecord[]>();
+    for (const expense of overview?.expenses ?? []) {
+      const items = grouped.get(expense.categoryId) ?? [];
+      items.push(expense);
+      grouped.set(expense.categoryId, items);
+    }
+    return grouped;
+  }, [overview?.expenses]);
+  const expenseById = useMemo(
+    () => new Map((overview?.expenses ?? []).filter((expense): expense is MonthlyExpenseRecord & { id: string } => Boolean(expense.id)).map((expense) => [expense.id, expense])),
+    [overview?.expenses]
+  );
   useEffect(() => {
     if (!categoryId || !overview) return;
     const category = categoryById.get(categoryId);
     if (category) setCategoryDetails(category);
   }, [categoryById, categoryId, overview]);
 
-  const paymentOptions = useMemo(() => overview?.paymentMethodStats.map((item) => item.paymentMethod) ?? [], [overview?.paymentMethodStats]);
+  const paymentOptions = useMemo(
+    () => Array.from(new Set((overview?.paymentMethodStats ?? []).map((item) => normalizePaymentMethodLabel(item.paymentMethod)))),
+    [overview?.paymentMethodStats]
+  );
   const filteredExpenses = useMemo(() => {
     const term = search.trim().toLowerCase();
     return (overview?.expenses ?? []).filter((expense) => {
       const category = categoryById.get(expense.categoryId);
       const matchesSearch = [expense.description, expense.note, expense.paymentMethod, category?.name].some((value) => value?.toLowerCase().includes(term));
       const matchesSector = sectorFilter === "Todos" || expense.categoryId === sectorFilter;
-      const matchesStatus = statusFilter === "Todos" || expense.status === statusFilter;
+      const matchesStatus = matchesExpenseStatusFilter(expense, statusFilter);
       const matchesPayment = paymentFilter === "Todos" || normalizePaymentMethodLabel(expense.paymentMethod) === paymentFilter;
       const matchesFrom = !fromDate || expense.date >= fromDate;
       const matchesTo = !toDate || expense.date <= toDate;
       return matchesSearch && matchesSector && matchesStatus && matchesPayment && matchesFrom && matchesTo;
     });
   }, [categoryById, fromDate, overview?.expenses, paymentFilter, search, sectorFilter, statusFilter, toDate]);
+  const hasActiveExpenseFilters = search.trim().length > 0 || sectorFilter !== "Todos" || paymentFilter !== "Todos" || statusFilter !== "all" || Boolean(fromDate) || Boolean(toDate);
 
   const selectedCalendarEvents = useMemo<CalendarEvent[]>(() => {
     if (!overview || !selectedCalendarDate) return [];
@@ -628,6 +956,13 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     setError("");
   }
 
+  function openCompleteExpense(expense: MonthlyExpenseRecord) {
+    setCompleteExpenseTarget(expense);
+    setCompleteExpenseForm(expenseCompletionFormFromRecord());
+    setCompletionMessage("");
+    setError("");
+  }
+
   function updateUseCurrentMoment(useCurrentMoment: boolean) {
     const now = getLocalDateTimeFields();
     setExpenseForm((current) => ({
@@ -639,11 +974,17 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     }));
   }
 
+  function isCompletingExpense(expenseId?: string | null) {
+    return Boolean(expenseId && completingExpenseIds.includes(expenseId));
+  }
+
   async function submitExpense(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!overview?.plan.id || isSaving) return;
 
-    const amountInCents = parseBrazilianMoneyToCents(expenseForm.amount);
+    const amountInCents = expenseTargetsInvestments && expenseForm.investmentDestination === "asset"
+      ? assetOperationTotalInCents
+      : parseBrazilianMoneyToCents(expenseForm.amount);
     if (!expenseForm.description.trim()) {
       setError("Informe a descricao do gasto.");
       return;
@@ -660,11 +1001,56 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
       setError("Informe data e horario.");
       return;
     }
+    if (expenseTargetsInvestments && !expenseForm.investmentDestination) {
+      setError("Escolha se este valor vai para um ativo ou para uma caixinha.");
+      return;
+    }
 
     const now = getLocalDateTimeFields();
     const date = expenseForm.useCurrentMoment ? now.date : expenseForm.date;
     const time = expenseForm.useCurrentMoment ? now.time : expenseForm.time;
     const status: MonthlyExpenseStatus = isFutureExpense(date, time) ? "planned" : expenseForm.status;
+    let integration = null;
+
+    if (expenseTargetsInvestments && expenseForm.investmentDestination === "asset") {
+      const quantity = Number(expenseForm.quantity.replace(",", "."));
+      const price = Number(expenseForm.price.replace(",", "."));
+      const rawFees = Number(expenseForm.fees.replace(",", "."));
+      const fees = Number.isFinite(rawFees) ? Math.max(rawFees, 0) : 0;
+
+      if (!selectedExpenseAsset?.id) {
+        setError("Selecione um ativo valido.");
+        return;
+      }
+      if (!(quantity > 0) || !(price > 0)) {
+        setError("Informe quantidade e preco validos para o aporte em ativo.");
+        return;
+      }
+
+      integration = {
+        destination: "asset" as const,
+        assetId: selectedExpenseAsset.id,
+        assetTicker: selectedExpenseAsset.ticker,
+        operationType: "COMPRA" as const,
+        quantity,
+        price,
+        fees,
+        idempotencyKey: expenseForm.idempotencyKey
+      };
+    }
+
+    if (expenseTargetsInvestments && expenseForm.investmentDestination === "cashbox") {
+      if (!selectedExpenseCashBox?.id) {
+        setError("Selecione uma caixinha valida.");
+        return;
+      }
+
+      integration = {
+        destination: "cashbox" as const,
+        cashBoxId: selectedExpenseCashBox.id,
+        idempotencyKey: expenseForm.idempotencyKey
+      };
+    }
 
     setIsSaving(true);
     setError("");
@@ -685,6 +1071,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         recurrenceStartDate: expenseForm.recurring ? expenseForm.recurrenceStartDate || date : null,
         recurrenceEndDate: expenseForm.recurring ? expenseForm.recurrenceEndDate || null : null,
         status,
+        integration,
         createdAt: editingExpense?.createdAt ?? now.timestamp,
         updatedAt: now.timestamp
       };
@@ -694,6 +1081,13 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
       setIsExpenseModalOpen(false);
       setEditingExpense(null);
+      setCompletionMessage(
+        integration?.destination === "asset" && selectedExpenseAsset
+          ? `Aporte de ${formatCents(amountInCents)} registrado em ${selectedExpenseAsset.ticker}.`
+          : integration?.destination === "cashbox" && selectedExpenseCashBox
+            ? `${formatCents(amountInCents)} adicionados a ${selectedExpenseCashBox.name}.`
+            : ""
+      );
       await loadOverview();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Falha ao salvar gasto.");
@@ -732,6 +1126,33 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     }
   }
 
+  async function submitCompleteExpense(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!completeExpenseTarget?.id || isCompletingExpense(completeExpenseTarget.id)) return;
+
+    const completedAt = completeExpenseForm.useCurrentMoment
+      ? undefined
+      : buildLocalTimestampFromDateTime(completeExpenseForm.completedDate, completeExpenseForm.completedTime);
+
+    setCompletingExpenseIds((current) => current.includes(completeExpenseTarget.id!) ? current : [...current, completeExpenseTarget.id!]);
+    setError("");
+
+    try {
+      const result = await monthlyPlanningApi.completeExpense(
+        completeExpenseTarget.id,
+        completedAt ? { completedAt } : {},
+        comparisonRange
+      );
+      applyOverview(result.overview, selected.year, selected.month);
+      setCompleteExpenseTarget(null);
+      setCompletionMessage(result.message || `${completeExpenseTarget.description} marcado como pago.`);
+    } catch (completionError) {
+      setError(completionError instanceof Error ? completionError.message : "Falha ao marcar gasto como pago.");
+    } finally {
+      setCompletingExpenseIds((current) => current.filter((expenseId) => expenseId !== completeExpenseTarget.id));
+    }
+  }
+
   function exportCategoryHistory(category: MonthlyPlanningOverview["categories"][number]) {
     const rows = (overview?.expenses ?? [])
       .filter((expense) => expense.categoryId === category.id)
@@ -758,6 +1179,15 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function clearExpenseFilters() {
+    setSearch("");
+    setSectorFilter("Todos");
+    setPaymentFilter("Todos");
+    setStatusFilter("all");
+    setFromDate("");
+    setToDate("");
   }
 
   const previousMonth = shiftMonth(selected.year, selected.month, -1);
@@ -837,7 +1267,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 <ContributionGoalSummary overview={overview} hasConfiguredIncome={hasConfiguredIncome} />
               </section>
               <PlanningSmartSummary alerts={alertItems} insights={insightItems} hasConfiguredIncome={hasConfiguredIncome} />
-              <AiAnalysisPanel year={selected.year} month={selected.month} analysisType="complete" compact />
+              <LazyAiAnalysisPanel year={selected.year} month={selected.month} analysisType="complete" compact />
               <PlanningQuickActions onAddExpense={() => openCreateExpense()} />
               <PlanningInvestmentSummary overview={overview} />
             </>
@@ -858,7 +1288,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
           {isAnalytics ? (
           <>
-            <AiAnalysisPanel year={selected.year} month={selected.month} analysisType="planning" showTypeSelector title="Analises com IA" description="Escolha o tipo de analise e gere uma leitura contextual do seu planejamento." />
+            <LazyAiAnalysisPanel year={selected.year} month={selected.month} analysisType="planning" showTypeSelector title="Analises com IA" description="Escolha o tipo de analise e gere uma leitura contextual do seu planejamento." />
             <section className="mb-4 grid gap-4 lg:grid-cols-2">
               <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
                 <div className="flex items-center justify-between gap-3">
@@ -934,10 +1364,10 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               <div>
                 <h2 className="text-base font-semibold text-ink">Controle das porcentagens</h2>
                 <p className="mt-1 text-sm text-muted">
-                  Total distribuido: {formatOptionalPercentage(overview.summary.allocatedPercentage)} � {budgetDistributionBalanceText(overview.summary)}
+                  Total distribuido: {formatOptionalPercentage(overview.summary.allocatedPercentage)} · {budgetDistributionBalanceText(overview.summary)}
                 </p>
                 <p className="mt-1 text-xs text-muted">
-                  Estado: <span className={allocationTone(overview.summary.allocationStatus)}>{overview.summary.allocationStatusLabel}</span> � {budgetDistributionAmountText(overview.summary)}
+                  Estado: <span className={allocationTone(overview.summary.allocationStatus)}>{overview.summary.allocationStatusLabel}</span> · {budgetDistributionAmountText(overview.summary)}
                 </p>
               </div>
               <button type="button" onClick={openCreateCategory} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
@@ -960,64 +1390,71 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
           {(isBudget || isAnalytics) ? (
           <section className="mb-5 grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-            {overview.categories.map((category) => (
-              <article key={category.id} className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-lg" style={{ background: `${category.color}22`, color: category.color }}>
-                      {iconLabel(category.icon)}
+            {overview.categories.map((category) => {
+              const categoryExpenses = expensesByCategoryId.get(category.id) ?? [];
+              const upcomingRecurringExpenses = categoryExpenses.filter((expense) => expense.recurring && expense.status === "planned").slice(0, 3);
+
+              return (
+                <article key={category.id} className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-lg" style={{ background: `${category.color}22`, color: category.color }}>
+                        {iconLabel(category.icon)}
+                      </div>
+                      <div className="min-w-0">
+                        <button type="button" onClick={() => setCategoryDetails(category)} className="truncate text-left font-semibold text-ink outline-none transition hover:text-accent focus-visible:text-accent" aria-label={`Abrir dashboard do setor ${category.name}`}>{category.name}</button>
+                        <p className={`mt-1 text-xs ${stateTone(category.state)}`}>{category.stateLabel}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <button type="button" onClick={() => setCategoryDetails(category)} className="truncate text-left font-semibold text-ink outline-none transition hover:text-accent focus-visible:text-accent" aria-label={`Abrir dashboard do setor ${category.name}`}>{category.name}</button>
-                      <p className={`mt-1 text-xs ${stateTone(category.state)}`}>{category.stateLabel}</p>
-                    </div>
+                    <span className="rounded-full bg-elevated px-2 py-1 text-xs text-muted">{category.budgetType === "percentage" ? `${category.percentage}%` : "Fixo"}</span>
                   </div>
-                  <span className="rounded-full bg-elevated px-2 py-1 text-xs text-muted">{category.budgetType === "percentage" ? `${category.percentage}%` : "Fixo"}</span>
-                </div>
-                <div className="mt-4 grid gap-2 text-sm text-muted">
-                  <p className="flex justify-between gap-3"><span>Planejado</span><span className="text-ink"><MoneyValue value={formatCents(category.limitInCents)} /></span></p>
-                  {category.budgetType === "fixed" ? <p className="flex justify-between gap-3"><span>% da renda</span><span className="text-ink">{formatIncomePercentage(category.plannedPercentOfIncome)}</span></p> : null}
-                  <p className="flex justify-between gap-3"><span>Gasto realizado</span><span className="text-ink"><MoneyValue value={formatCents(category.completedInCents)} /></span></p>
-                  <p className="flex justify-between gap-3"><span>Gasto previsto</span><span className="text-ink"><MoneyValue value={formatCents(category.plannedInCents)} /></span></p>
-                  <p className="flex justify-between gap-3"><span>Restante atual</span><span className={category.remainingInCents < 0 ? "text-rose" : "text-accent"}><MoneyValue value={formatCents(category.remainingInCents)} /></span></p>
-                  <p className="flex justify-between gap-3"><span>Restante apos previstos</span><span className={category.remainingAfterPlannedInCents < 0 ? "text-rose" : "text-ink"}><MoneyValue value={formatCents(category.remainingAfterPlannedInCents)} /></span></p>
-                </div>
-                <div className="mt-4">
-                  <ProgressBar value={Math.min(category.usedPercent, 100)} tone={category.state === "over-limit" || category.state === "near-limit" ? "amber" : category.state === "ok" ? "green" : "blue"} />
-                  <p className="mt-2 text-xs text-muted">Utilizado: {formatPercentage(category.usedPercent)}</p>
-                </div>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  {isOverview ? (
-                    <>
-                      <Link to="/planejamento-mensal/gastos" onClick={() => setSectorFilter(category.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
-                        <Search size={15} />
-                        Ver gastos
-                      </Link>
-                      <Link to={`/planejamento-mensal/analises/categoria/${category.id}`} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
-                        <BarChart3 size={15} />
-                        Analises
-                      </Link>
-                    </>
-                  ) : null}
-                  {isBudget ? (
-                    <>
-                      <button type="button" onClick={() => openEditCategory(category)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
-                        Editar
-                      </button>
-                      <button type="button" onClick={() => setDeleteCategory(category)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">
-                        Excluir
-                      </button>
-                    </>
-                  ) : null}
-                  {isAnalytics ? (
-                    <button type="button" onClick={() => setCategoryDetails(category)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink sm:col-span-2">
-                      <BarChart3 size={15} />
-                      Dashboard detalhado
+
+                  <div className="mt-4 grid gap-2 text-sm text-muted">
+                    <p className="flex justify-between gap-3"><span>Planejado</span><span className="text-ink"><MoneyValue value={formatCents(category.limitInCents)} /></span></p>
+                    <p className="flex justify-between gap-3"><span>Realizado</span><span className="text-ink"><MoneyValue value={formatCents(category.completedInCents)} /></span></p>
+                    <p className="flex justify-between gap-3"><span>Previsto</span><span className="text-ink"><MoneyValue value={formatCents(category.plannedInCents)} /></span></p>
+                    <p className="flex justify-between gap-3"><span>Restante</span><span className={category.remainingInCents < 0 ? "text-rose" : "text-accent"}><MoneyValue value={formatCents(category.remainingInCents)} /></span></p>
+                  </div>
+
+                  <div className="mt-4">
+                    <ProgressBar value={Math.min(category.usedPercent, 100)} tone={category.state === "over-limit" || category.state === "near-limit" ? "amber" : category.state === "ok" ? "green" : "blue"} />
+                    <p className="mt-2 text-xs text-muted">Utilizado: {formatPercentage(category.usedPercent)}</p>
+                  </div>
+
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    <button type="button" onClick={() => openCreateExpense(category.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90">
+                      <Plus size={15} />
+                      Adicionar gasto
                     </button>
-                  ) : null}
-                </div>
-              </article>
-            ))}
+                    <Link to="/planejamento-mensal/gastos" onClick={() => setSectorFilter(category.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">
+                      <Search size={15} />
+                      Ver lancamentos
+                    </Link>
+                  </div>
+
+                  <details className="mt-4 rounded-lg border border-line bg-elevated/60 px-3 py-3 text-sm text-muted">
+                    <summary className="cursor-pointer list-none font-medium text-ink">Ver detalhes</summary>
+                    <div className="mt-3 grid gap-2">
+                      <p className="flex justify-between gap-3"><span>Restante apos previstos</span><span className={category.remainingAfterPlannedInCents < 0 ? "text-rose" : "text-ink"}><MoneyValue value={formatCents(category.remainingAfterPlannedInCents)} /></span></p>
+                      <p className="flex justify-between gap-3"><span>% da renda</span><span className="text-ink">{formatIncomePercentage(category.plannedPercentOfIncome)}</span></p>
+                      <p className="flex justify-between gap-3"><span>Lancamentos</span><span className="text-ink">{categoryExpenses.length}</span></p>
+                      <p className="text-xs">
+                        Proximas recorrencias: {upcomingRecurringExpenses.length > 0 ? upcomingRecurringExpenses.map((expense) => `${expense.description} (${formatLocalDate(expense.date)})`).join(", ") : "Nenhuma pendente neste mes."}
+                      </p>
+                    </div>
+                  </details>
+
+                  <details className="mt-3 rounded-lg border border-line bg-elevated/60 px-3 py-3 text-sm text-muted">
+                    <summary className="cursor-pointer list-none font-medium text-ink">Acoes do setor</summary>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {isBudget ? <button type="button" onClick={() => openEditCategory(category)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink">Editar setor</button> : null}
+                      {isBudget ? <button type="button" onClick={() => setDeleteCategory(category)} className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-rose/50 hover:text-rose">Excluir setor</button> : null}
+                      {isAnalytics ? <button type="button" onClick={() => setCategoryDetails(category)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink sm:col-span-2"><BarChart3 size={15} />Dashboard detalhado</button> : null}
+                    </div>
+                  </details>
+                </article>
+              );
+            })}
           </section>
           ) : null}
 
@@ -1037,8 +1474,8 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 {overview.comparisons.length > 0 ? overview.comparisons.map((comparison) => (
                   <div key={comparison.label} className="grid gap-2 rounded-lg bg-elevated px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
                     <span className="font-medium text-ink">{comparison.label}</span>
-                    <span className="text-muted">{formatComparisonValue(comparison.previousInCents, comparison.valueType)} → {formatComparisonValue(comparison.currentInCents, comparison.valueType)}</span>
-                    <span className={variationTone(comparison.variationPercent)}>{comparison.variationPercent > 0 ? "▲" : comparison.variationPercent < 0 ? "▼" : "•"} {formatPercentage(Math.abs(comparison.variationPercent))}</span>
+                    <span className="text-muted">{formatComparisonValue(comparison.previousInCents, comparison.valueType)} â†’ {formatComparisonValue(comparison.currentInCents, comparison.valueType)}</span>
+                    <span className={variationTone(comparison.variationPercent)}>{comparison.variationPercent > 0 ? "â–²" : comparison.variationPercent < 0 ? "â–¼" : "â€¢"} {formatPercentage(Math.abs(comparison.variationPercent))}</span>
                   </div>
                 )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Sem mes anterior configurado para comparar.</p>}
               </div>
@@ -1054,8 +1491,8 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               </div>
               <div className="mt-4 grid gap-2">
                 {overview.paymentMethodStats.length > 0 ? overview.paymentMethodStats.map((item) => (
-                  <button key={item.paymentMethod} type="button" onClick={() => setPaymentFilter(item.paymentMethod)} className="grid min-h-11 gap-2 rounded-lg bg-elevated px-3 py-2 text-left text-sm transition hover:text-ink sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-                    <span className="font-medium text-ink">{item.paymentMethod}</span>
+                  <button key={item.paymentMethod} type="button" onClick={() => setPaymentFilter(normalizePaymentMethodLabel(item.paymentMethod))} className="grid min-h-11 gap-2 rounded-lg bg-elevated px-3 py-2 text-left text-sm transition hover:text-ink sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                    <span className="font-medium text-ink">{normalizePaymentMethodLabel(item.paymentMethod)}</span>
                     <span className="text-muted">{item.count} lanc.</span>
                     <span className="font-medium text-ink"><MoneyValue value={formatCents(item.amountInCents)} /></span>
                   </button>
@@ -1094,16 +1531,33 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
             <article className="rounded-lg border border-line bg-panel p-4 shadow-soft">
               <h2 className="text-base font-semibold text-ink">{selectedCalendarDate ? `Eventos de ${formatLocalDate(selectedCalendarDate)}` : "Eventos do dia"}</h2>
               <div className="mt-4 grid gap-2">
-                {selectedCalendarEvents.length > 0 ? selectedCalendarEvents.map((event) => (
-                  <div key={`${event.type}-${event.id}`} className="rounded-lg bg-elevated px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className={`rounded-full px-2 py-1 text-xs ${eventToneClass[event.type] ?? "bg-line text-muted"}`}>{eventTypeLabels[event.type] ?? event.type}</span>
-                      <span className="font-medium text-ink"><MoneyValue value={formatCents(event.amountInCents)} /></span>
+                {selectedCalendarEvents.length > 0 ? selectedCalendarEvents.map((event) => {
+                  const linkedExpense = expenseById.get(event.id);
+                  const dueState = linkedExpense ? getExpenseDueState(linkedExpense) : null;
+
+                  return (
+                    <div key={`${event.type}-${event.id}`} className="rounded-lg bg-elevated px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={`rounded-full px-2 py-1 text-xs ${eventToneClass[event.type] ?? "bg-line text-muted"}`}>{eventTypeLabels[event.type] ?? event.type}</span>
+                        <span className="font-medium text-ink"><MoneyValue value={formatCents(event.amountInCents)} /></span>
+                      </div>
+                      <p className="mt-2 text-muted">{event.label}</p>
+                      {event.status ? <p className="mt-1 text-xs text-muted">{event.status === "planned" ? "Previsto" : "Pago"}</p> : null}
+                      {linkedExpense ? <p className="mt-1 text-xs text-muted">{dueState?.label}</p> : null}
+                      {linkedExpense && canMarkExpenseAsPaid(linkedExpense) ? (
+                        <button
+                          type="button"
+                          onClick={() => openCompleteExpense(linkedExpense)}
+                          disabled={isCompletingExpense(linkedExpense.id)}
+                          className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isCompletingExpense(linkedExpense.id) ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                          Marcar como pago
+                        </button>
+                      ) : null}
                     </div>
-                    <p className="mt-2 text-muted">{event.label}</p>
-                    {event.status ? <p className="mt-1 text-xs text-muted">{event.status === "planned" ? "Previsto" : "Realizado"}</p> : null}
-                  </div>
-                )) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Nenhum evento neste dia.</p>}
+                  );
+                }) : <p className="rounded-lg bg-elevated px-3 py-3 text-sm text-muted">Nenhum evento neste dia.</p>}
               </div>
             </article>
           </section>
@@ -1155,10 +1609,13 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
           {isExpenses ? (
           <>
-          <section className="mb-4 flex flex-col gap-3 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <section className="mb-4 flex flex-col gap-4 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
-                <h2 className="text-base font-semibold text-ink">Historico de gastos</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-semibold text-ink">Historico de gastos</h2>
+                  <span className="rounded-full bg-elevated px-2.5 py-1 text-xs text-muted">{filteredExpenses.length} exibidos</span>
+                </div>
                 <p className="mt-1 text-sm text-muted">Edite, filtre e acompanhe todos os gastos deste planejamento mensal.</p>
               </div>
               <button type="button" onClick={() => openCreateExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
@@ -1166,7 +1623,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 Adicionar gasto
               </button>
             </div>
-            <div className="grid gap-3 lg:grid-cols-[minmax(16rem,1fr)_minmax(10rem,0.35fr)_minmax(9rem,0.25fr)_minmax(9rem,0.25fr)_minmax(9rem,0.25fr)_minmax(9rem,0.25fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(12rem,0.7fr)_minmax(12rem,0.7fr)_minmax(0,1fr)_auto]">
               <label className="relative min-w-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                 <input value={search} onChange={(event) => setSearch(event.target.value)} className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm" placeholder="Pesquisar descricao, setor ou observacao" />
@@ -1175,86 +1632,77 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 <option>Todos</option>
                 {overview.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className={fieldClass}>
-                <option>Todos</option>
-                <option value="completed">Realizado</option>
-                <option value="planned">Previsto</option>
-              </select>
               <select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} className={fieldClass}>
                 <option>Todos</option>
                 {paymentOptions.map((paymentMethod) => <option key={paymentMethod} value={paymentMethod}>{paymentMethod}</option>)}
               </select>
-              <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className={fieldClass} aria-label="Data inicial" />
-              <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className={fieldClass} aria-label="Data final" />
+              <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+                <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} className={fieldClass} aria-label="Data inicial" />
+                <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} className={fieldClass} aria-label="Data final" />
+              </div>
+              <button
+                type="button"
+                onClick={clearExpenseFilters}
+                disabled={!hasActiveExpenseFilters}
+                className="inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:border-accent/40 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Limpar filtros
+              </button>
             </div>
+            <div>
+              <p className="mb-2 text-xs uppercase tracking-[0.14em] text-muted">Filtros rapidos</p>
+              <div className="flex flex-wrap gap-2">
+                {expenseStatusFilters.map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => setStatusFilter(filter.value)}
+                    className={`inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-sm transition ${
+                      statusFilter === filter.value ? "border-accent bg-accent/10 text-accent" : "border-line bg-elevated text-muted hover:border-accent/40 hover:text-ink"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {completionMessage ? <p className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-accent">{completionMessage}</p> : null}
           </section>
 
           <section className="rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
-            <div className="space-y-3 md:hidden">
-              {filteredExpenses.map((expense) => {
-                const category = categoryById.get(expense.categoryId);
-                return (
-                  <MobileDataCard key={expense.id ?? `${expense.date}-${expense.time}-${expense.description}`} title={<MoneyValue value={formatCents(expense.amountInCents)} size="card" />} subtitle={`${formatLocalDate(expense.date)} as ${expense.time}`} badge={statusLabels[expense.status]}>
-                    <div className="grid gap-2 text-sm text-muted">
-                      <p className="font-medium text-ink">{expense.description}</p>
-                      <p>Setor: {category?.name ?? "Setor removido"}</p>
-                      <p>Pagamento: {expense.paymentMethod || "Nao informado"}</p>
-                      {expense.recurring ? <p>Recorrencia: {recurrenceFrequencyLabels[expense.recurrenceFrequency ?? "monthly"]}</p> : null}
-                      {expense.note ? <p>Observacao: {expense.note}</p> : null}
-                    </div>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      <button type="button" onClick={() => openEditExpense(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-ink">Editar</button>
-                      <button type="button" onClick={() => setDeleteExpense(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-rose">Excluir</button>
-                      {expense.recurring ? <button type="button" onClick={() => setDeleteExpenseSeries(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-rose sm:col-span-2">Excluir recorrencia</button> : null}
-                    </div>
-                  </MobileDataCard>
-                );
-              })}
-            </div>
-            <div className="scrollbar-thin hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-                <thead className="text-xs uppercase tracking-[0.14em] text-muted">
-                  <tr className="border-b border-line">
-                    <th className="py-3 font-medium">Data</th>
-                    <th className="py-3 font-medium">Hora</th>
-                    <th className="py-3 font-medium">Descricao</th>
-                    <th className="py-3 font-medium">Setor</th>
-                    <th className="py-3 font-medium">Pagamento</th>
-                    <th className="py-3 font-medium">Status</th>
-                    <th className="py-3 text-right font-medium">Valor</th>
-                    <th className="py-3 text-right font-medium">Acoes</th>
-                  </tr>
-                </thead>
-                <tbody>
+            {filteredExpenses.length > 0 ? (
+              <>
+                <div className="mb-3 hidden xl:grid xl:grid-cols-[minmax(0,2.45fr)_minmax(10rem,0.9fr)_minmax(12.5rem,1fr)_minmax(8.5rem,0.75fr)_minmax(12rem,1fr)] xl:gap-4 xl:px-4">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Gasto</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Vencimento</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Status</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-right text-muted">Valor</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-right text-muted">Acoes</span>
+                </div>
+                <div className="space-y-3">
                   {filteredExpenses.map((expense) => {
                     const category = categoryById.get(expense.categoryId);
+                    const dueState = getExpenseDueState(expense);
+
                     return (
-                      <tr key={expense.id ?? `${expense.date}-${expense.time}-${expense.description}`} className="border-b border-line/70 text-muted">
-                        <td className="py-3">{formatLocalDate(expense.date)}</td>
-                        <td className="py-3">{expense.time}</td>
-                        <td className="max-w-64 py-3">
-                          <p className="truncate font-medium text-ink">{expense.description}</p>
-                          <p className="truncate text-xs">{expense.recurring ? `Recorrente · ${recurrenceFrequencyLabels[expense.recurrenceFrequency ?? "monthly"]}` : expense.note || "Unico"}</p>
-                          {expense.note && expense.recurring ? <p className="truncate text-xs">{expense.note}</p> : null}
-                        </td>
-                        <td className="py-3">{category?.name ?? "Setor removido"}</td>
-                        <td className="py-3">{expense.paymentMethod || "Nao informado"}</td>
-                        <td className="py-3">{statusLabels[expense.status]}</td>
-                        <td className="py-3 text-right font-medium text-ink"><MoneyValue value={formatCents(expense.amountInCents)} size="table" /></td>
-                        <td className="py-3">
-                          <div className="flex justify-end gap-2">
-                            <button type="button" onClick={() => openEditExpense(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-ink">Editar</button>
-                            <button type="button" onClick={() => setDeleteExpense(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-rose">Excluir</button>
-                            {expense.recurring ? <button type="button" onClick={() => setDeleteExpenseSeries(expense)} className="min-h-11 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:text-rose">Serie</button> : null}
-                          </div>
-                        </td>
-                      </tr>
+                      <ExpenseListItem
+                        key={expense.id ?? `${expense.date}-${expense.time}-${expense.description}`}
+                        expense={expense}
+                        categoryName={category?.name ?? "Setor removido"}
+                        dueState={dueState}
+                        isCompleting={isCompletingExpense(expense.id)}
+                        onComplete={openCompleteExpense}
+                        onEdit={openEditExpense}
+                        onDelete={setDeleteExpense}
+                        onDeleteSeries={setDeleteExpenseSeries}
+                      />
                     );
                   })}
-                </tbody>
-              </table>
-              {filteredExpenses.length === 0 ? <p className="rounded-lg bg-elevated px-3 py-4 text-sm text-muted">Nenhum gasto encontrado para os filtros atuais.</p> : null}
-            </div>
+                </div>
+              </>
+            ) : (
+              <p className="rounded-lg bg-elevated px-3 py-4 text-sm text-muted">Nenhum gasto encontrado para os filtros atuais.</p>
+            )}
           </section>
           </>
           ) : null}
@@ -1286,11 +1734,130 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
       <ManagementModal title={editingExpense ? "Editar gasto" : "Adicionar gasto"} isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSubmit={submitExpense} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
         <input required value={expenseForm.description} onChange={(event) => setExpenseForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
-        <input required value={expenseForm.amount} onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))} className={fieldClass} placeholder="Valor" inputMode="decimal" />
-        <select required value={expenseForm.categoryId} onChange={(event) => setExpenseForm((current) => ({ ...current, categoryId: event.target.value }))} className={fieldClass}>
+        <input
+          required
+          value={expenseTargetsInvestments && expenseForm.investmentDestination === "asset" ? formatMoneyInput(assetOperationTotalInCents) : expenseForm.amount}
+          onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))}
+          className={fieldClass}
+          placeholder="Valor"
+          inputMode="decimal"
+          readOnly={expenseTargetsInvestments && expenseForm.investmentDestination === "asset"}
+        />
+        <select
+          required
+          value={expenseForm.categoryId}
+          onChange={(event) => {
+            const nextCategory = overview?.categories.find((category) => category.id === event.target.value);
+            setExpenseForm((current) => ({
+              ...current,
+              categoryId: event.target.value,
+              investmentDestination: isInvestmentCategory(nextCategory) ? current.investmentDestination : "",
+              assetId: isInvestmentCategory(nextCategory) ? current.assetId : "",
+              assetSearch: isInvestmentCategory(nextCategory) ? current.assetSearch : "",
+              quantity: isInvestmentCategory(nextCategory) ? current.quantity : "",
+              price: isInvestmentCategory(nextCategory) ? current.price : "",
+              fees: isInvestmentCategory(nextCategory) ? current.fees : "",
+              cashBoxId: isInvestmentCategory(nextCategory) ? current.cashBoxId : "",
+              idempotencyKey: isInvestmentCategory(nextCategory) ? current.idempotencyKey : createExpenseIdempotencyKey()
+            }));
+          }}
+          className={fieldClass}
+        >
           <option value="">Selecione o setor</option>
           {overview?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
         </select>
+        {expenseTargetsInvestments ? (
+          <fieldset className="grid gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+            <legend className="px-1 text-xs uppercase tracking-[0.14em]">Destino do investimento</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setExpenseForm((current) => ({ ...current, investmentDestination: "asset" }))}
+                className={`inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-sm transition ${
+                  expenseForm.investmentDestination === "asset" ? "border-accent bg-accent/10 text-accent" : "border-line bg-panel text-muted hover:border-accent/40 hover:text-ink"
+                }`}
+              >
+                Aporte em ativo
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpenseForm((current) => ({ ...current, investmentDestination: "cashbox" }))}
+                className={`inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-sm transition ${
+                  expenseForm.investmentDestination === "cashbox" ? "border-accent bg-accent/10 text-accent" : "border-line bg-panel text-muted hover:border-accent/40 hover:text-ink"
+                }`}
+              >
+                Transferencia para caixinha
+              </button>
+            </div>
+
+            {expenseForm.investmentDestination === "asset" ? (
+              assets.length > 0 ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input
+                      value={expenseForm.assetSearch}
+                      onChange={(event) => setExpenseForm((current) => ({ ...current, assetSearch: event.target.value }))}
+                      className={fieldClass}
+                      placeholder="Pesquisar por ticker ou nome"
+                    />
+                    <select
+                      value={expenseForm.assetId}
+                      onChange={(event) => {
+                        const asset = assets.find((item) => item.id === event.target.value);
+                        setExpenseForm((current) => ({
+                          ...current,
+                          assetId: event.target.value,
+                          assetSearch: asset?.ticker ?? current.assetSearch
+                        }));
+                      }}
+                      className={fieldClass}
+                    >
+                      <option value="">Selecionar ativo</option>
+                      {filteredAssets.map((asset) => <option key={asset.id ?? asset.ticker} value={asset.id}>{asset.ticker} · {asset.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <select value="COMPRA" disabled className={fieldClass}>
+                      <option value="COMPRA">Compra</option>
+                    </select>
+                    <input value={expenseForm.quantity} onChange={(event) => setExpenseForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Quantidade" inputMode="decimal" />
+                    <input value={expenseForm.price} onChange={(event) => setExpenseForm((current) => ({ ...current, price: event.target.value }))} className={fieldClass} placeholder="Preco unitario" inputMode="decimal" />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input value={expenseForm.fees} onChange={(event) => setExpenseForm((current) => ({ ...current, fees: event.target.value }))} className={fieldClass} placeholder="Taxas" inputMode="decimal" />
+                    <p className="rounded-lg border border-line bg-panel px-3 py-3 text-sm text-ink">Total da operacao: {formatCents(assetOperationTotalInCents)}</p>
+                  </div>
+                  <p className="text-xs text-muted">O valor do gasto passa a ser calculado automaticamente por quantidade x preco + taxas para manter a operacao consistente com a carteira.</p>
+                </>
+              ) : (
+                <div className="rounded-lg border border-dashed border-line bg-panel px-3 py-4">
+                  <p className="text-sm text-ink">Voce ainda nao possui ativos cadastrados.</p>
+                  <Link to="/ativos" className="mt-3 inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/40 hover:text-ink">
+                    Cadastrar ativo
+                  </Link>
+                </div>
+              )
+            ) : null}
+
+            {expenseForm.investmentDestination === "cashbox" ? (
+              cashBoxes.length > 0 ? (
+                <select value={expenseForm.cashBoxId} onChange={(event) => setExpenseForm((current) => ({ ...current, cashBoxId: event.target.value }))} className={fieldClass}>
+                  <option value="">Selecionar caixinha</option>
+                  {cashBoxes.map((cashBox) => <option key={cashBox.id ?? cashBox.name} value={cashBox.id}>{cashBox.name}</option>)}
+                </select>
+              ) : (
+                <div className="rounded-lg border border-dashed border-line bg-panel px-3 py-4">
+                  <p className="text-sm text-ink">Voce ainda nao possui caixinhas cadastradas.</p>
+                  <Link to="/caixinhas" className="mt-3 inline-flex min-h-11 items-center justify-center rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/40 hover:text-ink">
+                    Criar caixinha
+                  </Link>
+                </div>
+              )
+            ) : null}
+
+            {isLoadingInvestmentTargets ? <p className="text-xs text-muted">Carregando ativos e caixinhas...</p> : null}
+          </fieldset>
+        ) : null}
         <fieldset className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
           <legend className="px-1 text-xs uppercase tracking-[0.14em]">Momento do gasto</legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -1354,6 +1921,49 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         <textarea value={expenseForm.note} onChange={(event) => setExpenseForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Observacao" />
       </ManagementModal>
 
+      <ManagementModal
+        title="Marcar como pago"
+        isOpen={completeExpenseTarget !== null}
+        onClose={() => setCompleteExpenseTarget(null)}
+        onSubmit={submitCompleteExpense}
+        submitDisabled={isCompletingExpense(completeExpenseTarget?.id)}
+        submitLabel={isCompletingExpense(completeExpenseTarget?.id) ? "Marcando..." : "Confirmar"}
+      >
+        {completeExpenseTarget ? (
+          <>
+            <div className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+              <p className="font-medium text-ink">{completeExpenseTarget.description} · {categoryById.get(completeExpenseTarget.categoryId)?.name ?? "Setor removido"}</p>
+              <p className="mt-2 text-ink"><MoneyValue value={formatCents(completeExpenseTarget.amountInCents)} /></p>
+              <p className="mt-2">Vencimento: {formatLocalDate(completeExpenseTarget.date)} as {completeExpenseTarget.time}</p>
+              {completeExpenseTarget.completedAt ? <p className="mt-1">{formatCompletedAt(completeExpenseTarget.completedAt)}</p> : null}
+              {completeExpenseTarget.allocationKind === "investment_contribution" ? <p className="mt-2 text-xs text-violet">Ao confirmar, o sistema tambem registra ou atualiza a compra vinculada do ativo.</p> : null}
+              {completeExpenseTarget.allocationKind === "cash_box_contribution" ? <p className="mt-2 text-xs text-aqua">Ao confirmar, o sistema tambem registra ou atualiza a movimentacao vinculada da caixinha.</p> : null}
+            </div>
+            <fieldset className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+              <legend className="px-1 text-xs uppercase tracking-[0.14em]">Pagamento</legend>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={completeExpenseForm.useCurrentMoment} onChange={() => setCompleteExpenseForm((current) => ({ ...current, useCurrentMoment: true }))} className="h-4 w-4 accent-accent" />
+                  Agora
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={!completeExpenseForm.useCurrentMoment} onChange={() => setCompleteExpenseForm((current) => ({ ...current, useCurrentMoment: false }))} className="h-4 w-4 accent-accent" />
+                  Escolher data e horario
+                </label>
+              </div>
+            </fieldset>
+            {completeExpenseForm.useCurrentMoment ? (
+              <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">Pagamento: agora, com a data atual ({formatLocalDate(today.date)}) e o horario atual do dispositivo.</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input type="date" required value={completeExpenseForm.completedDate} onChange={(event) => setCompleteExpenseForm((current) => ({ ...current, completedDate: event.target.value }))} className={fieldClass} />
+                <input type="time" required value={completeExpenseForm.completedTime} onChange={(event) => setCompleteExpenseForm((current) => ({ ...current, completedTime: event.target.value }))} className={fieldClass} />
+              </div>
+            )}
+          </>
+        ) : null}
+      </ManagementModal>
+
       <ManagementModal title={editingGoalId ? "Editar objetivo" : "Novo objetivo"} isOpen={isGoalModalOpen} onClose={() => setIsGoalModalOpen(false)} onSubmit={submitGoal} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
         <input required value={goalForm.name} onChange={(event) => setGoalForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome do objetivo" />
         <div className="grid gap-3 sm:grid-cols-3">
@@ -1407,19 +2017,19 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
             <section className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-lg border border-line bg-elevated p-3">
                 <h3 className="text-sm font-semibold text-ink">Evolucao mensal</h3>
-                <LineChart data={categoryMonthlyEvolutionChartData} xAxisKey="month" height={180} series={[{ dataKey: "value", name: "Gastos", color: categoryDetails.color }]} />
+                <LazyLineChart data={categoryMonthlyEvolutionChartData} xAxisKey="month" height={180} series={[{ dataKey: "value", name: "Gastos", color: categoryDetails.color }]} />
               </div>
               <div className="rounded-lg border border-line bg-elevated p-3">
                 <h3 className="text-sm font-semibold text-ink">Evolucao anual</h3>
-                <BarChart data={categoryAnnualEvolutionChartData} xAxisKey="year" name="Gastos" color={categoryDetails.color} height={180} />
+                <LazyBarChart data={categoryAnnualEvolutionChartData} xAxisKey="year" name="Gastos" color={categoryDetails.color} height={180} />
               </div>
               <div className="rounded-lg border border-line bg-elevated p-3">
                 <h3 className="text-sm font-semibold text-ink">Comparacao entre meses</h3>
-                <BarChart data={categoryComparisonChartData} name="Gastos" color={categoryDetails.color} height={180} />
+                <LazyBarChart data={categoryComparisonChartData} name="Gastos" color={categoryDetails.color} height={180} />
               </div>
               <div className="rounded-lg border border-line bg-elevated p-3">
                 <h3 className="text-sm font-semibold text-ink">Gastos por forma de pagamento</h3>
-                <BarChart data={categoryPaymentChartData} xAxisKey="paymentMethod" name="Gastos" color="#38bdf8" height={180} />
+                <LazyBarChart data={categoryPaymentChartData} xAxisKey="paymentMethod" name="Gastos" color="#38bdf8" height={180} />
               </div>
             </section>
             <section className="grid gap-3">
@@ -1445,7 +2055,18 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
       </ManagementModal>
 
       <ConfirmDelete isOpen={deleteCategory !== null} title={`Excluir o setor ${deleteCategory?.name}? Os gastos ja lancados permanecerao no historico como setor removido.`} onCancel={() => setDeleteCategory(null)} onConfirm={() => void confirmDeleteCategory()} />
-      <ConfirmDelete isOpen={deleteExpense !== null} title={`Excluir o gasto ${deleteExpense?.description}?${deleteExpense?.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`} onCancel={() => setDeleteExpense(null)} onConfirm={() => void confirmDeleteExpense()} />
+      <ConfirmDelete
+        isOpen={deleteExpense !== null}
+        title={
+          deleteExpense?.allocationKind === "investment_contribution"
+            ? `Este lancamento esta vinculado a uma compra em ${deleteExpense.integration?.assetTicker ?? "ativo"}. Excluir o gasto tambem removera a movimentacao vinculada.${deleteExpense.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
+            : deleteExpense?.allocationKind === "cash_box_contribution"
+              ? `Este lancamento esta vinculado a uma movimentacao de caixinha. Excluir o gasto tambem removera a movimentacao vinculada.${deleteExpense.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
+              : `Excluir o gasto ${deleteExpense?.description}?${deleteExpense?.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
+        }
+        onCancel={() => setDeleteExpense(null)}
+        onConfirm={() => void confirmDeleteExpense()}
+      />
       <ConfirmDelete isOpen={deleteExpenseSeries !== null} title={`Excluir toda recorrencia de ${deleteExpenseSeries?.description}?`} onCancel={() => setDeleteExpenseSeries(null)} onConfirm={() => void confirmDeleteExpenseSeries()} />
       <ConfirmDelete isOpen={deleteGoal !== null} title={`Excluir o objetivo ${deleteGoal?.name}?`} onCancel={() => setDeleteGoal(null)} onConfirm={() => void confirmDeleteGoal()} />
     </div>

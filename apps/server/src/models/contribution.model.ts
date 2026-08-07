@@ -9,5 +9,8 @@ const contributionSchema = new Schema(
   { timestamps: true }
 );
 
+contributionSchema.index({ date: -1 });
+contributionSchema.index({ createdAt: -1 });
+
 export type ContributionDocument = InferSchemaType<typeof contributionSchema>;
 export const ContributionModel = models.Contribution ?? model("Contribution", contributionSchema);

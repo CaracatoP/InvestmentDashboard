@@ -67,6 +67,15 @@ export function formatPercentage(value: number) {
   return percentFormatter.format(value / 100);
 }
 
+export function toDateKey(value: string | Date) {
+  if (typeof value === "string") {
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+  }
+
+  return (value instanceof Date ? value : new Date(value)).toISOString().slice(0, 10);
+}
+
 export function formatDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",

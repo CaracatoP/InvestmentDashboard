@@ -7,6 +7,7 @@ import {
   getPortfolio,
   getSettings
 } from "../../services/portfolio.service";
+import { env } from "../../config/env";
 import { getCashBoxesOverview } from "../../services/cash-box.service";
 import { getMonthlyPlanningOverview } from "../../services/monthly-planning.service";
 import { filterSensitiveData } from "../utils/ai-sensitive-data-filter";
@@ -21,7 +22,8 @@ export type InvestmentContextFocus =
   | "goals"
   | "cashboxes"
   | "history"
-  | "projections";
+  | "projections"
+  | "settings";
 
 function compactMetrics(metrics: Awaited<ReturnType<typeof getDashboard>>["metrics"]) {
   return {
@@ -141,6 +143,26 @@ function buildConcentration(portfolio: Awaited<ReturnType<typeof getPortfolio>>)
     topPositions,
     largestPosition: topPositions[0] ?? null,
     top3WeightPercent: top3Weight
+  };
+}
+
+function buildAiSettingsStatus() {
+  const provider = env.aiProvider;
+  const enabled = env.aiEnabled;
+  const configured = provider === "disabled" ? false : Boolean(env.groqApiKey);
+  const status = !enabled ? "disabled" : provider === "disabled" ? "disabled" : configured ? "configured" : "missing-key";
+
+  return {
+    enabled,
+    provider,
+    configured,
+    status,
+    limits: {
+      maxRequestsPerHour: env.aiMaxRequestsPerHour,
+      chatMaxMessages: env.aiChatMaxMessages,
+      chatMaxContextTokens: env.aiChatMaxContextTokens,
+      analysisCacheMinutes: env.aiAnalysisCacheMinutes
+    }
   };
 }
 
@@ -298,6 +320,20 @@ export async function buildInvestmentContext(focus: InvestmentContextFocus = "ov
       contributionTotals: contributions.totals,
       dividendTotals: dividends.totals,
       goals: goals.slice(0, 12)
+    });
+  }
+
+  if (focus === "settings") {
+    const settings = await getSettings();
+    return filterSensitiveData({
+      scope: "settings",
+      profile: settings.profile,
+      allocations: settings.allocations,
+      categories: settings.categories,
+      projections: settings.projections,
+      ai: buildAiSettingsStatus(),
+      responseGuidance:
+        "Ao responder sobre configuracoes, use estes dados como fonte oficial. Se o pedido for para alterar nome, tema ou moeda, proponha o fluxo seguro com confirmacao."
     });
   }
 

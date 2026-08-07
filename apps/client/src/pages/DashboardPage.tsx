@@ -1,7 +1,5 @@
 import { BadgePercent, Coins, Landmark, Layers3, Target, TrendingUp, Wallet } from "lucide-react";
-import { BarChart } from "../components/charts/BarChart";
-import { LineChart } from "../components/charts/LineChart";
-import { PieChart } from "../components/charts/PieChart";
+import { LazyBarChart, LazyLineChart, LazyPieChart } from "../components/charts/LazyCharts";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { StatCard } from "../components/ui/StatCard";
@@ -41,7 +39,7 @@ export function DashboardPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <ChartCard title="Evolucao patrimonial" description="Valor investido versus valor atual ao longo dos meses.">
-          <LineChart
+          <LazyLineChart
             data={dashboard.wealthEvolution}
             series={[
               { dataKey: "invested", name: "Investido", color: "#8b9491" },
@@ -50,16 +48,16 @@ export function DashboardPage() {
           />
         </ChartCard>
         <ChartCard title="Patrimonio por categoria" description="Distribuicao atual comparada ao alvo.">
-          <PieChart data={dashboard.categoryAllocation} />
+          <LazyPieChart data={dashboard.categoryAllocation} />
         </ChartCard>
       </section>
 
       <section className="mt-4 grid min-w-0 gap-4 xl:grid-cols-2">
         <ChartCard title="Dividendos mensais">
-          <BarChart data={dashboard.monthlyDividends} name="Dividendos" color="#22c55e" />
+          <LazyBarChart data={dashboard.monthlyDividends} name="Dividendos" color="#22c55e" />
         </ChartCard>
         <ChartCard title="Aportes mensais">
-          <BarChart data={dashboard.monthlyContributions} name="Aportes" color="#f59e0b" />
+          <LazyBarChart data={dashboard.monthlyContributions} name="Aportes" color="#f59e0b" />
         </ChartCard>
       </section>
 

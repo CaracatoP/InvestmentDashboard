@@ -12,7 +12,6 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const profileName = useInvestmentStore((state) => state.settings?.profile.name);
   const isLoading = useInvestmentStore((state) => state.isLoading);
   const error = useInvestmentStore((state) => state.error);
@@ -39,7 +38,6 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   async function handleRefresh() {
     await refreshMarketData();
-    await loadWorkspace();
   }
 
   const navigation = (onNavigate?: () => void) => (

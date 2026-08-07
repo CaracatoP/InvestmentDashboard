@@ -6,6 +6,7 @@ import type { MonthlyExpenseRecord, MonthlyPlanRecord } from "../types/investmen
 
 let localMonthlyPlans: MonthlyPlanRecord[] = [];
 let localMonthlyExpenses: MonthlyExpenseRecord[] = [];
+const monthlyExpenseCreationLocks = new Map<string, Promise<{ expense: MonthlyExpenseRecord; created: boolean }>>();
 
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
@@ -104,6 +105,39 @@ export async function findMonthlyExpenseById(id: string): Promise<MonthlyExpense
   return localMonthlyExpenses.find((expense) => expense.id === id) ?? null;
 }
 
+export async function findMonthlyExpenseByIdempotencyKey(idempotencyKey: string): Promise<MonthlyExpenseRecord | null> {
+  if (isDatabaseConnected()) {
+    const expense = await MonthlyExpenseModel.findOne({ "integration.idempotencyKey": idempotencyKey }).lean();
+    return expense ? (withId(expense) as unknown as MonthlyExpenseRecord) : null;
+  }
+
+  return localMonthlyExpenses.find((expense) => expense.integration?.idempotencyKey === idempotencyKey) ?? null;
+}
+
+export async function findMonthlyExpenseByRecurrenceOccurrence(
+  planId: string,
+  recurrenceId: string,
+  occurrenceDate: string
+): Promise<MonthlyExpenseRecord | null> {
+  if (isDatabaseConnected()) {
+    const expense = await MonthlyExpenseModel.findOne({
+      planId,
+      recurrenceId,
+      recurrenceOriginalDate: occurrenceDate
+    }).lean();
+    return expense ? (withId(expense) as unknown as MonthlyExpenseRecord) : null;
+  }
+
+  return (
+    localMonthlyExpenses.find(
+      (expense) =>
+        expense.planId === planId &&
+        expense.recurrenceId === recurrenceId &&
+        (expense.recurrenceOriginalDate ?? expense.date) === occurrenceDate
+    ) ?? null
+  );
+}
+
 export async function createMonthlyExpense(input: Omit<MonthlyExpenseRecord, "id">): Promise<MonthlyExpenseRecord> {
   if (isDatabaseConnected()) {
     const expense = await MonthlyExpenseModel.create(input).then((record) => record.toObject());
@@ -113,6 +147,40 @@ export async function createMonthlyExpense(input: Omit<MonthlyExpenseRecord, "id
   const expense = { ...input, id: randomUUID() };
   localMonthlyExpenses = [expense, ...localMonthlyExpenses];
   return expense;
+}
+
+export async function createMonthlyExpenseIfMissing(input: Omit<MonthlyExpenseRecord, "id">): Promise<{ expense: MonthlyExpenseRecord; created: boolean }> {
+  const occurrenceDate = input.recurrenceOriginalDate ?? input.date;
+  const shouldDeduplicate = Boolean(input.recurrenceSourceId && input.recurrenceId && occurrenceDate);
+  const lockKey = shouldDeduplicate ? `${input.planId}:${input.recurrenceId}:${occurrenceDate}` : "";
+  const existingLock = lockKey ? monthlyExpenseCreationLocks.get(lockKey) : undefined;
+  if (existingLock) return existingLock;
+
+  const createIfMissing = async () => {
+    if (shouldDeduplicate) {
+      const existing = await findMonthlyExpenseByRecurrenceOccurrence(input.planId, String(input.recurrenceId), occurrenceDate);
+      if (existing) return { expense: existing, created: false };
+    }
+
+    try {
+      return { expense: await createMonthlyExpense(input), created: true };
+    } catch (error) {
+      if (!shouldDeduplicate) throw error;
+
+      const duplicateKeyCode = (error as { code?: number }).code;
+      if (duplicateKeyCode !== 11000) throw error;
+
+      const existing = await findMonthlyExpenseByRecurrenceOccurrence(input.planId, String(input.recurrenceId), occurrenceDate);
+      if (existing) return { expense: existing, created: false };
+      throw error;
+    }
+  };
+
+  if (!lockKey) return createIfMissing();
+
+  const creation = createIfMissing().finally(() => monthlyExpenseCreationLocks.delete(lockKey));
+  monthlyExpenseCreationLocks.set(lockKey, creation);
+  return creation;
 }
 
 export async function updateMonthlyExpense(id: string, input: Partial<Omit<MonthlyExpenseRecord, "id">>): Promise<MonthlyExpenseRecord | null> {

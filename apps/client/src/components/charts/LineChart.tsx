@@ -15,7 +15,7 @@ interface Series {
   color: string;
 }
 
-interface LineChartProps {
+export interface LineChartProps {
   data: Array<Record<string, string | number>>;
   series: Series[];
   xAxisKey?: string;

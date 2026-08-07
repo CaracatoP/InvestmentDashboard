@@ -1,11 +1,17 @@
-const workspaceCacheEvent = "workspace-cache-invalidated";
-const workspaceCacheTarget = new EventTarget();
+export {
+  getWorkspaceSyncMetrics,
+  invalidateWorkspaceCache,
+  isWorkspaceCacheDomain,
+  onWorkspaceCacheInvalidated,
+  onWorkspaceSyncEvent,
+  resetWorkspaceSyncMetrics,
+  shouldRefreshWorkspaceDomains,
+  workspaceDomains
+} from "./workspace-sync";
 
-export function invalidateWorkspaceCache() {
-  workspaceCacheTarget.dispatchEvent(new Event(workspaceCacheEvent));
-}
-
-export function onWorkspaceCacheInvalidated(callback: () => void) {
-  workspaceCacheTarget.addEventListener(workspaceCacheEvent, callback);
-  return () => workspaceCacheTarget.removeEventListener(workspaceCacheEvent, callback);
-}
+export type {
+  WorkspaceAffectedEntity,
+  WorkspaceCacheDomain,
+  WorkspaceSyncDetail,
+  WorkspaceSyncMetrics
+} from "./workspace-sync";

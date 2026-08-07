@@ -3,6 +3,7 @@ import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, Management
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { MobileDataCard } from "../components/ui/Responsive";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { goalRecordsApi } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Goal } from "../types/investments";
@@ -27,9 +28,16 @@ const goalTypeLabels: Record<GoalType, string> = {
   invested: "Valor investido"
 };
 
+function goalIdentity(goal: GoalRecord) {
+  return goal.id ?? goal.title;
+}
+
+function sortGoals(items: GoalRecord[]) {
+  return [...items].sort((left, right) => left.title.localeCompare(right.title, "pt-BR"));
+}
+
 export function GoalsPage() {
   const calculatedGoals = useInvestmentStore((state) => state.goals);
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [goals, setGoals] = useState<GoalRecord[]>([]);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("Todos");
@@ -40,13 +48,14 @@ export function GoalsPage() {
 
   async function loadGoals() {
     const records = await goalRecordsApi.list();
-    setGoals(records);
-    await loadWorkspace();
+    setGoals(sortGoals(records));
   }
 
   useEffect(() => {
     void loadGoals();
   }, []);
+
+  useWorkspaceInvalidation(["goals"], () => loadGoals());
 
   const calculatedById = useMemo(() => new Map(calculatedGoals.map((goal) => [goal.id, goal])), [calculatedGoals]);
   const types = useMemo(() => ["Todos", ...Object.values(goalTypeLabels)], []);
@@ -79,18 +88,21 @@ export function GoalsPage() {
       targetQuantity: form.type === "shares" ? form.targetQuantity : 0,
       assetTicker: form.assetTicker?.toUpperCase()
     };
-    if (editing?.id) await goalRecordsApi.update(editing.id, payload);
-    else await goalRecordsApi.create(payload);
+    const saved = editing?.id
+      ? await goalRecordsApi.update(editing.id, payload)
+      : await goalRecordsApi.create(payload);
+
+    setGoals((current) => sortGoals([...current.filter((goal) => goalIdentity(goal) !== goalIdentity(saved)), saved]));
     setIsModalOpen(false);
     setEditing(null);
-    await loadGoals();
+    setForm(emptyGoal);
   }
 
   async function confirmDelete() {
     if (!deleteTarget?.id) return;
     await goalRecordsApi.remove(deleteTarget.id);
+    setGoals((current) => current.filter((goal) => goalIdentity(goal) !== goalIdentity(deleteTarget)));
     setDeleteTarget(null);
-    await loadGoals();
   }
 
   function formatTarget(goal: GoalRecord) {

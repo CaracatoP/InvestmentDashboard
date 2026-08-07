@@ -9,7 +9,7 @@ import {
 } from "recharts";
 import { formatCompactCurrency } from "../../utils/formatters";
 
-interface BarChartProps {
+export interface BarChartProps {
   data: Array<Record<string, string | number>>;
   dataKey?: string;
   name: string;

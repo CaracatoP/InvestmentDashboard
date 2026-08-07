@@ -25,6 +25,13 @@ export interface OperationRecord {
   fees: number;
   totalValue: number;
   notes?: string;
+  origin?: "manual" | "monthly-planning";
+  planningLink?: {
+    expenseId: string;
+    planId: string;
+    integrationId: string;
+    idempotencyKey?: string | null;
+  } | null;
 }
 
 export interface DividendRecord {
@@ -148,6 +155,13 @@ export interface CashBoxMovementRecord {
   value: number;
   date: string | Date;
   description?: string;
+  origin?: "manual" | "monthly-planning";
+  planningLink?: {
+    expenseId: string;
+    planId: string;
+    integrationId: string;
+    idempotencyKey?: string | null;
+  } | null;
 }
 
 export type CdiSource = "bcb" | "fallback";
@@ -201,6 +215,24 @@ export type MonthlyBudgetType = "percentage" | "fixed";
 export type MonthlyExpenseStatus = "completed" | "planned";
 export type MonthlyExpenseType = "single" | "recurring";
 export type MonthlyRecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "annual" | "custom";
+export type MonthlyExpenseAllocationKind = "expense" | "investment_contribution" | "cash_box_contribution";
+export type MonthlyExpenseInvestmentDestination = "asset" | "cashbox";
+export type MonthlyExpenseLinkedEntityType = "operation" | "cashBoxMovement";
+
+export interface MonthlyExpenseIntegrationRecord {
+  destination: MonthlyExpenseInvestmentDestination;
+  linkedEntityType?: MonthlyExpenseLinkedEntityType | null;
+  linkedEntityId?: string | null;
+  assetId?: string | null;
+  assetTicker?: string | null;
+  cashBoxId?: string | null;
+  operationType?: "COMPRA" | "VENDA" | "BONIFICACAO" | "DESDOBRAMENTO" | "GRUPAMENTO" | string | null;
+  quantity?: number | null;
+  price?: number | null;
+  fees?: number | null;
+  integrationId?: string | null;
+  idempotencyKey?: string | null;
+}
 
 export interface MonthlyPlanCategoryRecord {
   id: string;
@@ -259,6 +291,9 @@ export interface MonthlyExpenseRecord {
   recurrenceOriginalDate?: string | null;
   recurrenceCancelled?: boolean;
   status: MonthlyExpenseStatus;
+  allocationKind?: MonthlyExpenseAllocationKind;
+  integration?: MonthlyExpenseIntegrationRecord | null;
+  completedAt?: string | null;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }

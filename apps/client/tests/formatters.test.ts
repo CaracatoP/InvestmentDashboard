@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCents, formatCompactCurrency, formatCurrency, formatDate, formatPercentage, parseBrazilianMoneyToCents, setCurrencyPreference } from "../src/utils/formatters";
+import { formatCents, formatCompactCurrency, formatCurrency, formatDate, formatPercentage, parseBrazilianMoneyToCents, setCurrencyPreference, toDateKey } from "../src/utils/formatters";
 
 test("parseBrazilianMoneyToCents accepts common Brazilian money inputs", () => {
   assert.equal(parseBrazilianMoneyToCents("60"), 6000);
@@ -23,6 +23,11 @@ test("parseBrazilianMoneyToCents rejects invalid values", () => {
 test("formatDate keeps date-only financial events on the same calendar day", () => {
   assert.equal(formatDate("2026-07-28"), "28/07/2026");
   assert.equal(formatDate("2026-07-28T00:00:00.000Z"), "28/07/2026");
+});
+
+test("toDateKey preserves date-only and local datetime keys for filters", () => {
+  assert.equal(toDateKey("2026-08-01"), "2026-08-01");
+  assert.equal(toDateKey("2026-08-01T00:00"), "2026-08-01");
 });
 
 test("currency preference keeps BRL as the only safe display currency", () => {

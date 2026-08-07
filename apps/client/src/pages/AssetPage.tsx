@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { PriceHistoryChart } from "../components/charts/PriceHistoryChart";
+import { LazyPriceHistoryChart } from "../components/charts/LazyCharts";
 import { DividendCard } from "../components/cards/DividendCard";
 import { OperationCard } from "../components/cards/OperationCard";
 import { ChartCard } from "../components/ui/ChartCard";
@@ -48,20 +48,25 @@ export function AssetPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const historyAbortRef = useRef<AbortController | null>(null);
+  const assetRequestIdRef = useRef(0);
 
   const loadAssetDetails = useCallback(async (showLoading = true) => {
     if (!ticker) return;
+    const requestId = assetRequestIdRef.current + 1;
+    assetRequestIdRef.current = requestId;
     if (showLoading) setIsLoading(true);
     setError("");
 
     try {
       const data = await fetchAsset(ticker);
+      if (requestId !== assetRequestIdRef.current) return;
       setAsset(data);
     } catch {
+      if (requestId !== assetRequestIdRef.current) return;
       setAsset(null);
       setError("Nao foi possivel carregar este ativo.");
     } finally {
-      if (showLoading) setIsLoading(false);
+      if (showLoading && requestId === assetRequestIdRef.current) setIsLoading(false);
     }
   }, [ticker]);
 
@@ -89,7 +94,8 @@ export function AssetPage() {
   }, [loadAssetDetails]);
 
   useEffect(() => {
-    return onWorkspaceCacheInvalidated(() => {
+    return onWorkspaceCacheInvalidated((domains) => {
+      if (!domains.includes("all") && !domains.some((domain) => ["assets", "portfolio", "market"].includes(domain))) return;
       void loadAssetDetails(false);
     });
   }, [loadAssetDetails]);
@@ -188,7 +194,7 @@ export function AssetPage() {
           </div>
 
           {hasHistoricalPrices ? (
-            <PriceHistoryChart data={priceHistory?.points ?? []} range={priceHistory?.range ?? selectedRange} operations={asset.operations} />
+            <LazyPriceHistoryChart data={priceHistory?.points ?? []} range={priceHistory?.range ?? selectedRange} operations={asset.operations} />
           ) : (
             <div className="rounded-lg border border-line bg-elevated p-6 text-sm text-muted">
               {historyMessage || "Carregando historico de precos..."}

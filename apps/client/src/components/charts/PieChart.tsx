@@ -2,7 +2,7 @@ import { Cell, Pie, PieChart as RechartsPieChart, ResponsiveContainer, Tooltip }
 import type { AllocationComparison } from "../../types/investments";
 import { formatCurrency, formatPercentage } from "../../utils/formatters";
 
-interface PieChartProps {
+export interface PieChartProps {
   data: AllocationComparison[];
   height?: number;
 }

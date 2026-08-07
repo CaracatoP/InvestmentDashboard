@@ -1,5 +1,6 @@
 import { CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { resolveAiActionRoute } from "../../services/ai-ui-actions";
 import type { AiChatStructuredResponse } from "../../types/ai";
 import { ActionCard } from "./ActionCard";
 
@@ -14,7 +15,10 @@ function successFields(response: AiChatStructuredResponse) {
 export function SuccessMessage({ response }: SuccessMessageProps) {
   const navigate = useNavigate();
   const fields = successFields(response);
-  const actions = response.sections.flatMap((section) => section.actions ?? []).filter((action) => action.route);
+  const actions = response.sections
+    .flatMap((section) => section.actions ?? [])
+    .map((action) => ({ action, route: resolveAiActionRoute(action.route) }))
+    .filter((item): item is { action: NonNullable<typeof response.sections[number]["actions"]>[number]; route: Exclude<ReturnType<typeof resolveAiActionRoute>, null> } => Boolean(item.route));
 
   return (
     <div className="space-y-2">
@@ -50,11 +54,11 @@ export function SuccessMessage({ response }: SuccessMessageProps) {
 
       {actions.length ? (
         <div className="flex flex-wrap gap-2">
-          {actions.map((action) => (
+          {actions.map(({ action, route }) => (
             <button
               key={action.id ?? action.route}
               type="button"
-              onClick={() => action.route && navigate(action.route)}
+              onClick={() => navigate(route)}
               className="inline-flex h-8 items-center rounded-full border border-line bg-panel px-3 text-xs font-medium text-muted transition hover:border-accent/60 hover:text-ink"
             >
               {action.label}

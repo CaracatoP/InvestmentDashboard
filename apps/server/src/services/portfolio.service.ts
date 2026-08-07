@@ -282,18 +282,58 @@ function calculateAssetPosition(
   };
 }
 
-async function getCalculatedPortfolio() {
-  const [assets, operations, dividends, quotes, priceHistory] = await Promise.all([listAssets(), listOperations(), listDividends(), listMarketQuotes(), listPriceHistory()]);
-  const quoteByTicker = new Map(quotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
+interface PortfolioCalculationInputs {
+  assets: AssetRecord[];
+  operations: OperationRecord[];
+  dividends: DividendRecord[];
+  quotes: MarketQuoteRecord[];
+  priceHistory: PriceHistoryRecord[];
+}
+
+async function loadPortfolioCalculationInputs(): Promise<PortfolioCalculationInputs> {
+  const [assets, operations, dividends, quotes, priceHistory] = await Promise.all([
+    listAssets(),
+    listOperations(),
+    listDividends(),
+    listMarketQuotes(),
+    listPriceHistory()
+  ]);
+  return { assets, operations, dividends, quotes, priceHistory };
+}
+
+function calculatePortfolioFromInputs(inputs: PortfolioCalculationInputs) {
+  const quoteByTicker = new Map(inputs.quotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
   const historyByTicker = new Map<string, PriceHistoryRecord[]>();
-  for (const history of priceHistory) {
+  for (const history of inputs.priceHistory) {
     const ticker = normalizeTicker(history.ticker);
     historyByTicker.set(ticker, [...(historyByTicker.get(ticker) ?? []), history]);
   }
 
-  const preliminary = assets.map((asset) => calculateAssetPosition(asset, operations, dividends, 0, quoteByTicker.get(normalizeTicker(asset.ticker)), historyByTicker.get(normalizeTicker(asset.ticker)) ?? []));
+  const preliminary = inputs.assets.map((asset) =>
+    calculateAssetPosition(
+      asset,
+      inputs.operations,
+      inputs.dividends,
+      0,
+      quoteByTicker.get(normalizeTicker(asset.ticker)),
+      historyByTicker.get(normalizeTicker(asset.ticker)) ?? []
+    )
+  );
   const assetsValue = sum(preliminary.filter((asset) => asset.hasPosition).map((asset) => safeNumber(asset.currentValue)));
-  return assets.map((asset) => calculateAssetPosition(asset, operations, dividends, assetsValue, quoteByTicker.get(normalizeTicker(asset.ticker)), historyByTicker.get(normalizeTicker(asset.ticker)) ?? []));
+  return inputs.assets.map((asset) =>
+    calculateAssetPosition(
+      asset,
+      inputs.operations,
+      inputs.dividends,
+      assetsValue,
+      quoteByTicker.get(normalizeTicker(asset.ticker)),
+      historyByTicker.get(normalizeTicker(asset.ticker)) ?? []
+    )
+  );
+}
+
+async function getCalculatedPortfolio(inputs?: PortfolioCalculationInputs) {
+  return calculatePortfolioFromInputs(inputs ?? (await loadPortfolioCalculationInputs()));
 }
 
 function buildAllocationValues(portfolioAssets: Awaited<ReturnType<typeof getCalculatedPortfolio>>, cashBoxes: CashBoxRecord[]) {
@@ -365,6 +405,10 @@ function getOperationTypeLabel(type: string) {
   return labels[type] ?? type;
 }
 
+function isPlanningLinkedPurchase(operation: OperationRecord) {
+  return operation.origin === "monthly-planning" && operation.type === "COMPRA";
+}
+
 function getCashBoxMovementTypeLabel(type: string) {
   return getCashBoxMovementLabel(type);
 }
@@ -380,7 +424,15 @@ function getCashBoxMovementDescription(type: string, description?: string) {
 
 type MovementStatus = "completed" | "planned" | "cancelled";
 
-interface TimelineMovement {
+type TimelineSourceType =
+  | "operation"
+  | "dividend"
+  | "contribution"
+  | "cashbox-movement"
+  | "monthly-expense"
+  | "monthly-goal";
+
+export interface TimelineMovement {
   id: string;
   date: string | Date;
   type: string;
@@ -395,6 +447,13 @@ interface TimelineMovement {
   statusLabel?: string;
   paymentMethod?: string;
   source?: string;
+  sourceType?: TimelineSourceType;
+  sourceId?: string;
+  seriesId?: string | null;
+  occurrenceId?: string | null;
+  occurrenceDate?: string | null;
+  completedAt?: string | null;
+  canonicalId?: string;
   day?: number;
 }
 
@@ -404,6 +463,7 @@ interface BuildMovementsOptions {
   includePlannedDividends?: boolean;
   monthlyExpenses?: MonthlyExpenseRecord[];
   monthlyPlans?: MonthlyPlanRecord[];
+  deduplicate?: boolean;
 }
 
 function dateKey(value: string | Date) {
@@ -489,20 +549,110 @@ function normalizePaymentMethod(paymentMethod?: string | null) {
   return value || "Nao informado";
 }
 
-function buildMovements(
+function formatDateBr(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return value;
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function formatDateTimeBr(value?: string | null) {
+  if (!value) return null;
+  const date = formatDateBr(value);
+  const timeMatch = value.match(/T(\d{2}):(\d{2})/);
+  return timeMatch ? `${date} as ${timeMatch[1]}:${timeMatch[2]}` : date;
+}
+
+function compactIdentityPart(value: string) {
+  return value.trim().replace(/\s+/g, "-");
+}
+
+function fallbackSourceId(prefix: string, parts: Array<string | number | Date | null | undefined>) {
+  return compactIdentityPart([prefix, ...parts.map((part) => String(part ?? "unknown"))].join(":"));
+}
+
+function buildCanonicalEventId(input: {
+  sourceType: TimelineSourceType;
+  sourceId?: string | null;
+  eventType: string;
+  occurrenceId?: string | null;
+}) {
+  return [input.sourceType, input.sourceId || "unknown", input.eventType, input.occurrenceId].filter(Boolean).map(String).map(compactIdentityPart).join(":");
+}
+
+function withCanonicalIdentity<T extends Omit<TimelineMovement, "id">>(
+  movement: T,
+  input: {
+    sourceType: TimelineSourceType;
+    sourceId?: string | null;
+    eventType: string;
+    occurrenceId?: string | null;
+    seriesId?: string | null;
+  }
+): TimelineMovement {
+  const sourceId = input.sourceId || input.occurrenceId || fallbackSourceId(input.sourceType, [movement.date, movement.title, movement.amount]);
+  const canonicalId = buildCanonicalEventId({ ...input, sourceId });
+
+  return {
+    ...movement,
+    id: canonicalId,
+    eventType: input.eventType,
+    sourceType: input.sourceType,
+    sourceId,
+    occurrenceId: input.occurrenceId ?? null,
+    seriesId: input.seriesId ?? null,
+    canonicalId
+  };
+}
+
+function dedupeTimelineMovements(movements: TimelineMovement[]) {
+  const seen = new Set<string>();
+  const deduped: TimelineMovement[] = [];
+
+  for (const movement of movements) {
+    const key = movement.canonicalId ?? buildCanonicalEventId({
+      sourceType: movement.sourceType ?? "monthly-expense",
+      sourceId: movement.sourceId ?? movement.id,
+      eventType: movement.eventType ?? movement.type,
+      occurrenceId: movement.occurrenceId
+    });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(movement);
+  }
+
+  return deduped;
+}
+
+function sourceCounts(movements: TimelineMovement[]) {
+  return movements.reduce<Record<string, number>>((counts, movement) => {
+    const source = movement.sourceType ?? movement.source ?? "unknown";
+    counts[source] = (counts[source] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function compareMovements(left: TimelineMovement, right: TimelineMovement) {
+  const dateComparison = dateFrom(right.date).getTime() - dateFrom(left.date).getTime();
+  if (dateComparison !== 0) return dateComparison;
+  return (left.canonicalId ?? left.id).localeCompare(right.canonicalId ?? right.id);
+}
+
+export function buildMovements(
   operations: OperationRecord[],
   dividends: DividendRecord[],
   contributions: ContributionRecord[],
   cashBoxes: CashBoxRecord[] = [],
   options: BuildMovementsOptions = {}
 ) {
+  // Fonte de verdade do Histórico: operações, dividendos/JCP, aportes, caixinhas, despesas mensais e objetivos são normalizados apenas aqui.
+  const startedAt = Date.now();
   const assetLookup = buildAssetLookup(options.assets);
   const planById = new Map((options.monthlyPlans ?? []).map((plan) => [plan.id, plan]));
 
   const operationEvents: TimelineMovement[] = operations.map((operation) => {
     const metadata = resolveAssetMetadata(assetLookup, operation.assetTicker, operation.assetId);
-    return {
-      id: operation.id ?? `operation-${operation.assetTicker}-${operation.date}`,
+    const eventType = getOperationEventType(operation.type);
+    return withCanonicalIdentity({
       date: operation.date,
       type: getOperationTypeLabel(operation.type),
       title: metadata.assetTicker ?? operation.type,
@@ -511,14 +661,17 @@ function buildMovements(
           ? `${operation.quantity} unidades a R$ ${Number(operation.price).toFixed(2)}${operation.notes ? ` - ${operation.notes}` : ""}`
           : (operation.notes ?? ""),
       amount: operation.totalValue,
-      eventType: getOperationEventType(operation.type),
       assetTicker: metadata.assetTicker,
       assetCategory: metadata.assetCategory,
       sector: metadata.sector,
       paymentMethod: "Corretora",
       source: "operations",
       ...resolveMovementStatus(operation.date)
-    };
+    }, {
+      sourceType: "operation",
+      sourceId: operation.id ?? fallbackSourceId("operation", [operation.assetTicker, operation.type, operation.date]),
+      eventType
+    });
   });
 
   const dividendEvents: TimelineMovement[] = dividends
@@ -526,110 +679,173 @@ function buildMovements(
     .map((dividend) => {
       const eventType = getDividendEventType(dividend.type);
       const metadata = resolveAssetMetadata(assetLookup, dividend.assetTicker, dividend.assetId);
-      return {
-        id: dividend.id ?? `dividend-${dividend.assetTicker}-${dividend.paymentDate}`,
+      return withCanonicalIdentity({
         date: dividend.paymentDate,
         type: eventType === "rendimento" ? "Rendimento" : "Dividendo",
         title: metadata.assetTicker ?? "Dividendo",
         description: dividend.notes ?? (eventType === "rendimento" ? "Recebimento de rendimento" : "Recebimento de dividendos"),
         amount: dividendAmount(dividend),
-        eventType,
         assetTicker: metadata.assetTicker,
         assetCategory: metadata.assetCategory,
         sector: metadata.sector,
         paymentMethod: "Carteira",
-        source: dividend.source ?? "dividends",
+        source: "dividends",
         ...resolveMovementStatus(dividend.paymentDate, dividend.status, { completed: "Recebido", planned: "Previsto" })
-      };
+      }, {
+        sourceType: "dividend",
+        sourceId: dividend.id ?? fallbackSourceId("dividend", [dividend.assetTicker, dividend.type, dividend.paymentDate]),
+        eventType
+      });
     });
 
-  const contributionEvents: TimelineMovement[] = contributions.map((contribution) => ({
-    id: contribution.id ?? `contribution-${contribution.date}`,
-    date: contribution.date,
-    type: "Aporte",
-    title: "Aporte",
-    description: contribution.description ?? "",
-    amount: contribution.value,
-    eventType: "aporte",
-    sector: "Investimentos",
-    paymentMethod: "Corretora",
-    source: "contributions",
-    ...resolveMovementStatus(contribution.date)
-  }));
-
-  const cashBoxEvents: TimelineMovement[] = cashBoxes.flatMap((cashBox) =>
-    (cashBox.movements ?? []).map((movement, index) => ({
-      id: movement.id ?? `cash-box-${cashBox.id ?? cashBox.name}-${movement.type}-${movement.date}-${index}`,
-      date: movement.date,
-      type: getCashBoxMovementTypeLabel(movement.type),
-      title: cashBox.name,
-      description: getCashBoxMovementDescription(movement.type, movement.description),
-      amount: movement.value,
-      eventType: getCashBoxEventType(movement.type),
-      assetCategory: "RENDA_FIXA",
-      sector: cashBox.type || "Caixinha",
-      paymentMethod: "Caixinha",
-      source: "cashboxes",
-      ...resolveMovementStatus(movement.date)
-    }))
+  const contributionEvents: TimelineMovement[] = contributions.map((contribution) =>
+    withCanonicalIdentity({
+      date: contribution.date,
+      type: "Aporte",
+      title: "Aporte",
+      description: contribution.description ?? "",
+      amount: contribution.value,
+      sector: "Investimentos",
+      paymentMethod: "Corretora",
+      source: "contributions",
+      ...resolveMovementStatus(contribution.date)
+    }, {
+      sourceType: "contribution",
+      sourceId: contribution.id ?? fallbackSourceId("contribution", [contribution.date, contribution.value]),
+      eventType: "aporte"
+    })
   );
 
-  const expenseEvents: TimelineMovement[] = (options.monthlyExpenses ?? []).map((expense) => {
+  const cashBoxEvents: TimelineMovement[] = cashBoxes.flatMap((cashBox) =>
+    (cashBox.movements ?? []).map((movement, index) => {
+      const eventType = getCashBoxEventType(movement.type);
+      const sourceId = movement.id ?? fallbackSourceId("cashbox-movement", [cashBox.id ?? cashBox.name, movement.type, movement.date, index]);
+      return withCanonicalIdentity({
+        date: movement.date,
+        type: getCashBoxMovementTypeLabel(movement.type),
+        title: cashBox.name,
+        description: getCashBoxMovementDescription(movement.type, movement.description),
+        amount: movement.value,
+        assetCategory: "RENDA_FIXA",
+        sector: cashBox.type || "Caixinha",
+        paymentMethod: "Caixinha",
+        source: "cashboxes",
+        ...resolveMovementStatus(movement.date)
+      }, {
+        sourceType: "cashbox-movement",
+        sourceId,
+        eventType,
+        occurrenceId: movement.id ? null : `${cashBox.id ?? cashBox.name}:${movement.date}:${index}`
+      });
+    })
+  );
+
+  const expenseEvents: TimelineMovement[] = (options.monthlyExpenses ?? [])
+    .filter((expense) => !expense.recurrenceCancelled)
+    .filter((expense) => !(expense.integration?.linkedEntityId && expense.allocationKind !== "expense"))
+    .map((expense) => {
     const plan = planById.get(expense.planId);
     const category = plan?.categories.find((item) => item.id === expense.categoryId);
-    return {
-      id: expense.id ?? `expense-${expense.planId}-${expense.date}-${expense.time}-${expense.description}`,
-      date: `${expense.date}T${expense.time || "00:00"}`,
-      type: expense.recurring ? "Recorrencia" : "Gasto",
+    const eventType =
+      expense.allocationKind === "investment_contribution"
+        ? "aporte"
+        : expense.allocationKind === "cash_box_contribution"
+          ? "cashbox"
+          : expense.recurring
+            ? "recorrencia"
+            : "gasto";
+    const occurrenceId = expense.recurrenceOriginalDate ?? expense.date;
+    const sourceId = expense.recurring && expense.recurrenceId
+      ? expense.recurrenceId
+      : expense.id ?? fallbackSourceId("monthly-expense", [expense.planId, expense.date, expense.time]);
+    const movementDate = expense.completedAt ?? `${expense.date}T${expense.time || "00:00"}`;
+    const movementDescription = [
+      category?.name ?? "Planejamento mensal",
+      expense.note,
+      `Vencimento ${formatDateBr(expense.date)}`,
+      expense.completedAt ? `Pago em ${formatDateTimeBr(expense.completedAt)}` : null
+    ]
+      .filter(Boolean)
+      .join(" - ");
+    return withCanonicalIdentity({
+      date: movementDate,
+      type:
+        expense.allocationKind === "investment_contribution"
+          ? "Aporte planejado"
+          : expense.allocationKind === "cash_box_contribution"
+            ? "Caixinha planejada"
+            : expense.recurring
+              ? "Recorrencia"
+              : "Gasto",
       title: expense.description,
-      description: [category?.name ?? "Planejamento mensal", expense.note].filter(Boolean).join(" - "),
+      description: movementDescription,
       amount: expense.amountInCents / 100,
-      eventType: expense.recurring ? "recorrencia" : "gasto",
       sector: category?.name,
       paymentMethod: normalizePaymentMethod(expense.paymentMethod),
       source: "monthly-planning",
+      occurrenceDate: expense.date,
+      completedAt: expense.completedAt ?? null,
       ...resolveMovementStatus(`${expense.date}T${expense.time || "00:00"}`, expense.status, { completed: "Realizado", planned: "Previsto" })
-    };
+    }, {
+      sourceType: "monthly-expense",
+      sourceId,
+      eventType,
+      occurrenceId,
+      seriesId: expense.recurrenceId ?? null
+    });
   });
 
   const goalEvents: TimelineMovement[] = (options.monthlyPlans ?? []).flatMap((plan) =>
     (plan.goals ?? []).map((goal) => {
       const completed = goal.targetInCents > 0 && goal.savedInCents >= goal.targetInCents;
-      return {
-        id: `monthly-goal-${plan.id ?? `${plan.year}-${plan.month}`}-${goal.id}`,
+      return withCanonicalIdentity({
         date: `${plan.year}-${String(plan.month).padStart(2, "0")}-01`,
         type: "Objetivo",
         title: goal.name,
         description: `Meta do planejamento mensal${goal.linkedSource ? ` - ${goal.linkedSource}` : ""}`,
         amount: goal.targetInCents / 100,
-        eventType: "objetivo",
         sector: "Planejamento mensal",
         paymentMethod: "Nao informado",
         source: "monthly-planning",
         status: completed ? "completed" : "planned",
         statusLabel: completed ? "Concluido" : "Previsto"
-      };
+      }, {
+        sourceType: "monthly-goal",
+        sourceId: `${plan.id ?? `${plan.year}-${plan.month}`}:${goal.id}`,
+        eventType: "objetivo",
+        occurrenceId: `${plan.year}-${String(plan.month).padStart(2, "0")}-01`
+      });
     })
   );
 
-  const movements = [...operationEvents, ...dividendEvents, ...contributionEvents, ...cashBoxEvents, ...expenseEvents, ...goalEvents].sort(
-    (left, right) => dateFrom(right.date).getTime() - dateFrom(left.date).getTime()
-  );
+  const rawMovements = [...operationEvents, ...dividendEvents, ...contributionEvents, ...cashBoxEvents, ...expenseEvents, ...goalEvents];
+  const movements = (options.deduplicate === false ? rawMovements : dedupeTimelineMovements(rawMovements)).sort(compareMovements);
+
+  if (process.env.HISTORY_DEBUG === "true") {
+    console.info(
+      JSON.stringify({
+        operation: "history-aggregation",
+        sources: sourceCounts(rawMovements),
+        beforeDeduplication: rawMovements.length,
+        afterDeduplication: movements.length,
+        durationMs: Date.now() - startedAt
+      })
+    );
+  }
 
   return typeof options.limit === "number" ? movements.slice(0, options.limit) : movements;
 }
 
 export async function getDashboard() {
-  const [portfolioAssets, dividends, contributions, allocations, operations, cashBoxes, quotes, cdiRates] = await Promise.all([
-    getCalculatedPortfolio(),
-    listDividends(),
+  const [portfolioInputs, contributions, allocations, cashBoxes, cdiRates] = await Promise.all([
+    loadPortfolioCalculationInputs(),
     listContributions(),
     listAllocations(),
-    listOperations(),
     listCashBoxes(),
-    listMarketQuotes(),
     listCdiRates(1)
   ]);
+  const portfolioAssets = calculatePortfolioFromInputs(portfolioInputs);
+  const { dividends, operations, quotes } = portfolioInputs;
   const allocationSummary = buildAllocationSummary(buildAllocationValues(portfolioAssets, cashBoxes), allocations);
   const recommendation = toLegacyRecommendation(allocationSummary);
   const portfolioPositions = portfolioAssets.filter((asset) => asset.hasPosition);
@@ -660,8 +876,11 @@ export async function getDashboard() {
   const currentYear = now.getFullYear().toString();
   const receivedDividendsTotal = sum(dividendAmounts.map((dividend) => dividend.amount));
   const totalProfit = unrealizedMarketProfit + cashboxesYield + receivedDividendsTotal;
-  const monthlyContributions = sumDatedAmountByPeriod(contributionAmounts, currentMonth);
-  const yearlyContributions = sumDatedAmountByPeriod(contributionAmounts, currentYear);
+  const planningLinkedOperationAmounts = operations
+    .filter(isPlanningLinkedPurchase)
+    .map((operation) => ({ date: operation.date, amount: operation.totalValue + operation.fees }));
+  const monthlyContributions = sumDatedAmountByPeriod([...contributionAmounts, ...planningLinkedOperationAmounts], currentMonth);
+  const yearlyContributions = sumDatedAmountByPeriod([...contributionAmounts, ...planningLinkedOperationAmounts], currentYear);
   const monthlyCashBoxContributions = sumDatedAmountByPeriod(cashboxContributionAmounts, currentMonth);
   const yearlyCashBoxContributions = sumDatedAmountByPeriod(cashboxContributionAmounts, currentYear);
   const monthlyCashBoxWithdrawals = sumDatedAmountByPeriod(cashboxWithdrawalAmounts, currentMonth);
@@ -725,7 +944,7 @@ export async function getDashboard() {
     portfolioHistory: buildWealthEvolution(operations, dividends, contributions, cashBoxes),
     categoryAllocation: recommendation.comparison,
     monthlyDividends: groupDatedAmounts(dividendAmounts),
-    monthlyContributions: groupDatedAmounts([...contributionAmounts, ...cashboxContributionAmounts]),
+    monthlyContributions: groupDatedAmounts([...contributionAmounts, ...planningLinkedOperationAmounts, ...cashboxContributionAmounts]),
     monthlyWithdrawals: groupDatedAmounts(cashboxWithdrawalAmounts),
     monthlyCashBoxYield: groupDatedAmounts(cashboxYieldAmounts),
     recommendation,

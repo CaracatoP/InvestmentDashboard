@@ -2,6 +2,7 @@ import { Bot, Download, FileDown, RefreshCw, Save, SlidersHorizontal } from "luc
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { fetchAiHealth, updateAllocations, updateSettingsProfile } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import { applyThemePreference, normalizeThemePreference } from "../theme/app-theme";
@@ -27,7 +28,6 @@ const fieldClass = "w-full rounded-lg border border-line bg-elevated px-3 py-2 t
 export function SettingsPage() {
   const settings = useInvestmentStore((state) => state.settings);
   const portfolio = useInvestmentStore((state) => state.portfolio);
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const setSettings = useInvestmentStore((state) => state.setSettings);
   const [allocations, setAllocations] = useState<SettingsResponse["allocations"]>([]);
   const [profileForm, setProfileForm] = useState<ProfileForm>(defaultProfileForm);
@@ -61,6 +61,8 @@ export function SettingsPage() {
   useEffect(() => {
     void loadAiHealth();
   }, []);
+
+  useWorkspaceInvalidation(["ai"], () => loadAiHealth());
 
   const allocationTotal = useMemo(() => allocations.reduce((total, item) => total + item.targetPercentage, 0), [allocations]);
   const isProfileDirty = useMemo(() => {
@@ -101,7 +103,6 @@ export function SettingsPage() {
       applyThemePreference(updatedSettings.profile.theme, { persist: true });
       setCurrencyPreference(updatedSettings.profile.currency);
       setProfileFeedback({ type: "success", message: "Perfil salvo com sucesso." });
-      await loadWorkspace();
     } catch (error) {
       setProfileFeedback({ type: "error", message: error instanceof Error ? error.message : "Nao foi possivel salvar o perfil." });
     } finally {
@@ -111,7 +112,6 @@ export function SettingsPage() {
 
   async function handleSave() {
     await updateAllocations(allocations);
-    await loadWorkspace();
   }
 
   function updateAllocation(category: string, value: number) {

@@ -24,5 +24,8 @@ const aiPendingActionSchema = new Schema(
   { versionKey: false }
 );
 
+aiPendingActionSchema.index({ sessionId: 1, status: 1, expiresAt: 1 });
+aiPendingActionSchema.index({ idempotencyKey: 1, status: 1 });
+
 export type AiPendingActionDocument = InferSchemaType<typeof aiPendingActionSchema>;
 export const AiPendingActionModel = models.AiPendingAction ?? model("AiPendingAction", aiPendingActionSchema);

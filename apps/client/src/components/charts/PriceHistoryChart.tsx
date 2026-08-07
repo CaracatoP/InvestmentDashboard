@@ -18,7 +18,7 @@ const priceChangeFormatter = new Intl.NumberFormat("pt-BR", {
   maximumFractionDigits: 2
 });
 
-interface PriceHistoryChartProps {
+export interface PriceHistoryChartProps {
   data: AssetPriceHistoryPoint[];
   range: string;
   height?: number;

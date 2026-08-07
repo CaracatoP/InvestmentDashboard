@@ -15,5 +15,7 @@ const aiChatMessageSchema = new Schema(
   { versionKey: false }
 );
 
+aiChatMessageSchema.index({ sessionId: 1, createdAt: 1 });
+
 export type AiChatMessageDocument = InferSchemaType<typeof aiChatMessageSchema>;
 export const AiChatMessageModel = models.AiChatMessage ?? model("AiChatMessage", aiChatMessageSchema);

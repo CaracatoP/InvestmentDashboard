@@ -4,8 +4,8 @@ import { Eye } from "lucide-react";
 import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { assetRecordsApi } from "../services/api";
-import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AssetCategory, AssetRecord } from "../types/management";
 
 const emptyAsset: AssetRecord = {
@@ -18,9 +18,16 @@ const emptyAsset: AssetRecord = {
   active: true
 };
 
+function assetIdentity(asset: AssetRecord) {
+  return asset.id ?? asset.ticker;
+}
+
+function sortAssets(items: AssetRecord[]) {
+  return [...items].sort((left, right) => left.ticker.localeCompare(right.ticker, "pt-BR"));
+}
+
 export function AssetsPage() {
   const navigate = useNavigate();
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("Todos");
@@ -30,12 +37,14 @@ export function AssetsPage() {
   const [deleteTarget, setDeleteTarget] = useState<AssetRecord | null>(null);
 
   async function loadAssets() {
-    setAssets(await assetRecordsApi.list());
+    setAssets(sortAssets(await assetRecordsApi.list()));
   }
 
   useEffect(() => {
     void loadAssets();
   }, []);
+
+  useWorkspaceInvalidation(["assets", "portfolio"], () => loadAssets());
 
   const categories = useMemo(() => ["Todos", ...Array.from(new Set(assets.map((asset) => asset.category)))], [assets]);
   const filteredAssets = useMemo(() => {
@@ -87,22 +96,21 @@ export function AssetsPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const payload = { ...form, ticker: form.ticker.toUpperCase() };
-    if (editing?.id || editing?.ticker) {
-      await assetRecordsApi.update(editing.id ?? editing.ticker, payload);
-    } else {
-      await assetRecordsApi.create(payload);
-    }
+    const saved = editing?.id || editing?.ticker
+      ? await assetRecordsApi.update(editing.id ?? editing.ticker, payload)
+      : await assetRecordsApi.create(payload);
+
+    setAssets((current) => sortAssets([...current.filter((asset) => assetIdentity(asset) !== assetIdentity(saved)), saved]));
     setEditing(null);
     setForm(emptyAsset);
     setIsModalOpen(false);
-    await Promise.all([loadAssets(), loadWorkspace()]);
   }
 
   async function confirmDelete() {
     if (!deleteTarget) return;
     await assetRecordsApi.remove(deleteTarget.id ?? deleteTarget.ticker);
+    setAssets((current) => current.filter((asset) => assetIdentity(asset) !== assetIdentity(deleteTarget)));
     setDeleteTarget(null);
-    await Promise.all([loadAssets(), loadWorkspace()]);
   }
 
   return (

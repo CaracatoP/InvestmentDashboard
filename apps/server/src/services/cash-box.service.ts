@@ -179,6 +179,59 @@ export async function addCashBoxMovement(cashBoxId: string, movement: CashBoxMov
   return updated;
 }
 
+export async function findCashBoxMovement(movementId: string) {
+  const cashBoxes = await listCashBoxes();
+
+  for (const cashBox of cashBoxes) {
+    const movement = (cashBox.movements ?? []).find((item) => item.id === movementId);
+    if (movement) return { cashBox, movement };
+  }
+
+  return null;
+}
+
+export async function findCashBoxMovementByPlanningExpenseId(expenseId: string) {
+  const cashBoxes = await listCashBoxes();
+
+  for (const cashBox of cashBoxes) {
+    const movement = (cashBox.movements ?? []).find((item) => item.planningLink?.expenseId === expenseId);
+    if (movement) return { cashBox, movement };
+  }
+
+  return null;
+}
+
+export async function updateCashBoxMovement(cashBoxId: string, movementId: string, input: Partial<CashBoxMovementRecord>) {
+  const cashBox = await findCashBoxById(cashBoxId);
+  if (!cashBox) throw notFound("Cash box not found");
+
+  const currentMovements = cashBox.movements ?? [];
+  const movementIndex = currentMovements.findIndex((movement) => movement.id === movementId);
+  if (movementIndex < 0) throw notFound("Cash box movement not found");
+
+  const type = toCashBoxContributionType(input.type ?? currentMovements[movementIndex].type);
+  const nextMovement = { ...currentMovements[movementIndex], ...input, type } as CashBoxMovementRecord;
+  if (nextMovement.value <= 0) throw badRequest("Movement value must be greater than zero");
+
+  const nextMovements = currentMovements.map((movement, index) => (index === movementIndex ? nextMovement : movement));
+  const updated = await updateCashBox(cashBoxId, normalizeCashBoxForPersistence({ ...cashBox, movements: nextMovements }));
+
+  if (!updated) throw notFound("Cash box not found");
+  return updated;
+}
+
+export async function removeCashBoxMovement(cashBoxId: string, movementId: string) {
+  const cashBox = await findCashBoxById(cashBoxId);
+  if (!cashBox) throw notFound("Cash box not found");
+
+  const nextMovements = (cashBox.movements ?? []).filter((movement) => movement.id !== movementId);
+  if (nextMovements.length === (cashBox.movements ?? []).length) throw notFound("Cash box movement not found");
+
+  const updated = await updateCashBox(cashBoxId, normalizeCashBoxForPersistence({ ...cashBox, movements: nextMovements }));
+  if (!updated) throw notFound("Cash box not found");
+  return updated;
+}
+
 export async function listCashBoxMovements(cashBoxId: string) {
   const cashBox = await findCashBoxById(cashBoxId);
   if (!cashBox) throw notFound("Cash box not found");

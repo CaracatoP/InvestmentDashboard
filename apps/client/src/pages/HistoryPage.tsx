@@ -4,7 +4,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Timeline } from "../components/ui/Timeline";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Movement } from "../types/investments";
-import { formatDate } from "../utils/formatters";
+import { formatDate, toDateKey } from "../utils/formatters";
 
 const fieldClass = "h-11 w-full min-w-0 rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm";
 
@@ -46,11 +46,15 @@ const sortOptions = [
 ];
 
 function normalizeText(value?: string | null) {
-  return (value ?? "").trim().toLowerCase();
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 function dateOnly(value: string) {
-  return new Date(value).toISOString().slice(0, 10);
+  return toDateKey(value);
 }
 
 function normalizeEventType(event: Movement) {
@@ -182,9 +186,13 @@ export function HistoryPage() {
     });
 
     return [...filtered].sort((left, right) => {
-      if (sort === "highest") return Math.abs(right.amount) - Math.abs(left.amount);
-      if (sort === "lowest") return Math.abs(left.amount) - Math.abs(right.amount);
+      const tieBreak = (left.canonicalId ?? left.id).localeCompare(right.canonicalId ?? right.id);
+      if (sort === "highest" || sort === "lowest") {
+        const valueComparison = sort === "highest" ? Math.abs(right.amount) - Math.abs(left.amount) : Math.abs(left.amount) - Math.abs(right.amount);
+        return valueComparison || tieBreak;
+      }
       const dateComparison = new Date(right.date).getTime() - new Date(left.date).getTime();
+      if (dateComparison === 0) return tieBreak;
       return sort === "oldest" ? -dateComparison : dateComparison;
     });
   }, [asset, endDate, eventType, history, paymentMethod, period, search, sector, sort, startDate, view]);

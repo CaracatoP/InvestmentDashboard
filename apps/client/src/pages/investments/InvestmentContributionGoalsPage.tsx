@@ -5,6 +5,7 @@ import { InvestmentsSubnav } from "../../components/investments/InvestmentsSubna
 import { PageHeader } from "../../components/ui/PageHeader";
 import { ProgressBar } from "../../components/ui/ProgressBar";
 import { StatCard } from "../../components/ui/StatCard";
+import { useWorkspaceInvalidation } from "../../hooks/useWorkspaceInvalidation";
 import { monthlyPlanningApi } from "../../services/api";
 import type { MonthlyPlanningOverview } from "../../types/management";
 import { formatCents, formatPercentage } from "../../utils/formatters";
@@ -12,10 +13,16 @@ import { formatCents, formatPercentage } from "../../utils/formatters";
 export default function InvestmentContributionGoalsPage() {
   const [overview, setOverview] = useState<MonthlyPlanningOverview | null>(null);
 
-  useEffect(() => {
+  async function loadCurrentOverview() {
     const now = new Date();
-    void monthlyPlanningApi.overview(now.getFullYear(), now.getMonth() + 1).then(setOverview).catch(() => setOverview(null));
+    setOverview(await monthlyPlanningApi.overview(now.getFullYear(), now.getMonth() + 1).catch(() => null));
+  }
+
+  useEffect(() => {
+    void loadCurrentOverview();
   }, []);
+
+  useWorkspaceInvalidation(["monthlyPlanning"], () => loadCurrentOverview());
 
   return (
     <div>

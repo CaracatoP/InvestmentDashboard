@@ -27,6 +27,9 @@ dividendSchema.index(
   { assetId: 1, assetTicker: 1, paymentDate: 1, type: 1, amountPerShare: 1, source: 1 },
   { unique: true, partialFilterExpression: { status: { $ne: "cancelled" } } }
 );
+dividendSchema.index({ status: 1, paymentDate: -1 });
+dividendSchema.index({ assetTicker: 1, paymentDate: -1 });
+dividendSchema.index({ assetId: 1, paymentDate: -1 });
 
 export type DividendDocument = InferSchemaType<typeof dividendSchema>;
 export const DividendModel = models.Dividend ?? model("Dividend", dividendSchema);

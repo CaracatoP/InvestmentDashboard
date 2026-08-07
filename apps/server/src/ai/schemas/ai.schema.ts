@@ -92,6 +92,11 @@ const aiUiActionSchema = z.object({
   pendingActionId: z.string().optional()
 });
 
+const aiAffectedEntitySchema = z.object({
+  type: z.string().min(1),
+  id: z.string().nullable().optional()
+});
+
 export const aiPendingActionFieldSchema = z.object({
   name: z.string().min(1),
   label: z.string().min(1),
@@ -137,7 +142,10 @@ export const aiChatStructuredResponseSchema = z.object({
   metadata: z.object({
     provider: z.string().optional(),
     model: z.string().optional(),
-    generatedAt: z.string().optional()
+    generatedAt: z.string().optional(),
+    affectedDomains: z.array(z.string()).optional(),
+    affectedEntities: z.array(aiAffectedEntitySchema).optional(),
+    mutationKey: z.string().optional()
   }).default({})
 });
 
@@ -160,7 +168,8 @@ export type AiToolName =
   | "registerSplit"
   | "registerReverseSplit"
   | "transferAsset"
-  | "updateAveragePrice";
+  | "updateAveragePrice"
+  | "updateSettingsProfile";
 
 export interface AiPendingActionRecord {
   id?: string;

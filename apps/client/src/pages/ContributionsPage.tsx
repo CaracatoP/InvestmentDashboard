@@ -3,8 +3,8 @@ import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, Management
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { MoneyValue } from "../components/ui/ValueDisplay";
+import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { contributionRecordsApi } from "../services/api";
-import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { ContributionRecord } from "../types/management";
 import { formatCurrency } from "../utils/formatters";
 
@@ -14,8 +14,19 @@ const emptyContribution: ContributionRecord = {
   description: ""
 };
 
+function contributionIdentity(contribution: ContributionRecord) {
+  return contribution.id ?? `${contribution.date}-${contribution.value}-${contribution.description ?? ""}`;
+}
+
+function sortContributions(items: ContributionRecord[]) {
+  return [...items].sort((left, right) => {
+    const byDate = new Date(String(right.date)).getTime() - new Date(String(left.date)).getTime();
+    if (byDate !== 0) return byDate;
+    return (right.value ?? 0) - (left.value ?? 0);
+  });
+}
+
 export function ContributionsPage() {
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
   const [contributions, setContributions] = useState<ContributionRecord[]>([]);
   const [search, setSearch] = useState("");
   const [period, setPeriod] = useState("Todos");
@@ -25,12 +36,14 @@ export function ContributionsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ContributionRecord | null>(null);
 
   async function loadContributions() {
-    setContributions(await contributionRecordsApi.list());
+    setContributions(sortContributions(await contributionRecordsApi.list()));
   }
 
   useEffect(() => {
     void loadContributions();
   }, []);
+
+  useWorkspaceInvalidation(["contributions"], () => loadContributions());
 
   const periods = useMemo(() => ["Todos", ...Array.from(new Set(contributions.map((contribution) => String(contribution.date).slice(0, 7))))], [contributions]);
   const filtered = useMemo(() => {
@@ -56,18 +69,21 @@ export function ContributionsPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (editing?.id) await contributionRecordsApi.update(editing.id, form);
-    else await contributionRecordsApi.create(form);
+    const saved = editing?.id
+      ? await contributionRecordsApi.update(editing.id, form)
+      : await contributionRecordsApi.create(form);
+
+    setContributions((current) => sortContributions([...current.filter((contribution) => contributionIdentity(contribution) !== contributionIdentity(saved)), saved]));
     setIsModalOpen(false);
     setEditing(null);
-    await Promise.all([loadContributions(), loadWorkspace()]);
+    setForm(emptyContribution);
   }
 
   async function confirmDelete() {
     if (!deleteTarget?.id) return;
     await contributionRecordsApi.remove(deleteTarget.id);
+    setContributions((current) => current.filter((contribution) => contributionIdentity(contribution) !== contributionIdentity(deleteTarget)));
     setDeleteTarget(null);
-    await Promise.all([loadContributions(), loadWorkspace()]);
   }
 
   return (

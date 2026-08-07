@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  completeMonthlyPlanningExpense,
   copyPreviousPlanning,
   createMonthlyPlanningExpense,
   deleteMonthlyPlanningExpense,
@@ -16,5 +17,6 @@ monthlyPlanningRoutes.post("/", upsertMonthlyPlanningPlan);
 monthlyPlanningRoutes.put("/:id", updateMonthlyPlanningPlan);
 monthlyPlanningRoutes.post("/copy-previous", copyPreviousPlanning);
 monthlyPlanningRoutes.post("/:planId/expenses", createMonthlyPlanningExpense);
+monthlyPlanningRoutes.patch("/expenses/:id/complete", completeMonthlyPlanningExpense);
 monthlyPlanningRoutes.put("/expenses/:id", updateMonthlyPlanningExpense);
 monthlyPlanningRoutes.delete("/expenses/:id", deleteMonthlyPlanningExpense);

@@ -46,6 +46,13 @@ export interface Movement {
   statusLabel?: string;
   paymentMethod?: string;
   source?: string;
+  sourceType?: "operation" | "dividend" | "contribution" | "cashbox-movement" | "monthly-expense" | "monthly-goal" | string;
+  sourceId?: string;
+  seriesId?: string | null;
+  occurrenceId?: string | null;
+  occurrenceDate?: string | null;
+  completedAt?: string | null;
+  canonicalId?: string;
 }
 
 export interface AllocationComparison {

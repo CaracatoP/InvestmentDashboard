@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { resolveAiActionRoute } from "../../services/ai-ui-actions";
 import type { AiChatStructuredResponse, AiStructuredMetric, AiStructuredSection } from "../../types/ai";
 import { formatCurrency, formatDate, formatPercentage } from "../../utils/formatters";
 import { ActionCard } from "./ActionCard";
@@ -108,7 +109,15 @@ function SectionRenderer({ section, onSend }: { section: AiStructuredSection; on
           {section.actions.map((action) => (
             <QuickReplyChip
               key={action.id ?? action.label}
-              onClick={() => action.route ? navigate(action.route) : onSend(action.type === "cancel" ? "cancelar" : "confirmo")}
+              onClick={() => {
+                const route = resolveAiActionRoute(action.route);
+                if (route) {
+                  navigate(route);
+                  return;
+                }
+
+                onSend(action.type === "cancel" ? "cancelar" : "confirmo");
+              }}
             >
               {action.label}
             </QuickReplyChip>

@@ -5,7 +5,6 @@ import { ChatBubble } from "../components/ai/ChatBubble";
 import { TypingIndicator } from "../components/ai/TypingIndicator";
 import { PageHeader } from "../components/ui/PageHeader";
 import { aiChatApi } from "../services/api";
-import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AiChatMessage, AiChatSession } from "../types/ai";
 
 const suggestions = [
@@ -59,7 +58,6 @@ export function AssistantPage() {
   const [error, setError] = useState("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
-  const loadWorkspace = useInvestmentStore((state) => state.loadWorkspace);
 
   async function loadSessions() {
     const records = await aiChatApi.listSessions();
@@ -131,9 +129,6 @@ export function AssistantPage() {
       setMessages((current) => [...current, result.userMessage, result.assistantMessage]);
       setInput("");
       await loadSessions();
-      if (result.assistantMessage.structuredResponse?.responseType === "success") {
-        await loadWorkspace();
-      }
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Nao foi possivel enviar a mensagem.");
     } finally {

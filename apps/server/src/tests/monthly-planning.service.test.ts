@@ -1,18 +1,49 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createAsset,
+  createCashBox,
+  findCashBoxById,
+  listOperations
+} from "../repositories/investment.repository";
+import {
+  listAllMonthlyExpenses,
+} from "../repositories/monthly-planning.repository";
+import {
   addMonthlyExpense,
   calculateBudgetDistribution,
   calculateCategoryLimit,
   calculateMonthlyPlanning,
   copyPreviousMonthlyPlan,
+  completeMonthlyExpense,
   determineExpenseStatus,
   editMonthlyExpense,
   getMonthlyPlanningOverview,
   removeMonthlyExpense,
+  removeMonthlyExpenseSeries,
   saveMonthlyPlan
 } from "../services/monthly-planning.service";
 import type { MonthlyExpenseRecord, MonthlyPlanRecord } from "../types/investment";
+
+async function saveInvestmentsPlan(input: { year: number; month: number; monthlyContributionGoalInCents?: number }) {
+  return saveMonthlyPlan({
+    year: input.year,
+    month: input.month,
+    incomeInCents: 500000,
+    monthlyContributionGoalInCents: input.monthlyContributionGoalInCents ?? 0,
+    categories: [
+      {
+        id: "investimentos",
+        name: "Investimentos",
+        icon: "trending-up",
+        color: "#a78bfa",
+        budgetType: "fixed",
+        percentage: 0,
+        fixedAmountInCents: 250000
+      }
+    ]
+  });
+}
 
 test("calculateCategoryLimit derives percentage and fixed budgets in cents", () => {
   assert.equal(calculateCategoryLimit({ budgetType: "percentage", percentage: 10, fixedAmountInCents: null }, 350000), 35000);
@@ -208,6 +239,225 @@ test("investment integrations import contributions and dividends into monthly pl
   assert.equal(overview.calendarDays.some((day) => day.events.some((event) => event.type === "dividend")), true);
 });
 
+test("completed investment expense creates and links one asset operation while updating the contribution goal", async () => {
+  const plan = await saveInvestmentsPlan({ year: 2026, month: 4, monthlyContributionGoalInCents: 200000 });
+  const asset = await createAsset({
+    name: "Planejamento Ativo Abril",
+    ticker: "PLAN4",
+    category: "FII",
+    currency: "BRL",
+    active: true
+  });
+
+  assert.ok(plan.id);
+  assert.ok(asset.id);
+
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "investimentos",
+    description: "Aporte integrado abril",
+    amountInCents: 50500,
+    date: "2026-04-05",
+    time: "09:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "single",
+    recurring: false,
+    status: "completed",
+    integration: {
+      destination: "asset",
+      assetId: asset.id,
+      operationType: "COMPRA",
+      quantity: 5,
+      price: 100,
+      fees: 5,
+      idempotencyKey: "planning-asset-apr-2026"
+    }
+  });
+
+  assert.equal(expense.allocationKind, "investment_contribution");
+  assert.equal(expense.integration?.linkedEntityType, "operation");
+  assert.ok(expense.integration?.linkedEntityId);
+
+  const operation = (await listOperations()).find((item) => item.id === expense.integration?.linkedEntityId);
+  assert.ok(operation);
+  assert.equal(operation?.origin, "monthly-planning");
+  assert.equal(operation?.planningLink?.expenseId, expense.id);
+  assert.equal(operation?.planningLink?.integrationId, expense.integration?.integrationId);
+  assert.equal(operation?.assetId, asset.id);
+  assert.equal(operation?.assetTicker, "PLAN4");
+  assert.equal(operation?.totalValue, 500);
+  assert.equal(operation?.fees, 5);
+
+  const overview = await getMonthlyPlanningOverview(2026, 4);
+  assert.equal(overview.summary.completedInvestmentsInCents, 50500);
+  assert.equal(overview.summary.completedConsumptionInCents, 0);
+  assert.equal(overview.summary.contributedThisMonthInCents, 50500);
+  assert.equal(overview.summary.contributionGoalRemainingInCents, 149500);
+  assert.equal(overview.investmentSummary.assetContributionsThisMonthInCents, 50500);
+  assert.equal(overview.investmentSummary.cashBoxContributionsThisMonthInCents, 0);
+});
+
+test("completed investment expense creates and links one cashbox movement without inflating the asset contribution goal", async () => {
+  const plan = await saveInvestmentsPlan({ year: 2026, month: 5, monthlyContributionGoalInCents: 150000 });
+  const cashBox = await createCashBox({
+    name: "Caixinha Planejamento Maio",
+    type: "reserva",
+    initialBalance: 0,
+    currentBalance: 0,
+    cdiPercentage: 100,
+    createdAt: "2026-05-01T08:00:00-03:00",
+    active: true,
+    movements: []
+  });
+
+  assert.ok(plan.id);
+  assert.ok(cashBox.id);
+
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "investimentos",
+    description: "Transferencia integrada maio",
+    amountInCents: 70000,
+    date: "2026-05-04",
+    time: "10:30",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "single",
+    recurring: false,
+    status: "completed",
+    integration: {
+      destination: "cashbox",
+      cashBoxId: cashBox.id,
+      idempotencyKey: "planning-cashbox-may-2026"
+    }
+  });
+
+  assert.equal(expense.allocationKind, "cash_box_contribution");
+  assert.equal(expense.integration?.linkedEntityType, "cashBoxMovement");
+  assert.ok(expense.integration?.linkedEntityId);
+
+  const updatedCashBox = await findCashBoxById(String(cashBox.id));
+  const movement = updatedCashBox?.movements?.find((item) => item.id === expense.integration?.linkedEntityId);
+
+  assert.ok(movement);
+  assert.equal(movement?.type, "contribution");
+  assert.equal(movement?.origin, "monthly-planning");
+  assert.equal(movement?.planningLink?.expenseId, expense.id);
+  assert.equal(movement?.planningLink?.integrationId, expense.integration?.integrationId);
+  assert.equal(updatedCashBox?.currentBalance, 700);
+
+  const overview = await getMonthlyPlanningOverview(2026, 5);
+  assert.equal(overview.summary.completedInvestmentsInCents, 70000);
+  assert.equal(overview.summary.contributedThisMonthInCents, 0);
+  assert.equal(overview.summary.contributionGoalRemainingInCents, 150000);
+  assert.equal(overview.investmentSummary.assetContributionsThisMonthInCents, 0);
+  assert.equal(overview.investmentSummary.cashBoxContributionsThisMonthInCents, 70000);
+});
+
+test("integrated investment creation is idempotent for duplicate requests and creates a single linked operation", async () => {
+  const plan = await saveInvestmentsPlan({ year: 2026, month: 6 });
+  const asset = await createAsset({
+    name: "Planejamento Ativo Junho",
+    ticker: "PLAN6",
+    category: "FII",
+    currency: "BRL",
+    active: true
+  });
+  const idempotencyKey = "planning-asset-jun-2026";
+
+  assert.ok(plan.id);
+  assert.ok(asset.id);
+
+  const payload = {
+    categoryId: "investimentos",
+    description: "Aporte idempotente junho",
+    amountInCents: 25000,
+    date: "2026-06-03",
+    time: "11:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "single" as const,
+    recurring: false,
+    status: "completed" as const,
+    integration: {
+      destination: "asset" as const,
+      assetId: asset.id,
+      operationType: "COMPRA" as const,
+      quantity: 10,
+      price: 25,
+      fees: 0,
+      idempotencyKey
+    }
+  };
+
+  const [first, second] = await Promise.all([addMonthlyExpense(plan.id, payload), addMonthlyExpense(plan.id, payload)]);
+  const matchingExpenses = (await listAllMonthlyExpenses()).filter((item) => item.integration?.idempotencyKey === idempotencyKey);
+  const matchingOperations = (await listOperations()).filter((item) => item.planningLink?.idempotencyKey === idempotencyKey);
+
+  assert.equal(first.id, second.id);
+  assert.equal(first.integration?.linkedEntityId, second.integration?.linkedEntityId);
+  assert.equal(matchingExpenses.length, 1);
+  assert.equal(matchingOperations.length, 1);
+});
+
+test("recurring investment expenses stay planned without a linked entity until completion", async () => {
+  const plan = await saveInvestmentsPlan({ year: 2026, month: 3, monthlyContributionGoalInCents: 100000 });
+  const asset = await createAsset({
+    name: "Planejamento Recorrente Marco",
+    ticker: "PLAN3",
+    category: "ETF",
+    currency: "BRL",
+    active: true
+  });
+
+  assert.ok(plan.id);
+  assert.ok(asset.id);
+
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "investimentos",
+    description: "Investimento recorrente marco",
+    amountInCents: 24000,
+    date: "2026-03-10",
+    time: "08:15",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 10,
+    recurrenceStartDate: "2026-03-10",
+    recurrenceEndDate: null,
+    status: "planned",
+    integration: {
+      destination: "asset",
+      assetId: asset.id,
+      operationType: "COMPRA",
+      quantity: 10,
+      price: 24,
+      fees: 0,
+      idempotencyKey: "planning-recurring-mar-2026"
+    }
+  });
+
+  assert.equal(expense.status, "planned");
+  assert.equal(expense.allocationKind, "investment_contribution");
+  assert.equal(expense.integration?.linkedEntityId ?? null, null);
+  assert.equal((await listOperations()).some((item) => item.planningLink?.expenseId === expense.id), false);
+  assert.ok(expense.id);
+
+  const completion = await completeMonthlyExpense(expense.id, { completedAt: "2026-03-12T10:20:00-03:00" });
+  const linkedOperation = (await listOperations()).find((item) => item.planningLink?.expenseId === expense.id);
+
+  assert.equal(completion.expense.status, "completed");
+  assert.ok(completion.expense.integration?.linkedEntityId);
+  assert.equal(linkedOperation?.assetTicker, "PLAN3");
+  assert.equal(linkedOperation?.origin, "monthly-planning");
+  assert.equal(completion.overview.summary.completedInvestmentsInCents, 24000);
+  assert.equal(completion.overview.summary.plannedInvestmentsInCents, 0);
+
+  await removeMonthlyExpenseSeries(expense.id);
+});
+
 test("future expenses are forced to planned while past expenses keep manual status", () => {
   const now = new Date(2026, 6, 27, 20, 30);
 
@@ -241,11 +491,14 @@ test("copyPreviousMonthlyPlan copies configuration without copying expenses", as
   });
 
   const copied = await copyPreviousMonthlyPlan(2099, 7);
+  const copiedAgain = await copyPreviousMonthlyPlan(2099, 7);
   const overview = await getMonthlyPlanningOverview(2099, 7);
 
   assert.equal(copied.incomeInCents, 500000);
   assert.equal(copied.categories.length, 1);
   assert.equal(copied.categories[0].percentage, 30);
+  assert.equal(copiedAgain.id, copied.id);
+  assert.equal(copiedAgain.categories.length, 1);
   assert.equal(overview.expenses.length, 0);
 });
 
@@ -287,6 +540,44 @@ test("recurring expenses generate planned future entries without duplicates", as
   assert.equal(generated[0].date, "2098-08-10");
   assert.equal(generated[0].status, "planned");
   assert.equal(Boolean(generated[0].recurrenceSourceId), true);
+});
+
+test("recurring expenses stay idempotent with simultaneous overview loads", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2098,
+    month: 10,
+    incomeInCents: 400000,
+    categories: [
+      { id: "moradia", name: "Moradia", icon: "home", color: "#38bdf8", budgetType: "fixed", percentage: 0, fixedAmountInCents: 120000 }
+    ]
+  });
+
+  assert.ok(plan.id);
+  const template = await addMonthlyExpense(plan.id, {
+    categoryId: "moradia",
+    description: "Condominio",
+    amountInCents: 55000,
+    date: "2098-10-08",
+    time: "08:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 8,
+    recurrenceStartDate: "2098-10-08",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  const [first, second] = await Promise.all([getMonthlyPlanningOverview(2098, 11), getMonthlyPlanningOverview(2098, 11)]);
+  const firstGenerated = first.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId);
+  const secondGenerated = second.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId);
+
+  assert.equal(firstGenerated.length, 1);
+  assert.equal(secondGenerated.length, 1);
+  assert.equal(secondGenerated[0].date, "2098-11-08");
 });
 
 test("deleting one recurring occurrence cancels it without recreating the duplicate", async () => {
@@ -363,4 +654,245 @@ test("editing the original recurring occurrence as single keeps future series te
 
   assert.equal(future.expenses.some((expense) => expense.description === "Streaming promocional"), false);
   assert.equal(future.expenses.some((expense) => expense.description === "Streaming" && expense.amountInCents === 5000), true);
+});
+
+test("completing one recurring occurrence moves the amount from planned to completed exactly once", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2095,
+    month: 8,
+    incomeInCents: 300000,
+    categories: [
+      { id: "assinaturas-complete", name: "Assinaturas complete", icon: "repeat", color: "#14b8a6", budgetType: "fixed", percentage: 0, fixedAmountInCents: 15000 }
+    ]
+  });
+
+  assert.ok(plan.id);
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "assinaturas-complete",
+    description: "Spotify teste",
+    amountInCents: 10000,
+    date: "2095-08-10",
+    time: "09:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 10,
+    recurrenceStartDate: "2095-08-10",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  assert.ok(expense.id);
+  const before = await getMonthlyPlanningOverview(2095, 8);
+  const result = await completeMonthlyExpense(expense.id, { completedAt: "2095-08-06T14:10:00-03:00" });
+
+  assert.equal(result.expense.status, "completed");
+  assert.equal(result.expense.date, "2095-08-10");
+  assert.equal(result.expense.completedAt, "2095-08-06T14:10:00-03:00");
+  assert.equal(result.overview.summary.completedInCents - before.summary.completedInCents, 10000);
+  assert.equal(before.summary.plannedExpensesInCents - result.overview.summary.plannedExpensesInCents, 10000);
+  assert.equal(result.summary.completedExpensesInCents, result.overview.summary.completedInCents);
+  assert.equal(result.summary.plannedExpensesInCents, result.overview.summary.plannedExpensesInCents);
+});
+
+test("completing the same occurrence twice stays idempotent, including concurrent retries", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2095,
+    month: 9,
+    incomeInCents: 250000,
+    categories: [
+      { id: "internet-idempotent", name: "Internet idempotent", icon: "repeat", color: "#38bdf8", budgetType: "fixed", percentage: 0, fixedAmountInCents: 12000 }
+    ]
+  });
+
+  assert.ok(plan.id);
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "internet-idempotent",
+    description: "Internet fibra",
+    amountInCents: 8500,
+    date: "2095-09-12",
+    time: "08:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 12,
+    recurrenceStartDate: "2095-09-12",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  assert.ok(expense.id);
+  const before = await getMonthlyPlanningOverview(2095, 9);
+  const [first, second] = await Promise.all([completeMonthlyExpense(expense.id), completeMonthlyExpense(expense.id)]);
+  const third = await completeMonthlyExpense(expense.id);
+
+  assert.equal(first.overview.summary.completedInCents - before.summary.completedInCents, 8500);
+  assert.equal(before.summary.plannedExpensesInCents - first.overview.summary.plannedExpensesInCents, 8500);
+  assert.equal(second.overview.summary.completedInCents, first.overview.summary.completedInCents);
+  assert.equal(second.overview.summary.plannedExpensesInCents, first.overview.summary.plannedExpensesInCents);
+  assert.equal(first.expense.completedAt, second.expense.completedAt);
+  assert.equal(first.alreadyCompleted, false);
+  assert.equal(second.alreadyCompleted, false);
+  assert.equal(third.alreadyCompleted, true);
+  assert.equal(third.expense.completedAt, first.expense.completedAt);
+});
+
+test("completing August keeps other recurring months unchanged", async () => {
+  const buildPlan = (month: number) => saveMonthlyPlan({
+    year: 2094,
+    month,
+    incomeInCents: 320000,
+    categories: [
+      { id: "serie-celular", name: "Serie celular", icon: "repeat", color: "#22c55e", budgetType: "fixed", percentage: 0, fixedAmountInCents: 20000 }
+    ]
+  });
+
+  const julyPlan = await buildPlan(7);
+  await buildPlan(8);
+  await buildPlan(9);
+
+  assert.ok(julyPlan.id);
+  const template = await addMonthlyExpense(julyPlan.id, {
+    categoryId: "serie-celular",
+    description: "Plano celular",
+    amountInCents: 15000,
+    date: "2026-07-15",
+    time: "09:00",
+    note: "",
+    paymentMethod: "Credito",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 15,
+    recurrenceStartDate: "2026-07-15",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  const august = await getMonthlyPlanningOverview(2094, 8);
+  const septemberBefore = await getMonthlyPlanningOverview(2094, 9);
+  const augustOccurrence = august.expenses.find((expense) => expense.recurrenceId === template.recurrenceId);
+  const july = await getMonthlyPlanningOverview(2094, 7);
+
+  assert.ok(augustOccurrence?.id);
+  await completeMonthlyExpense(augustOccurrence.id, { completedAt: "2094-08-06T09:30:00-03:00" });
+
+  const julyAfter = await getMonthlyPlanningOverview(2094, 7);
+  const augustAfter = await getMonthlyPlanningOverview(2094, 8);
+  const septemberAfter = await getMonthlyPlanningOverview(2094, 9);
+
+  assert.equal(julyAfter.expenses.find((expense) => expense.recurrenceId === template.recurrenceId)?.status, july.expenses.find((expense) => expense.recurrenceId === template.recurrenceId)?.status);
+  assert.equal(augustAfter.expenses.find((expense) => expense.recurrenceId === template.recurrenceId)?.status, "completed");
+  assert.equal(septemberAfter.expenses.find((expense) => expense.recurrenceId === template.recurrenceId)?.status, septemberBefore.expenses.find((expense) => expense.recurrenceId === template.recurrenceId)?.status);
+});
+
+test("completing an overdue recurring occurrence preserves the due date and the chosen payment timestamp", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2026,
+    month: 8,
+    incomeInCents: 210000,
+    categories: [
+      { id: "vencida-luz", name: "Vencida luz", icon: "home", color: "#f59e0b", budgetType: "fixed", percentage: 0, fixedAmountInCents: 30000 }
+    ]
+  });
+
+  assert.ok(plan.id);
+  const expense = await addMonthlyExpense(plan.id, {
+    categoryId: "vencida-luz",
+    description: "Conta de luz vencida",
+    amountInCents: 22000,
+    date: "2026-08-04",
+    time: "10:00",
+    note: "",
+    paymentMethod: "Conta bancaria",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 4,
+    recurrenceStartDate: "2026-08-04",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  assert.ok(expense.id);
+  const before = await getMonthlyPlanningOverview(2026, 8);
+  const result = await completeMonthlyExpense(expense.id, { completedAt: "2026-08-06T18:30:00-03:00" });
+
+  assert.equal(result.expense.status, "completed");
+  assert.equal(result.expense.date, "2026-08-04");
+  assert.equal(result.expense.completedAt, "2026-08-06T18:30:00-03:00");
+  assert.equal(result.overview.summary.completedInCents - before.summary.completedInCents, 22000);
+  assert.equal(before.summary.plannedExpensesInCents - result.overview.summary.plannedExpensesInCents, 22000);
+});
+
+test("completing the current recurring template keeps future months alive without creating a hidden clone", async () => {
+  const buildPlan = (month: number) => saveMonthlyPlan({
+    year: 2093,
+    month,
+    incomeInCents: 260000,
+    categories: [
+      { id: "academia-template", name: "Academia template", icon: "repeat", color: "#22c55e", budgetType: "fixed", percentage: 0, fixedAmountInCents: 20000 }
+    ]
+  });
+
+  const augustPlan = await buildPlan(8);
+  await buildPlan(9);
+
+  assert.ok(augustPlan.id);
+  const expense = await addMonthlyExpense(augustPlan.id, {
+    categoryId: "academia-template",
+    description: "GymPass template",
+    amountInCents: 8240,
+    date: "2093-08-02",
+    time: "00:00",
+    note: "",
+    paymentMethod: "Credito",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 29,
+    recurrenceStartDate: "2093-08-02",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  assert.ok(expense.id);
+  assert.ok(expense.recurrenceId);
+  const beforeSourceRecords = (await listAllMonthlyExpenses()).filter(
+    (item) => item.recurrenceId === expense.recurrenceId && (item.recurrenceOriginalDate ?? item.date) === "2093-08-02"
+  );
+  const result = await completeMonthlyExpense(expense.id, { completedAt: "2093-08-06T19:05:00-03:00" });
+  const afterCompletionSourceRecords = (await listAllMonthlyExpenses()).filter(
+    (item) => item.recurrenceId === expense.recurrenceId && (item.recurrenceOriginalDate ?? item.date) === "2093-08-02"
+  );
+  const hiddenClones = afterCompletionSourceRecords.filter((item) => item.recurrenceCancelled);
+
+  assert.equal(beforeSourceRecords.length, 1);
+  assert.equal(afterCompletionSourceRecords.length, 1);
+  assert.equal(hiddenClones.length, 0);
+  assert.equal(result.expense.status, "completed");
+  assert.equal(result.expense.date, "2093-08-02");
+  assert.equal(result.expense.completedAt, "2093-08-06T19:05:00-03:00");
+  assert.equal(result.expense.recurrenceSourceId ?? null, null);
+  assert.equal(
+    result.overview.expenses.filter((item) => item.recurrenceId === expense.recurrenceId && item.date === "2093-08-02").length,
+    1
+  );
+
+  const september = await getMonthlyPlanningOverview(2093, 9);
+  const septemberOccurrence = september.expenses.find((item) => item.recurrenceId === expense.recurrenceId && item.date === "2093-09-29");
+  const afterSeptemberRecords = (await listAllMonthlyExpenses()).filter((item) => item.recurrenceId === expense.recurrenceId);
+
+  assert.ok(septemberOccurrence?.id);
+  assert.equal(septemberOccurrence?.status, "planned");
+  assert.equal(afterSeptemberRecords.length, 3);
 });
