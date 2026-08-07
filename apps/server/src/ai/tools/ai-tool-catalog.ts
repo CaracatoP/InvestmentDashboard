@@ -61,6 +61,25 @@ export const aiToolCatalog: Record<AiToolName, AiToolCatalogEntry> = {
     successMessage: "Gasto registrado com sucesso.",
     clientMutationKey: "monthlyPlanning.createExpense"
   },
+  createIncomeEntry: {
+    name: "createIncomeEntry",
+    description: "Registra uma entrada extra no planejamento mensal.",
+    domain: "planning",
+    operation: "createIncomeEntry",
+    risk: "low",
+    required: ["planId", "description", "amountInCents", "category", "date", "time"],
+    optional: ["status", "note", "incomeType", "recurring", "recurrenceFrequency", "recurrenceInterval", "recurrenceDayOfMonth", "recurrenceStartDate", "recurrenceEndDate"],
+    service: "addMonthlyIncomeEntry",
+    affectedDomains: ["monthlyPlanning", "history"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    confirmationRequired: true,
+    strongConfirmation: false,
+    idempotencyStrategy: "pending-action-idempotency-key",
+    enabled: true,
+    uiActionId: "view-planning-expenses",
+    successMessage: "Entrada registrada com sucesso.",
+    clientMutationKey: "monthlyPlanning.createIncomeEntry"
+  },
   updateMonthlyIncome: {
     name: "updateMonthlyIncome",
     description: "Atualiza a renda do planejamento mensal.",
@@ -117,6 +136,25 @@ export const aiToolCatalog: Record<AiToolName, AiToolCatalogEntry> = {
     uiActionId: "view-planning-expenses",
     successMessage: "Gasto marcado como pago.",
     clientMutationKey: "monthlyPlanning.completeExpense"
+  },
+  markIncomeEntryAsReceived: {
+    name: "markIncomeEntryAsReceived",
+    description: "Marca uma entrada prevista como recebida.",
+    domain: "planning",
+    operation: "markIncomeEntryAsReceived",
+    risk: "low",
+    required: ["incomeEntryId"],
+    optional: ["receivedAt"],
+    service: "completeMonthlyIncomeEntry",
+    affectedDomains: ["monthlyPlanning", "history"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    confirmationRequired: true,
+    strongConfirmation: false,
+    idempotencyStrategy: "income-entry-receive-lock-and-idempotency-key",
+    enabled: true,
+    uiActionId: "view-planning-expenses",
+    successMessage: "Entrada marcada como recebida.",
+    clientMutationKey: "monthlyPlanning.receiveIncomeEntry"
   },
   createInvestmentPurchase: {
     name: "createInvestmentPurchase",

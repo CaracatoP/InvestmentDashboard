@@ -18,7 +18,7 @@ function getMovementFlow(item: Movement) {
   const eventType = normalizeText(item.eventType || item.type);
   const source = normalizeText(item.source);
 
-  if (["aporte", "dividendo", "rendimento", "venda"].includes(eventType)) return "inflow";
+  if (["aporte", "dividendo", "rendimento", "venda", "income", "entrada"].includes(eventType)) return "inflow";
   if (eventType === "resgate") return source === "cashboxes" ? "outflow" : "inflow";
   if (["compra", "gasto", "recorrencia"].includes(eventType)) return "outflow";
   return "neutral";

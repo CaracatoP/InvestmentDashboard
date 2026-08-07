@@ -8,14 +8,17 @@ import {
 } from "../repositories/investment.repository";
 import {
   listAllMonthlyExpenses,
+  listAllMonthlyIncomeEntries,
 } from "../repositories/monthly-planning.repository";
 import {
   addMonthlyExpense,
+  addMonthlyIncomeEntry,
   calculateBudgetDistribution,
   calculateCategoryLimit,
   calculateMonthlyPlanning,
   copyPreviousMonthlyPlan,
   completeMonthlyExpense,
+  completeMonthlyIncomeEntry,
   determineExpenseStatus,
   editMonthlyExpense,
   getMonthlyPlanningOverview,
@@ -23,7 +26,7 @@ import {
   removeMonthlyExpenseSeries,
   saveMonthlyPlan
 } from "../services/monthly-planning.service";
-import type { MonthlyExpenseRecord, MonthlyPlanRecord } from "../types/investment";
+import type { MonthlyExpenseRecord, MonthlyIncomeEntryRecord, MonthlyPlanRecord } from "../types/investment";
 
 async function saveInvestmentsPlan(input: { year: number; month: number; monthlyContributionGoalInCents?: number }) {
   return saveMonthlyPlan({
@@ -190,6 +193,57 @@ test("monthly summary separates completed and planned expenses", () => {
   assert.equal(overview.categories[0].remainingInCents, 17000);
   assert.equal(overview.categories[0].remainingAfterPlannedInCents, 10000);
   assert.equal(Math.round(overview.categories[0].usedPercent * 100) / 100, 51.43);
+});
+
+test("monthly summary adds income entries without changing category base limits", () => {
+  const plan: MonthlyPlanRecord = {
+    id: "plan-income-entry-summary",
+    month: 8,
+    year: 2026,
+    incomeInCents: 350000,
+    categories: [
+      { id: "food", name: "Alimentacao", icon: "utensils", color: "#22c55e", budgetType: "percentage", percentage: 20, fixedAmountInCents: null }
+    ]
+  };
+  const incomeEntries: MonthlyIncomeEntryRecord[] = [
+    {
+      id: "income-entry-1",
+      planId: "plan-income-entry-summary",
+      description: "Freelance",
+      amountInCents: 80000,
+      category: "Freelance",
+      date: "2026-08-05",
+      time: "10:00",
+      status: "received",
+      incomeType: "single",
+      recurring: false,
+      receivedAt: "2026-08-05T10:00:00-03:00"
+    },
+    {
+      id: "income-entry-2",
+      planId: "plan-income-entry-summary",
+      description: "Comissao",
+      amountInCents: 25000,
+      category: "Comissao",
+      date: "2026-08-28",
+      time: "10:00",
+      status: "planned",
+      incomeType: "single",
+      recurring: false
+    }
+  ];
+
+  const overview = calculateMonthlyPlanning(plan, [], { year: 2026, month: 8, incomeEntries });
+
+  assert.equal(overview.summary.baseIncomeInCents, 350000);
+  assert.equal(overview.summary.completedExtraIncomeInCents, 80000);
+  assert.equal(overview.summary.plannedExtraIncomeInCents, 25000);
+  assert.equal(overview.summary.currentTotalIncomeInCents, 430000);
+  assert.equal(overview.summary.projectedTotalIncomeInCents, 455000);
+  assert.equal(overview.summary.remainingIncomeAfterPlannedInCents, 455000);
+  assert.equal(overview.categories[0].limitInCents, 70000);
+  assert.equal(overview.incomeCategoryStats.length, 2);
+  assert.equal(overview.calendarDays.some((day) => day.events.some((event) => event.type === "income")), true);
 });
 
 test("fixed budget categories also expose percent of monthly income", () => {
@@ -397,6 +451,45 @@ test("integrated investment creation is idempotent for duplicate requests and cr
   assert.equal(first.integration?.linkedEntityId, second.integration?.linkedEntityId);
   assert.equal(matchingExpenses.length, 1);
   assert.equal(matchingOperations.length, 1);
+});
+
+test("income entry creation is idempotent and receipt updates the monthly overview", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2097,
+    month: 8,
+    incomeInCents: 300000,
+    categories: [
+      { id: "moradia", name: "Moradia", icon: "home", color: "#38bdf8", budgetType: "percentage", percentage: 30, fixedAmountInCents: null }
+    ]
+  });
+  assert.ok(plan.id);
+
+  const payload = {
+    description: "Freelance idempotente",
+    amountInCents: 90000,
+    category: "Freelance",
+    date: "2097-08-10",
+    time: "09:00",
+    status: "planned" as const,
+    incomeType: "single" as const,
+    recurring: false,
+    note: "",
+    idempotencyKey: "income-entry-idempotent-2097"
+  };
+
+  const [first, second] = await Promise.all([addMonthlyIncomeEntry(plan.id, payload), addMonthlyIncomeEntry(plan.id, payload)]);
+  const matchingEntries = (await listAllMonthlyIncomeEntries()).filter((entry) => entry.idempotencyKey === payload.idempotencyKey);
+
+  assert.equal(first.id, second.id);
+  assert.equal(matchingEntries.length, 1);
+
+  assert.ok(first.id);
+  const completion = await completeMonthlyIncomeEntry(first.id, { receivedAt: "2097-08-10T12:00:00-03:00" });
+
+  assert.equal(completion.incomeEntry.status, "received");
+  assert.equal(completion.summary.receivedExtraIncomeInCents, 90000);
+  assert.equal(completion.summary.currentBalanceInCents, 390000);
+  assert.equal(completion.overview.categories[0].limitInCents, 90000);
 });
 
 test("recurring investment expenses stay planned without a linked entity until completion", async () => {

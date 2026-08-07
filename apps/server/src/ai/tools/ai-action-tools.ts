@@ -1,13 +1,15 @@
 import { randomUUID } from "crypto";
 import {
   addMonthlyExpense,
+  addMonthlyIncomeEntry,
   completeMonthlyExpense,
+  completeMonthlyIncomeEntry,
   getLocalTimestampWithOffset,
   getOrCreateMonthlyPlan,
   saveMonthlyPlan
 } from "../../services/monthly-planning.service";
 import { registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
-import { listAllMonthlyExpenses } from "../../repositories/monthly-planning.repository";
+import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../../repositories/monthly-planning.repository";
 import {
   createDividend,
   createOperation,
@@ -24,7 +26,7 @@ import {
 import { contributionSchema } from "../../validators/contribution.validator";
 import { dividendSchema } from "../../validators/dividend.validator";
 import { goalSchema } from "../../validators/goal.validator";
-import { monthlyExpenseSchema, monthlyPlanSchema } from "../../validators/monthly-planning.validator";
+import { monthlyExpenseSchema, monthlyIncomeEntrySchema, monthlyPlanSchema } from "../../validators/monthly-planning.validator";
 import { operationSchema } from "../../validators/operation.validator";
 import { settingsUpdateSchema } from "../../validators/settings.validator";
 import type {
@@ -58,7 +60,7 @@ type AiAffectedEntity = NonNullable<AiChatStructuredResponse["metadata"]["affect
 const pendingActionTtlMs = 15 * 60 * 1000;
 const confirmationPattern = /^(confirmo|pode registrar|pode confirmar|confirmar|sim,?\s*pode|sim pode|ok pode|pode executar)(\s|$)/i;
 const cancelPattern = /^(cancelar|cancele|nao confirmar|não confirmar|desistir)(\s|$)/i;
-const writeIntentPattern = /(registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|alterar|altere|atualize|minha renda|gastei|gasto|despesa|aporte|meta|compre|comprei|compra|vendi|venda|dividendo|jcp|juros sobre capital|bonifica|desdobramento|split|grupamento|reverse split|transferir|transferencia|preco medio|preço medio|quantidade)/i;
+const writeIntentPattern = /(registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|alterar|altere|atualize|minha renda|gastei|gasto|despesa|aporte|meta|compre|comprei|compra|vendi|venda|dividendo|jcp|juros sobre capital|bonifica|desdobramento|split|grupamento|reverse split|transferir|transferencia|preco medio|quantidade|recebi|receber|entrada|freelance|comissao|bonus|cashback|reembolso|presente|hora extra)/i;
 
 const settingsWriteIntentPattern = /(tema|moeda|configur|perfil|nome)/i;
 
@@ -74,6 +76,7 @@ const missingFieldDefinitions: Record<string, MissingField> = {
   date: { name: "date", label: "Data", type: "date", required: true },
   time: { name: "time", label: "Horario", type: "text", required: true },
   description: { name: "description", label: "Descricao", type: "text", required: true },
+  category: { name: "category", label: "Categoria", type: "select", required: true },
   categoryId: { name: "categoryId", label: "Setor", type: "select", required: true },
   investmentDestination: {
     name: "investmentDestination",
@@ -93,6 +96,7 @@ const missingFieldDefinitions: Record<string, MissingField> = {
   type: { name: "type", label: "Tipo da meta", type: "select", required: true },
   targetInCents: { name: "targetInCents", label: "Valor alvo", type: "currency", required: true },
   expenseId: { name: "expenseId", label: "Gasto", type: "select", required: true },
+  incomeEntryId: { name: "incomeEntryId", label: "Entrada", type: "select", required: true },
   assetTicker: { name: "assetTicker", label: "Ativo", type: "select", required: true },
   quantity: { name: "quantity", label: "Quantidade", type: "number", required: true },
   price: { name: "price", label: "Preco unitario", type: "currency", required: true },
@@ -497,6 +501,18 @@ function buildMonthlyExpenseToolPayload(fields: ExtractedFields, idempotencyKey?
   };
 }
 
+function buildMonthlyIncomeEntryToolPayload(fields: ExtractedFields, idempotencyKey?: string) {
+  return {
+    ...fields,
+    category: typeof fields.category === "string" ? fields.category : "Outros",
+    incomeType: fields.recurring ? "recurring" : fields.incomeType ?? "single",
+    recurring: Boolean(fields.recurring),
+    sourceType: "manual",
+    sourceId: null,
+    idempotencyKey
+  };
+}
+
 function getMissingRequiredFields(toolName: AiToolName, fields: ExtractedFields, customMissing: MissingField[] = []) {
   const customNames = new Set(customMissing.map((field) => field.name));
   const requiredMissing = toolRequirements[toolName].required
@@ -518,6 +534,11 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
 
   if (toolName === "createMonthlyExpense") {
     monthlyExpenseSchema.parse(buildMonthlyExpenseToolPayload(fields));
+    return;
+  }
+
+  if (toolName === "createIncomeEntry") {
+    monthlyIncomeEntrySchema.parse(buildMonthlyIncomeEntryToolPayload(fields));
     return;
   }
 
@@ -544,6 +565,10 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
 
   if (toolName === "markExpenseAsCompleted" && !isPresent(fields.expenseId)) {
     throw new Error("Expense id is required");
+  }
+
+  if (toolName === "markIncomeEntryAsReceived" && !isPresent(fields.incomeEntryId)) {
+    throw new Error("Income entry id is required");
   }
 
   if (
@@ -599,7 +624,7 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
 }
 
 function meaningfulPreviewFields(fields: Array<{ label: string; value: string }>) {
-  return fields.filter((field) => sanitizeExtractedDescription(field.value) || /valor|data|horario|per[ií]odo|renda|setor|tipo|ativo|quantidade|pre[cç]o|taxas|total|evento/i.test(field.label));
+  return fields.filter((field) => sanitizeExtractedDescription(field.value) || /valor|data|horario|periodo|renda|entrada|categoria|setor|tipo|ativo|quantidade|preco|taxas|total|evento/i.test(normalizeText(field.label)));
 }
 
 function buildPreview(action: AiPendingActionRecord, fields: Array<{ label: string; value: string }>, title: string): NonNullable<AiChatStructuredResponse["pendingAction"]> {
@@ -725,6 +750,10 @@ function inferAffectedEntities(action: AiPendingActionRecord, result: unknown): 
     ]);
   }
 
+  if (action.toolName === "createIncomeEntry") {
+    return normalizeAffectedEntities([{ type: "monthlyIncomeEntry", id: inferEntityId(result) }]);
+  }
+
   if (action.toolName === "updateMonthlyIncome") {
     return normalizeAffectedEntities([{ type: "monthlyPlan", id: inferEntityId(result) }]);
   }
@@ -739,6 +768,16 @@ function inferAffectedEntities(action: AiPendingActionRecord, result: unknown): 
       {
         type: "monthlyExpense",
         id: inferEntityId(completionResult?.expense) ?? (typeof fields.expenseId === "string" ? fields.expenseId : undefined)
+      }
+    ]);
+  }
+
+  if (action.toolName === "markIncomeEntryAsReceived") {
+    const completionResult = result as { incomeEntry?: unknown } | null;
+    return normalizeAffectedEntities([
+      {
+        type: "monthlyIncomeEntry",
+        id: inferEntityId(completionResult?.incomeEntry) ?? (typeof fields.incomeEntryId === "string" ? fields.incomeEntryId : undefined)
       }
     ]);
   }
@@ -782,7 +821,7 @@ function resolveSuccessRouteLabel(route?: string) {
   if (route === "/investimentos/aportes") return "Ver aportes";
   if (route === "/operacoes") return "Ver operacoes";
   if (route === "/dividendos") return "Ver dividendos";
-  if (route === "/planejamento-mensal/gastos") return "Ver gastos";
+  if (route === "/planejamento-mensal/gastos") return "Ver movimentacoes";
   if (route === "/metas") return "Ver metas";
   if (route === "/planejamento-mensal/orcamento") return "Ver orcamento";
   if (route === "/configuracoes") return "Ver configuracoes";
@@ -944,6 +983,84 @@ async function prepareExpense(sessionId: string, message: string) {
   return actionResponse(action, messageText);
 }
 
+function inferIncomeCategory(message: string) {
+  const normalized = normalizeText(message);
+  if (/(freelance|freela|servico|servico)/.test(normalized)) return "Freelance";
+  if (/(comissao|comissao)/.test(normalized)) return "Comissao";
+  if (/(bonus|bonus|premio|premio)/.test(normalized)) return "Bonus";
+  if (/(hora extra|extra)/.test(normalized)) return "Hora extra";
+  if (/(venda|vendido|vendi)/.test(normalized)) return "Venda";
+  if (/(reembolso|ressarcimento)/.test(normalized)) return "Reembolso";
+  if (/(cashback)/.test(normalized)) return "Cashback";
+  if (/(presente|pix)/.test(normalized)) return "Presente";
+  if (/(rendimento|rendimentos)/.test(normalized)) return "Rendimentos";
+  if (/(salario extra|bico)/.test(normalized)) return "Salario extra";
+  return "Outros";
+}
+
+function extractIncomeEntryDescription(message: string, category: string) {
+  const explicit =
+    message.match(/\b(?:de|por|referente a)\s+(.+?)(?:,|\s+hoje\b|\s+ontem\b|\s+amanh[aã]\b|$)/i)?.[1] ??
+    message.match(/\b(?:entrada|recebi|receber)\s+(?:de\s+)?(.+?)(?:,|\s+hoje\b|\s+ontem\b|\s+amanh[aã]\b|$)/i)?.[1];
+  const description = sanitizeExtractedDescription(explicit);
+  if (description && !/^\d/.test(description)) return description;
+  return category === "Outros" ? "Entrada extra" : category;
+}
+
+function isPlannedIncomeMessage(message: string, date: string) {
+  const normalized = normalizeText(message);
+  const today = nowFields().date;
+  return date > today || /(vou receber|receberei|irei receber|previsto|prevista|agendad|amanha|proximo|proxima)/.test(normalized);
+}
+
+async function prepareIncomeEntry(sessionId: string, message: string) {
+  const amountInCents = parseMoneyToCents(message);
+  if (!amountInCents) return null;
+
+  const period = parseTargetMonth(message);
+  const plan = await getOrCreateMonthlyPlan(period.year, period.month);
+  const now = nowFields();
+  const category = inferIncomeCategory(message);
+  const description = extractIncomeEntryDescription(message, category);
+  const date = parseDateInput(message) ?? now.date;
+  const time = now.time;
+  const status = isPlannedIncomeMessage(message, date) ? "planned" : "received";
+  const recurring = /recorrent|todo mes|mensal/i.test(message);
+  const fields = {
+    planId: plan.id,
+    description,
+    amountInCents,
+    category,
+    date,
+    time,
+    status,
+    incomeType: recurring ? "recurring" : "single",
+    recurring,
+    recurrenceFrequency: recurring ? "monthly" : null,
+    recurrenceInterval: recurring ? 1 : null,
+    recurrenceDayOfMonth: recurring ? Number(date.slice(8, 10)) : null,
+    recurrenceStartDate: recurring ? date : null,
+    recurrenceEndDate: null,
+    receivedAt: status === "received" ? getLocalTimestampWithOffset() : null
+  };
+
+  const action = await createPendingAction({
+    sessionId,
+    actionType: "create_income_entry",
+    toolName: "createIncomeEntry",
+    extractedFields: fields,
+    title: "Registrar entrada",
+    previewFields: [
+      { label: "Descricao", value: description },
+      { label: "Valor", value: formatCurrencyFromCents(amountInCents) },
+      { label: "Categoria", value: category },
+      { label: "Data", value: `${formatDateBr(date)} ${time}` },
+      { label: "Status", value: status === "received" ? "Recebida" : "Prevista" }
+    ]
+  });
+  return actionResponse(action, "Confirme o registro desta entrada.");
+}
+
 async function prepareIncome(sessionId: string, message: string) {
   const incomeInCents = parseMoneyToCents(message);
   if (!incomeInCents) return null;
@@ -1068,6 +1185,71 @@ async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
     ]
   });
   return actionResponse(action, "Confirme para marcar este gasto como pago.");
+}
+
+async function prepareMarkIncomeEntryReceived(sessionId: string, message: string) {
+  const normalized = normalizeText(message);
+  if (!/(marque|recebi|recebida|recebido|entrada)/.test(normalized)) return null;
+  const entries = (await listAllMonthlyIncomeEntries()).filter((entry) => entry.status === "planned" && !entry.recurrenceCancelled);
+  const amountInCents = parseMoneyToCents(message);
+  const category = inferIncomeCategory(message);
+  const candidateText = normalized.replace(/marque|como|recebi|recebida|recebido|entrada|aquela|aquele|prevista|previsto/g, "").trim();
+  const candidates = entries.filter((entry) => {
+    const entryDescription = normalizeText(entry.description);
+    const entryCategory = normalizeText(entry.category);
+    const matchesAmount = !amountInCents || entry.amountInCents === amountInCents;
+    const matchesCategory = category === "Outros" || entryCategory.includes(normalizeText(category));
+    const matchesText = !candidateText || entryDescription.includes(candidateText) || candidateText.includes(entryDescription) || entryCategory.includes(candidateText);
+    return matchesAmount && (matchesCategory || matchesText);
+  });
+
+  if (candidates.length !== 1) {
+    return createStructuredResponse({
+      responseType: "form",
+      title: "Escolha a entrada",
+      message: candidates.length === 0 ? "Nao encontrei uma entrada prevista correspondente." : "Encontrei mais de uma entrada prevista. Qual deseja marcar como recebida?",
+      pendingAction: null,
+      sections: [
+        {
+          type: "table",
+          table: {
+            columns: [
+              { key: "description", label: "Descricao", format: "text" },
+              { key: "category", label: "Categoria", format: "text" },
+              { key: "amountInCents", label: "Valor", format: "currency" },
+              { key: "date", label: "Data", format: "date" }
+            ],
+            rows: candidates.slice(0, 8).map((entry) => ({
+              id: entry.id ?? "",
+              description: entry.description,
+              category: entry.category,
+              amountInCents: entry.amountInCents,
+              date: entry.date
+            }))
+          }
+        }
+      ]
+    });
+  }
+
+  const entry = candidates[0];
+  const receivedAt = parseCompletedAtInput(message);
+  const action = await createPendingAction({
+    sessionId,
+    actionType: "mark_income_entry_received",
+    toolName: "markIncomeEntryAsReceived",
+    extractedFields: { incomeEntryId: entry.id, description: entry.description, category: entry.category, amountInCents: entry.amountInCents, receivedAt },
+    riskLevel: "low",
+    title: "Marcar entrada como recebida",
+    previewFields: [
+      { label: "Descricao", value: entry.description },
+      { label: "Valor", value: formatCurrencyFromCents(entry.amountInCents) },
+      { label: "Categoria", value: entry.category },
+      { label: "Data prevista", value: formatDateBr(entry.date) },
+      ...(receivedAt ? [{ label: "Recebimento", value: formatDateBr(String(receivedAt).slice(0, 10)) }] : [])
+    ]
+  });
+  return actionResponse(action, "Confirme para marcar esta entrada como recebida.");
 }
 
 function expenseCollectingMessage(missingFields: MissingField[]) {
@@ -1409,6 +1591,10 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     const parsed = monthlyExpenseSchema.parse(buildMonthlyExpenseToolPayload(fields, action.idempotencyKey));
     result = await addMonthlyExpense(String(parsed.planId), parsed);
     route = "/planejamento-mensal/gastos";
+  } else if (action.toolName === "createIncomeEntry") {
+    const parsed = monthlyIncomeEntrySchema.parse(buildMonthlyIncomeEntryToolPayload(fields, action.idempotencyKey));
+    result = await addMonthlyIncomeEntry(String(parsed.planId), parsed);
+    route = "/planejamento-mensal/gastos";
   } else if (action.toolName === "updateMonthlyIncome") {
     const plan = await getOrCreateMonthlyPlan(Number(fields.year), Number(fields.month));
     const parsed = monthlyPlanSchema.parse({ ...plan, incomeInCents: Number(fields.incomeInCents) });
@@ -1426,6 +1612,9 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
     route = "/metas";
   } else if (action.toolName === "markExpenseAsCompleted") {
     result = await completeMonthlyExpense(String(fields.expenseId), { completedAt: fields.completedAt ? String(fields.completedAt) : undefined });
+    route = "/planejamento-mensal/gastos";
+  } else if (action.toolName === "markIncomeEntryAsReceived") {
+    result = await completeMonthlyIncomeEntry(String(fields.incomeEntryId), { receivedAt: fields.receivedAt ? String(fields.receivedAt) : undefined });
     route = "/planejamento-mensal/gastos";
   } else if (
     action.toolName === "createInvestmentPurchase" ||
@@ -1644,7 +1833,9 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   else if (/(jcp|juros sobre capital)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "jcp");
   else if (/(dividendo|rendimento).*(registr|cadast|receb|lanc|lanç|adic)|(?:registr|cadast|receb|lanc|lanç|adic).*(dividendo|rendimento)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "dividendo");
   else if (/(aporte|contribuicao|contribuicao|depositei|deposito)/.test(normalized)) response = await prepareContribution(input.sessionId, input.message);
-  else if (/(renda|salario|salario)/.test(normalized)) response = await prepareIncome(input.sessionId, input.message);
+  else if (/(recebi aquela|recebi aquele|marque.*entrada|entrada.*recebid|recebida)/.test(normalized)) response = await prepareMarkIncomeEntryReceived(input.sessionId, input.message);
+  else if (/(recebi|vou receber|receber|entrada|freelance|comissao|bonus|cashback|reembolso|presente|hora extra|renda extra)/.test(normalized)) response = await prepareIncomeEntry(input.sessionId, input.message);
+  else if (/(renda mensal|minha renda|salario|salario base)/.test(normalized)) response = await prepareIncome(input.sessionId, input.message);
   else if (/(tema|moeda|configur|perfil|nome)/.test(normalized)) response = await prepareSettingsUpdate(input.sessionId, input.message);
   else if (/(meta|objetivo)/.test(normalized)) response = await prepareGoal(input.sessionId, input.message);
   else if (/(marque|paga|pago|paguei)/.test(normalized)) response = await prepareMarkExpenseCompleted(input.sessionId, input.message);

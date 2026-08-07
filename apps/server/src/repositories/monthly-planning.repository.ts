@@ -1,12 +1,15 @@
 import { randomUUID } from "crypto";
 import { isDatabaseConnected } from "../config/database";
 import { MonthlyExpenseModel } from "../models/monthly-expense.model";
+import { MonthlyIncomeEntryModel } from "../models/monthly-income-entry.model";
 import { MonthlyPlanModel } from "../models/monthly-plan.model";
-import type { MonthlyExpenseRecord, MonthlyPlanRecord } from "../types/investment";
+import type { MonthlyExpenseRecord, MonthlyIncomeEntryRecord, MonthlyPlanRecord } from "../types/investment";
 
 let localMonthlyPlans: MonthlyPlanRecord[] = [];
 let localMonthlyExpenses: MonthlyExpenseRecord[] = [];
+let localMonthlyIncomeEntries: MonthlyIncomeEntryRecord[] = [];
 const monthlyExpenseCreationLocks = new Map<string, Promise<{ expense: MonthlyExpenseRecord; created: boolean }>>();
+const monthlyIncomeEntryCreationLocks = new Map<string, Promise<{ incomeEntry: MonthlyIncomeEntryRecord; created: boolean }>>();
 
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
@@ -17,6 +20,12 @@ function withId(record: unknown) {
 }
 
 function sortExpenses(left: MonthlyExpenseRecord, right: MonthlyExpenseRecord) {
+  const leftKey = `${left.date}T${left.time}`;
+  const rightKey = `${right.date}T${right.time}`;
+  return rightKey.localeCompare(leftKey);
+}
+
+function sortIncomeEntries(left: MonthlyIncomeEntryRecord, right: MonthlyIncomeEntryRecord) {
   const leftKey = `${left.date}T${left.time}`;
   const rightKey = `${right.date}T${right.time}`;
   return rightKey.localeCompare(leftKey);
@@ -94,6 +103,66 @@ export async function listAllMonthlyExpenses(): Promise<MonthlyExpenseRecord[]> 
   }
 
   return [...localMonthlyExpenses].sort(sortExpenses);
+}
+
+export async function listMonthlyIncomeEntries(planId: string): Promise<MonthlyIncomeEntryRecord[]> {
+  if (isDatabaseConnected()) {
+    const entries = await MonthlyIncomeEntryModel.find({ planId }).sort({ date: -1, time: -1 }).lean();
+    return entries.map((entry) => withId(entry)) as unknown as MonthlyIncomeEntryRecord[];
+  }
+
+  return localMonthlyIncomeEntries.filter((entry) => entry.planId === planId).sort(sortIncomeEntries);
+}
+
+export async function listAllMonthlyIncomeEntries(): Promise<MonthlyIncomeEntryRecord[]> {
+  if (isDatabaseConnected()) {
+    const entries = await MonthlyIncomeEntryModel.find().sort({ date: -1, time: -1 }).lean();
+    return entries.map((entry) => withId(entry)) as unknown as MonthlyIncomeEntryRecord[];
+  }
+
+  return [...localMonthlyIncomeEntries].sort(sortIncomeEntries);
+}
+
+export async function findMonthlyIncomeEntryById(id: string): Promise<MonthlyIncomeEntryRecord | null> {
+  if (isDatabaseConnected()) {
+    const entry = await MonthlyIncomeEntryModel.findById(id).lean();
+    return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
+  }
+
+  return localMonthlyIncomeEntries.find((entry) => entry.id === id) ?? null;
+}
+
+export async function findMonthlyIncomeEntryByIdempotencyKey(idempotencyKey: string): Promise<MonthlyIncomeEntryRecord | null> {
+  if (isDatabaseConnected()) {
+    const entry = await MonthlyIncomeEntryModel.findOne({ idempotencyKey }).lean();
+    return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
+  }
+
+  return localMonthlyIncomeEntries.find((entry) => entry.idempotencyKey === idempotencyKey) ?? null;
+}
+
+export async function findMonthlyIncomeEntryByRecurrenceOccurrence(
+  planId: string,
+  recurrenceId: string,
+  occurrenceDate: string
+): Promise<MonthlyIncomeEntryRecord | null> {
+  if (isDatabaseConnected()) {
+    const entry = await MonthlyIncomeEntryModel.findOne({
+      planId,
+      recurrenceId,
+      recurrenceOriginalDate: occurrenceDate
+    }).lean();
+    return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
+  }
+
+  return (
+    localMonthlyIncomeEntries.find(
+      (entry) =>
+        entry.planId === planId &&
+        entry.recurrenceId === recurrenceId &&
+        (entry.recurrenceOriginalDate ?? entry.date) === occurrenceDate
+    ) ?? null
+  );
 }
 
 export async function findMonthlyExpenseById(id: string): Promise<MonthlyExpenseRecord | null> {
@@ -183,6 +252,51 @@ export async function createMonthlyExpenseIfMissing(input: Omit<MonthlyExpenseRe
   return creation;
 }
 
+export async function createMonthlyIncomeEntry(input: Omit<MonthlyIncomeEntryRecord, "id">): Promise<MonthlyIncomeEntryRecord> {
+  if (isDatabaseConnected()) {
+    const entry = await MonthlyIncomeEntryModel.create(input).then((record) => record.toObject());
+    return withId(entry) as unknown as MonthlyIncomeEntryRecord;
+  }
+
+  const entry = { ...input, id: randomUUID() };
+  localMonthlyIncomeEntries = [entry, ...localMonthlyIncomeEntries];
+  return entry;
+}
+
+export async function createMonthlyIncomeEntryIfMissing(input: Omit<MonthlyIncomeEntryRecord, "id">): Promise<{ incomeEntry: MonthlyIncomeEntryRecord; created: boolean }> {
+  const occurrenceDate = input.recurrenceOriginalDate ?? input.date;
+  const shouldDeduplicate = Boolean(input.recurrenceSourceId && input.recurrenceId && occurrenceDate);
+  const lockKey = shouldDeduplicate ? `${input.planId}:${input.recurrenceId}:${occurrenceDate}` : "";
+  const existingLock = lockKey ? monthlyIncomeEntryCreationLocks.get(lockKey) : undefined;
+  if (existingLock) return existingLock;
+
+  const createIfMissing = async () => {
+    if (shouldDeduplicate) {
+      const existing = await findMonthlyIncomeEntryByRecurrenceOccurrence(input.planId, String(input.recurrenceId), occurrenceDate);
+      if (existing) return { incomeEntry: existing, created: false };
+    }
+
+    try {
+      return { incomeEntry: await createMonthlyIncomeEntry(input), created: true };
+    } catch (error) {
+      if (!shouldDeduplicate) throw error;
+
+      const duplicateKeyCode = (error as { code?: number }).code;
+      if (duplicateKeyCode !== 11000) throw error;
+
+      const existing = await findMonthlyIncomeEntryByRecurrenceOccurrence(input.planId, String(input.recurrenceId), occurrenceDate);
+      if (existing) return { incomeEntry: existing, created: false };
+      throw error;
+    }
+  };
+
+  if (!lockKey) return createIfMissing();
+
+  const creation = createIfMissing().finally(() => monthlyIncomeEntryCreationLocks.delete(lockKey));
+  monthlyIncomeEntryCreationLocks.set(lockKey, creation);
+  return creation;
+}
+
 export async function updateMonthlyExpense(id: string, input: Partial<Omit<MonthlyExpenseRecord, "id">>): Promise<MonthlyExpenseRecord | null> {
   if (isDatabaseConnected()) {
     const expense = await MonthlyExpenseModel.findByIdAndUpdate(id, input, { new: true }).lean();
@@ -193,6 +307,33 @@ export async function updateMonthlyExpense(id: string, input: Partial<Omit<Month
   if (index < 0) return null;
   localMonthlyExpenses[index] = { ...localMonthlyExpenses[index], ...input };
   return localMonthlyExpenses[index];
+}
+
+export async function updateMonthlyIncomeEntry(id: string, input: Partial<Omit<MonthlyIncomeEntryRecord, "id">>): Promise<MonthlyIncomeEntryRecord | null> {
+  if (isDatabaseConnected()) {
+    const entry = await MonthlyIncomeEntryModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
+  }
+
+  const index = localMonthlyIncomeEntries.findIndex((entry) => entry.id === id);
+  if (index < 0) return null;
+  localMonthlyIncomeEntries[index] = { ...localMonthlyIncomeEntries[index], ...input };
+  return localMonthlyIncomeEntries[index];
+}
+
+export async function updateMonthlyIncomeEntriesByRecurrenceId(recurrenceId: string, input: Partial<Omit<MonthlyIncomeEntryRecord, "id">>): Promise<number> {
+  if (isDatabaseConnected()) {
+    const result = await MonthlyIncomeEntryModel.updateMany({ recurrenceId }, input);
+    return result.modifiedCount;
+  }
+
+  let updated = 0;
+  localMonthlyIncomeEntries = localMonthlyIncomeEntries.map((entry) => {
+    if (entry.recurrenceId !== recurrenceId) return entry;
+    updated += 1;
+    return { ...entry, ...input };
+  });
+  return updated;
 }
 
 export async function updateMonthlyExpensesByRecurrenceId(recurrenceId: string, input: Partial<Omit<MonthlyExpenseRecord, "id">>): Promise<number> {
@@ -230,4 +371,26 @@ export async function deleteMonthlyExpensesByRecurrenceId(recurrenceId: string):
   const before = localMonthlyExpenses.length;
   localMonthlyExpenses = localMonthlyExpenses.filter((expense) => expense.recurrenceId !== recurrenceId);
   return before - localMonthlyExpenses.length;
+}
+
+export async function deleteMonthlyIncomeEntry(id: string): Promise<boolean> {
+  if (isDatabaseConnected()) {
+    const result = await MonthlyIncomeEntryModel.findByIdAndDelete(id);
+    return Boolean(result);
+  }
+
+  const before = localMonthlyIncomeEntries.length;
+  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => entry.id !== id);
+  return localMonthlyIncomeEntries.length < before;
+}
+
+export async function deleteMonthlyIncomeEntriesByRecurrenceId(recurrenceId: string): Promise<number> {
+  if (isDatabaseConnected()) {
+    const result = await MonthlyIncomeEntryModel.deleteMany({ recurrenceId });
+    return result.deletedCount;
+  }
+
+  const before = localMonthlyIncomeEntries.length;
+  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => entry.recurrenceId !== recurrenceId);
+  return before - localMonthlyIncomeEntries.length;
 }

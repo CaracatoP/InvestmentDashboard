@@ -2,14 +2,20 @@ import { asyncHandler } from "../utils/async-handler";
 import { created, noContent, ok } from "../utils/api-response";
 import {
   addMonthlyExpense,
+  addMonthlyIncomeEntry,
   completeMonthlyExpense,
+  completeMonthlyIncomeEntry,
   copyPreviousMonthlyPlan,
   editMonthlyExpense,
   editMonthlyExpenseSeries,
+  editMonthlyIncomeEntry,
+  editMonthlyIncomeEntrySeries,
   getMonthlyPlanningOverview,
   patchMonthlyPlan,
   removeMonthlyExpense,
   removeMonthlyExpenseSeries,
+  removeMonthlyIncomeEntry,
+  removeMonthlyIncomeEntrySeries,
   saveMonthlyPlan
 } from "../services/monthly-planning.service";
 import {
@@ -18,12 +24,15 @@ import {
   monthlyExpenseMutationQuerySchema,
   monthlyExpenseSchema,
   monthlyExpenseUpdateSchema,
+  monthlyIncomeEntryCompletionSchema,
+  monthlyIncomeEntrySchema,
+  monthlyIncomeEntryUpdateSchema,
   monthlyPlanningCopySchema,
   monthlyPlanningQuerySchema,
   monthlyPlanSchema,
   monthlyPlanUpdateSchema
 } from "../validators/monthly-planning.validator";
-import type { MonthlyExpenseRecord } from "../types/investment";
+import type { MonthlyExpenseRecord, MonthlyIncomeEntryRecord } from "../types/investment";
 
 function setMonthlyExpenseAffectedDomainsHeader(response: { setHeader: (name: string, value: string) => void }, expenses?: MonthlyExpenseRecord | MonthlyExpenseRecord[] | null) {
   const expenseList = Array.isArray(expenses) ? expenses : expenses ? [expenses] : [];
@@ -43,6 +52,15 @@ function setMonthlyExpenseAffectedDomainsHeader(response: { setHeader: (name: st
     }
   }
 
+  response.setHeader("x-affected-domains", [...domains].join(","));
+}
+
+function setMonthlyIncomeEntryAffectedDomainsHeader(response: { setHeader: (name: string, value: string) => void }, entries?: MonthlyIncomeEntryRecord | MonthlyIncomeEntryRecord[] | null) {
+  const entryList = Array.isArray(entries) ? entries : entries ? [entries] : [];
+  const domains = new Set(["monthlyPlanning", "history"]);
+  if (entryList.some((entry) => entry.status === "received" || entry.status === "planned")) {
+    domains.add("dashboard");
+  }
   response.setHeader("x-affected-domains", [...domains].join(","));
 }
 
@@ -73,12 +91,27 @@ export const createMonthlyPlanningExpense = asyncHandler(async (request, respons
   created(response, expense);
 });
 
+export const createMonthlyPlanningIncomeEntry = asyncHandler(async (request, response) => {
+  const input = monthlyIncomeEntrySchema.parse(request.body);
+  const incomeEntry = await addMonthlyIncomeEntry(String(request.params.planId), input);
+  setMonthlyIncomeEntryAffectedDomainsHeader(response, incomeEntry);
+  created(response, incomeEntry);
+});
+
 export const updateMonthlyPlanningExpense = asyncHandler(async (request, response) => {
   const input = monthlyExpenseUpdateSchema.parse(request.body);
   const query = monthlyExpenseMutationQuerySchema.parse(request.query);
   const expense = query.scope === "series" ? await editMonthlyExpenseSeries(String(request.params.id), input) : await editMonthlyExpense(String(request.params.id), input);
   setMonthlyExpenseAffectedDomainsHeader(response, expense);
   ok(response, expense);
+});
+
+export const updateMonthlyPlanningIncomeEntry = asyncHandler(async (request, response) => {
+  const input = monthlyIncomeEntryUpdateSchema.parse(request.body);
+  const query = monthlyExpenseMutationQuerySchema.parse(request.query);
+  const incomeEntry = query.scope === "series" ? await editMonthlyIncomeEntrySeries(String(request.params.id), input) : await editMonthlyIncomeEntry(String(request.params.id), input);
+  setMonthlyIncomeEntryAffectedDomainsHeader(response, incomeEntry);
+  ok(response, incomeEntry);
 });
 
 export const completeMonthlyPlanningExpense = asyncHandler(async (request, response) => {
@@ -89,9 +122,24 @@ export const completeMonthlyPlanningExpense = asyncHandler(async (request, respo
   ok(response, result);
 });
 
+export const receiveMonthlyPlanningIncomeEntry = asyncHandler(async (request, response) => {
+  const input = monthlyIncomeEntryCompletionSchema.parse(request.body);
+  const query = monthlyExpenseCompletionQuerySchema.parse(request.query);
+  const result = await completeMonthlyIncomeEntry(String(request.params.id), input, query.comparisonRange);
+  setMonthlyIncomeEntryAffectedDomainsHeader(response, result.incomeEntry);
+  ok(response, result);
+});
+
 export const deleteMonthlyPlanningExpense = asyncHandler(async (request, response) => {
   const query = monthlyExpenseMutationQuerySchema.parse(request.query);
   const removed = query.scope === "series" ? await removeMonthlyExpenseSeries(String(request.params.id)) : await removeMonthlyExpense(String(request.params.id));
   setMonthlyExpenseAffectedDomainsHeader(response, removed);
+  noContent(response);
+});
+
+export const deleteMonthlyPlanningIncomeEntry = asyncHandler(async (request, response) => {
+  const query = monthlyExpenseMutationQuerySchema.parse(request.query);
+  const removed = query.scope === "series" ? await removeMonthlyIncomeEntrySeries(String(request.params.id)) : await removeMonthlyIncomeEntry(String(request.params.id));
+  setMonthlyIncomeEntryAffectedDomainsHeader(response, removed);
   noContent(response);
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildMovements } from "../services/portfolio.service";
-import type { CashBoxRecord, ContributionRecord, MonthlyExpenseRecord, MonthlyPlanRecord, OperationRecord } from "../types/investment";
+import type { CashBoxRecord, ContributionRecord, MonthlyExpenseRecord, MonthlyIncomeEntryRecord, MonthlyPlanRecord, OperationRecord } from "../types/investment";
 
 const plan: MonthlyPlanRecord = {
   id: "plan-history",
@@ -39,6 +39,23 @@ function expense(input: Partial<MonthlyExpenseRecord>): MonthlyExpenseRecord {
   };
 }
 
+function incomeEntry(input: Partial<MonthlyIncomeEntryRecord>): MonthlyIncomeEntryRecord {
+  return {
+    id: "income-entry-1",
+    planId: "plan-history",
+    description: "Freelance",
+    amountInCents: 80000,
+    category: "Freelance",
+    date: "2026-08-03",
+    time: "11:00",
+    status: "received",
+    incomeType: "single",
+    recurring: false,
+    receivedAt: "2026-08-03T11:00:00-03:00",
+    ...input
+  };
+}
+
 test("history hides cancelled monthly expense occurrences", () => {
   const movements = buildMovements([], [], [], [], {
     monthlyPlans: [plan],
@@ -51,6 +68,23 @@ test("history hides cancelled monthly expense occurrences", () => {
   assert.equal(movements.length, 1);
   assert.equal(movements[0].sourceType, "monthly-expense");
   assert.equal(movements[0].sourceId, "visible-expense");
+});
+
+test("history includes monthly income entries as income events", () => {
+  const movements = buildMovements([], [], [], [], {
+    monthlyPlans: [plan],
+    monthlyIncomeEntries: [
+      incomeEntry({ id: "income-visible" }),
+      incomeEntry({ id: "income-cancelled", status: "cancelled" })
+    ]
+  });
+
+  assert.equal(movements.length, 1);
+  assert.equal(movements[0].sourceType, "monthly-income-entry");
+  assert.equal(movements[0].eventType, "income");
+  assert.equal(movements[0].type, "Entrada");
+  assert.equal(movements[0].amount, 800);
+  assert.equal(movements[0].statusLabel, "Recebido");
 });
 
 test("history keeps legitimate events with same id, amount and date from different sources", () => {

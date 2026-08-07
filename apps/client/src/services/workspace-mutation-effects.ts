@@ -26,9 +26,13 @@ export type WorkspaceMutationEffectKey =
   | "monthlyPlanning.updatePlan"
   | "monthlyPlanning.copyPrevious"
   | "monthlyPlanning.createExpense"
+  | "monthlyPlanning.createIncomeEntry"
   | "monthlyPlanning.completeExpense"
+  | "monthlyPlanning.receiveIncomeEntry"
   | "monthlyPlanning.updateExpense"
+  | "monthlyPlanning.updateIncomeEntry"
   | "monthlyPlanning.removeExpense"
+  | "monthlyPlanning.removeIncomeEntry"
   | "settings.profile.update"
   | "settings.allocations.update"
   | "market.refresh"
@@ -245,9 +249,25 @@ export const workspaceMutationEffects: Record<WorkspaceMutationEffectKey, Worksp
     relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
     optimistic: true
   },
+  "monthlyPlanning.createIncomeEntry": {
+    operation: "createMonthlyIncomeEntry",
+    update: ["planning.incomeEntries"],
+    invalidate: ["monthlyPlanning", "history"],
+    queries: ["planning:overview", "planning:calendar", "history:timeline"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    optimistic: true
+  },
   "monthlyPlanning.completeExpense": {
     operation: "completeMonthlyExpense",
     update: ["planning.expenses"],
+    invalidate: ["monthlyPlanning", "history"],
+    queries: ["planning:overview", "planning:calendar", "history:timeline"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    optimistic: true
+  },
+  "monthlyPlanning.receiveIncomeEntry": {
+    operation: "receiveMonthlyIncomeEntry",
+    update: ["planning.incomeEntries"],
     invalidate: ["monthlyPlanning", "history"],
     queries: ["planning:overview", "planning:calendar", "history:timeline"],
     relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
@@ -261,9 +281,25 @@ export const workspaceMutationEffects: Record<WorkspaceMutationEffectKey, Worksp
     relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
     optimistic: true
   },
+  "monthlyPlanning.updateIncomeEntry": {
+    operation: "updateMonthlyIncomeEntry",
+    update: ["planning.incomeEntries"],
+    invalidate: ["monthlyPlanning", "history"],
+    queries: ["planning:overview", "planning:calendar", "history:timeline"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    optimistic: true
+  },
   "monthlyPlanning.removeExpense": {
     operation: "removeMonthlyExpense",
     update: ["planning.expenses"],
+    invalidate: ["monthlyPlanning", "history"],
+    queries: ["planning:overview", "planning:calendar", "history:timeline"],
+    relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],
+    optimistic: true
+  },
+  "monthlyPlanning.removeIncomeEntry": {
+    operation: "removeMonthlyIncomeEntry",
+    update: ["planning.incomeEntries"],
     invalidate: ["monthlyPlanning", "history"],
     queries: ["planning:overview", "planning:calendar", "history:timeline"],
     relatedRoutes: ["/planejamento-mensal/gastos", "/planejamento-mensal/calendario", "/historico"],

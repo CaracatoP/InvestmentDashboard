@@ -48,6 +48,8 @@ import type {
   GoalRecord,
   MonthlyExpenseCompletionResult,
   MonthlyExpenseRecord,
+  MonthlyIncomeEntryCompletionResult,
+  MonthlyIncomeEntryRecord,
   MonthlyPlanningOverview,
   MonthlyPlanRecord,
   OperationRecord
@@ -582,13 +584,23 @@ export const monthlyPlanningApi = {
   copyPrevious: async (year: number, month: number) => mutate(() => api.post<ApiEnvelope<MonthlyPlanRecord>>("/monthly-planning/copy-previous", { year, month }), "monthlyPlanning.copyPrevious"),
   createExpense: async (planId: string, input: Omit<MonthlyExpenseRecord, "id" | "planId">) =>
     mutate(() => api.post<ApiEnvelope<MonthlyExpenseRecord>>(`/monthly-planning/${planId}/expenses`, input), "monthlyPlanning.createExpense"),
+  createIncomeEntry: async (planId: string, input: Omit<MonthlyIncomeEntryRecord, "id" | "planId">) =>
+    mutate(() => api.post<ApiEnvelope<MonthlyIncomeEntryRecord>>(`/monthly-planning/${planId}/income-entries`, input), "monthlyPlanning.createIncomeEntry"),
   completeExpense: async (id: string, input: { completedAt?: string }, comparisonRange = 1) =>
     mutate(
       () => api.patch<ApiEnvelope<MonthlyExpenseCompletionResult>>(`/monthly-planning/expenses/${id}/complete`, input, { params: { comparisonRange } }),
       "monthlyPlanning.completeExpense"
     ),
+  receiveIncomeEntry: async (id: string, input: { receivedAt?: string }, comparisonRange = 1) =>
+    mutate(
+      () => api.patch<ApiEnvelope<MonthlyIncomeEntryCompletionResult>>(`/monthly-planning/income-entries/${id}/receive`, input, { params: { comparisonRange } }),
+      "monthlyPlanning.receiveIncomeEntry"
+    ),
   updateExpense: async (id: string, input: Partial<MonthlyExpenseRecord>, scope: "single" | "series" = "single") =>
     mutate(() => api.put<ApiEnvelope<MonthlyExpenseRecord>>(`/monthly-planning/expenses/${id}`, input, { params: { scope } }), "monthlyPlanning.updateExpense"),
-  removeExpense: async (id: string, scope: "single" | "series" = "single") => mutate(() => api.delete(`/monthly-planning/expenses/${id}`, { params: { scope } }), "monthlyPlanning.removeExpense")
+  updateIncomeEntry: async (id: string, input: Partial<MonthlyIncomeEntryRecord>, scope: "single" | "series" = "single") =>
+    mutate(() => api.put<ApiEnvelope<MonthlyIncomeEntryRecord>>(`/monthly-planning/income-entries/${id}`, input, { params: { scope } }), "monthlyPlanning.updateIncomeEntry"),
+  removeExpense: async (id: string, scope: "single" | "series" = "single") => mutate(() => api.delete(`/monthly-planning/expenses/${id}`, { params: { scope } }), "monthlyPlanning.removeExpense"),
+  removeIncomeEntry: async (id: string, scope: "single" | "series" = "single") => mutate(() => api.delete(`/monthly-planning/income-entries/${id}`, { params: { scope } }), "monthlyPlanning.removeIncomeEntry")
 };
 

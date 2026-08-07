@@ -15,7 +15,7 @@ import {
   replaceAllocations,
   updateSettingsRecord
 } from "../repositories/investment.repository";
-import { listAllMonthlyExpenses, listMonthlyPlans } from "../repositories/monthly-planning.repository";
+import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries, listMonthlyPlans } from "../repositories/monthly-planning.repository";
 import type {
   AssetRecord,
   CashBoxRecord,
@@ -24,6 +24,7 @@ import type {
   GoalRecord,
   MarketQuoteRecord,
   MonthlyExpenseRecord,
+  MonthlyIncomeEntryRecord,
   MonthlyPlanRecord,
   OperationRecord,
   PriceHistoryRecord
@@ -430,6 +431,7 @@ type TimelineSourceType =
   | "contribution"
   | "cashbox-movement"
   | "monthly-expense"
+  | "monthly-income-entry"
   | "monthly-goal";
 
 export interface TimelineMovement {
@@ -462,6 +464,7 @@ interface BuildMovementsOptions {
   assets?: AssetRecord[];
   includePlannedDividends?: boolean;
   monthlyExpenses?: MonthlyExpenseRecord[];
+  monthlyIncomeEntries?: MonthlyIncomeEntryRecord[];
   monthlyPlans?: MonthlyPlanRecord[];
   deduplicate?: boolean;
 }
@@ -795,6 +798,45 @@ export function buildMovements(
     });
   });
 
+  const incomeEntryEvents: TimelineMovement[] = (options.monthlyIncomeEntries ?? [])
+    .filter((entry) => !entry.recurrenceCancelled && entry.status !== "cancelled")
+    .map((entry) => {
+      const eventType = "income";
+      const occurrenceId = entry.recurrenceOriginalDate ?? entry.date;
+      const sourceId = entry.recurring && entry.recurrenceId
+        ? entry.recurrenceId
+        : entry.id ?? fallbackSourceId("monthly-income-entry", [entry.planId, entry.date, entry.time]);
+      const movementDate = entry.receivedAt ?? `${entry.date}T${entry.time || "00:00"}`;
+      const movementDescription = [
+        entry.category || "Entrada",
+        entry.note,
+        `Previsto para ${formatDateBr(entry.date)}`,
+        entry.receivedAt ? `Recebido em ${formatDateTimeBr(entry.receivedAt)}` : null
+      ]
+        .filter(Boolean)
+        .join(" - ");
+
+      return withCanonicalIdentity({
+        date: movementDate,
+        type: entry.recurring ? "Entrada recorrente" : "Entrada",
+        title: entry.description,
+        description: movementDescription,
+        amount: entry.amountInCents / 100,
+        sector: entry.category,
+        paymentMethod: "Planejamento mensal",
+        source: "monthly-planning",
+        occurrenceDate: entry.date,
+        completedAt: entry.receivedAt ?? null,
+        ...resolveMovementStatus(`${entry.date}T${entry.time || "00:00"}`, entry.status, { completed: "Recebido", planned: "Previsto" })
+      }, {
+        sourceType: "monthly-income-entry",
+        sourceId,
+        eventType,
+        occurrenceId,
+        seriesId: entry.recurrenceId ?? null
+      });
+    });
+
   const goalEvents: TimelineMovement[] = (options.monthlyPlans ?? []).flatMap((plan) =>
     (plan.goals ?? []).map((goal) => {
       const completed = goal.targetInCents > 0 && goal.savedInCents >= goal.targetInCents;
@@ -818,7 +860,7 @@ export function buildMovements(
     })
   );
 
-  const rawMovements = [...operationEvents, ...dividendEvents, ...contributionEvents, ...cashBoxEvents, ...expenseEvents, ...goalEvents];
+  const rawMovements = [...operationEvents, ...dividendEvents, ...contributionEvents, ...cashBoxEvents, ...expenseEvents, ...incomeEntryEvents, ...goalEvents];
   const movements = (options.deduplicate === false ? rawMovements : dedupeTimelineMovements(rawMovements)).sort(compareMovements);
 
   if (process.env.HISTORY_DEBUG === "true") {
@@ -1227,13 +1269,14 @@ export async function getCalendarEvents() {
 }
 
 export async function getHistory() {
-  const [dividends, operations, contributions, cashBoxes, assets, monthlyExpenses, monthlyPlans] = await Promise.all([
+  const [dividends, operations, contributions, cashBoxes, assets, monthlyExpenses, monthlyIncomeEntries, monthlyPlans] = await Promise.all([
     listDividends(),
     listOperations(),
     listContributions(),
     listCashBoxes(),
     listAssets(),
     listAllMonthlyExpenses(),
+    listAllMonthlyIncomeEntries(),
     listMonthlyPlans()
   ]);
 
@@ -1241,6 +1284,7 @@ export async function getHistory() {
     assets,
     includePlannedDividends: true,
     monthlyExpenses,
+    monthlyIncomeEntries,
     monthlyPlans
   });
 }

@@ -120,6 +120,7 @@ export interface GoalRecord {
 
 export type MonthlyBudgetType = "percentage" | "fixed";
 export type MonthlyExpenseStatus = "completed" | "planned";
+export type MonthlyIncomeEntryStatus = "received" | "planned" | "cancelled";
 export type MonthlyExpenseType = "single" | "recurring";
 export type MonthlyRecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "annual" | "custom";
 
@@ -187,6 +188,35 @@ export interface MonthlyExpenseRecord {
   updatedAt?: string;
 }
 
+export interface MonthlyIncomeEntryRecord {
+  id?: string;
+  planId: string;
+  description: string;
+  amountInCents: number;
+  category: string;
+  date: string;
+  time: string;
+  status: MonthlyIncomeEntryStatus;
+  incomeType: MonthlyExpenseType;
+  recurring: boolean;
+  recurrenceId?: string | null;
+  recurrenceSourceId?: string | null;
+  recurrenceFrequency?: MonthlyRecurrenceFrequency | null;
+  recurrenceInterval?: number | null;
+  recurrenceDayOfMonth?: number | null;
+  recurrenceStartDate?: string | null;
+  recurrenceEndDate?: string | null;
+  recurrenceOriginalDate?: string | null;
+  recurrenceCancelled?: boolean;
+  receivedAt?: string | null;
+  note?: string;
+  sourceType?: "manual" | "dividend" | string | null;
+  sourceId?: string | null;
+  idempotencyKey?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface MonthlyCategorySummary extends MonthlyPlanCategoryRecord {
   limitInCents: number;
   completedInCents: number;
@@ -203,8 +233,15 @@ export interface MonthlyPlanningOverview {
   plan: MonthlyPlanRecord;
   categories: MonthlyCategorySummary[];
   expenses: MonthlyExpenseRecord[];
+  incomeEntries: MonthlyIncomeEntryRecord[];
   summary: {
     incomeInCents: number;
+    baseIncomeInCents: number;
+    completedExtraIncomeInCents: number;
+    plannedExtraIncomeInCents: number;
+    dividendIncomeInCents: number;
+    currentTotalIncomeInCents: number;
+    projectedTotalIncomeInCents: number;
     totalPlannedInCents: number;
     completedInCents: number;
     plannedExpensesInCents: number;
@@ -240,6 +277,7 @@ export interface MonthlyPlanningOverview {
   insights: string[];
   comparisons: Array<{ label: string; currentInCents: number; previousInCents: number; variationPercent: number; valueType?: "money" | "percent" }>;
   paymentMethodStats: Array<{ paymentMethod: string; amountInCents: number; count: number }>;
+  incomeCategoryStats: Array<{ category: string; amountInCents: number; plannedInCents: number; receivedCount: number; plannedCount: number }>;
   calendarDays: Array<{ date: string; events: Array<{ id: string; type: string; label: string; amountInCents: number; status?: string }> }>;
   categoryEvolution: Array<{
     categoryId: string;
@@ -269,5 +307,18 @@ export interface MonthlyExpenseCompletionResult {
     balanceInCents: number;
   };
   alreadyCompleted: boolean;
+  message: string;
+}
+
+export interface MonthlyIncomeEntryCompletionResult {
+  incomeEntry: MonthlyIncomeEntryRecord;
+  overview: MonthlyPlanningOverview;
+  summary: {
+    receivedExtraIncomeInCents: number;
+    plannedExtraIncomeInCents: number;
+    currentBalanceInCents: number;
+    projectedBalanceInCents: number;
+  };
+  alreadyReceived: boolean;
   message: string;
 }

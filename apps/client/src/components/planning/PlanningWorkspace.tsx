@@ -17,6 +17,8 @@ import type {
   MonthlyExpenseRecord,
   MonthlyExpenseStatus,
   MonthlyFinancialGoalRecord,
+  MonthlyIncomeEntryRecord,
+  MonthlyIncomeEntryStatus,
   MonthlyPlanCategoryRecord,
   MonthlyPlanningOverview,
   MonthlyPlanRecord,
@@ -99,6 +101,32 @@ type ExpenseCompletionForm = {
   completedTime: string;
 };
 
+type IncomeEntryForm = {
+  description: string;
+  amount: string;
+  category: string;
+  date: string;
+  time: string;
+  note: string;
+  incomeType: "single" | "recurring";
+  recurring: boolean;
+  recurrenceFrequency: MonthlyRecurrenceFrequency;
+  recurrenceInterval: number;
+  recurrenceDayOfMonth: number;
+  recurrenceStartDate: string;
+  recurrenceEndDate: string;
+  editScope: "single" | "series";
+  status: MonthlyIncomeEntryStatus;
+  useCurrentMoment: boolean;
+  idempotencyKey: string;
+};
+
+type IncomeEntryCompletionForm = {
+  useCurrentMoment: boolean;
+  receivedDate: string;
+  receivedTime: string;
+};
+
 type CalendarEvent = MonthlyPlanningOverview["calendarDays"][number]["events"][number];
 
 const categoryIcons = [
@@ -119,6 +147,26 @@ const statusLabels: Record<MonthlyExpenseStatus, string> = {
   completed: "Pago",
   planned: "Previsto"
 };
+
+const incomeStatusLabels: Record<MonthlyIncomeEntryStatus, string> = {
+  received: "Recebido",
+  planned: "Previsto",
+  cancelled: "Cancelado"
+};
+
+const incomeCategoryOptions = [
+  "Salario extra",
+  "Freelance",
+  "Comissao",
+  "Bonus",
+  "Hora extra",
+  "Venda",
+  "Reembolso",
+  "Cashback",
+  "Presente",
+  "Rendimentos",
+  "Outros"
+];
 
 const expenseStatusFilters: Array<{ value: ExpenseStatusFilter; label: string }> = [
   { value: "all", label: "Todos" },
@@ -163,6 +211,8 @@ const alertToneClass = {
 
 const eventToneClass: Record<string, string> = {
   salary: "bg-accent/15 text-accent",
+  income: "bg-accent/15 text-accent",
+  "recurring-income": "bg-accent/15 text-accent",
   dividend: "bg-aqua/15 text-aqua",
   contribution: "bg-violet/15 text-violet",
   "investment-contribution": "bg-violet/15 text-violet",
@@ -173,6 +223,8 @@ const eventToneClass: Record<string, string> = {
 
 const eventTypeLabels: Record<string, string> = {
   salary: "Salario",
+  income: "Entrada",
+  "recurring-income": "Entrada recorrente",
   dividend: "Dividendo",
   contribution: "Aporte",
   "investment-contribution": "Aporte em ativo",
@@ -191,8 +243,8 @@ const planningPageHeaders: Record<PlanningView, { title: string; description: st
     description: "Configure renda, setores, porcentagens, valores fixos e copie o planejamento anterior."
   },
   expenses: {
-    title: "Gastos do mes",
-    description: "Cadastre, filtre e acompanhe gastos realizados, previstos e recorrentes."
+    title: "Movimentacoes do mes",
+    description: "Cadastre, filtre e acompanhe entradas, gastos realizados, previstos e recorrentes."
   },
   calendar: {
     title: "Calendario financeiro",
@@ -261,6 +313,10 @@ function formatMoneyInput(valueInCents: number) {
 
 function createExpenseIdempotencyKey() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `expense-${Date.now()}`;
+}
+
+function createIncomeEntryIdempotencyKey() {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `income-${Date.now()}`;
 }
 
 function normalizeCategoryName(value?: string) {
@@ -340,6 +396,30 @@ function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""):
   };
 }
 
+function incomeEntryFormFromRecord(entry?: MonthlyIncomeEntryRecord): IncomeEntryForm {
+  const now = getLocalDateTimeFields();
+  const dayOfMonth = entry?.recurrenceDayOfMonth ?? Number((entry?.date ?? now.date).slice(8, 10));
+  return {
+    description: entry?.description ?? "",
+    amount: formatMoneyInput(entry?.amountInCents ?? 0),
+    category: entry?.category ?? incomeCategoryOptions[0],
+    date: entry?.date ?? now.date,
+    time: entry?.time ?? now.time,
+    note: entry?.note ?? "",
+    incomeType: entry?.incomeType ?? "single",
+    recurring: entry?.recurring ?? false,
+    recurrenceFrequency: entry?.recurrenceFrequency ?? "monthly",
+    recurrenceInterval: entry?.recurrenceInterval ?? 1,
+    recurrenceDayOfMonth: dayOfMonth,
+    recurrenceStartDate: entry?.recurrenceStartDate ?? entry?.date ?? now.date,
+    recurrenceEndDate: entry?.recurrenceEndDate ?? "",
+    editScope: "single",
+    status: entry?.status ?? "received",
+    useCurrentMoment: !entry,
+    idempotencyKey: entry?.idempotencyKey ?? createIncomeEntryIdempotencyKey()
+  };
+}
+
 function goalFormFromRecord(goal?: MonthlyFinancialGoalRecord): GoalForm {
   return {
     id: goal?.id,
@@ -359,6 +439,15 @@ function expenseCompletionFormFromRecord() {
     useCurrentMoment: true,
     completedDate: now.date,
     completedTime: now.time
+  };
+}
+
+function incomeEntryCompletionFormFromRecord() {
+  const now = getLocalDateTimeFields();
+  return {
+    useCurrentMoment: true,
+    receivedDate: now.date,
+    receivedTime: now.time
   };
 }
 
@@ -582,6 +671,120 @@ function ExpenseListItem({
   );
 }
 
+function canMarkIncomeEntryAsReceived(entry: MonthlyIncomeEntryRecord) {
+  return entry.status === "planned" && Boolean(entry.id);
+}
+
+function incomeEntryStatusToneClass(status: MonthlyIncomeEntryStatus) {
+  if (status === "received") return "border-accent/30 bg-accent/10 text-accent";
+  if (status === "cancelled") return "border-rose/30 bg-rose/10 text-rose";
+  return "border-aqua/30 bg-aqua/10 text-aqua";
+}
+
+function incomeEntryStatusIcon(status: MonthlyIncomeEntryStatus) {
+  if (status === "received") return <CheckCircle2 size={14} strokeWidth={2.25} />;
+  if (status === "cancelled") return <AlertTriangle size={14} strokeWidth={2.25} />;
+  return <CalendarDays size={14} strokeWidth={2.25} />;
+}
+
+function incomeEntryMetaLabel(entry: MonthlyIncomeEntryRecord) {
+  const items = [entry.category || "Entrada"];
+  items.push(entry.recurring ? `Recorrente ${recurrenceFrequencyLabels[entry.recurrenceFrequency ?? "monthly"].toLowerCase()}` : "Unica");
+  return items.join(" / ");
+}
+
+type IncomeEntryListItemProps = {
+  entry: MonthlyIncomeEntryRecord;
+  isReceiving: boolean;
+  onReceive: (entry: MonthlyIncomeEntryRecord) => void;
+  onEdit: (entry: MonthlyIncomeEntryRecord) => void;
+  onDelete: (entry: MonthlyIncomeEntryRecord) => void;
+  onDeleteSeries: (entry: MonthlyIncomeEntryRecord) => void;
+};
+
+function IncomeEntryListItem({
+  entry,
+  isReceiving,
+  onReceive,
+  onEdit,
+  onDelete,
+  onDeleteSeries
+}: IncomeEntryListItemProps) {
+  return (
+    <article className="rounded-xl border border-line bg-elevated/60 p-3 shadow-soft sm:p-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,2.45fr)_minmax(10rem,0.9fr)_minmax(12.5rem,1fr)_minmax(8.5rem,0.75fr)_minmax(12rem,1fr)]">
+        <div className="min-w-0 md:col-span-2 xl:col-span-1">
+          <div className="flex items-start justify-between gap-3 md:block">
+            <div className="min-w-0">
+              <p title={entry.description} className="truncate text-base font-semibold text-ink">{entry.description}</p>
+              <p className="mt-1 text-sm text-muted">{incomeEntryMetaLabel(entry)}</p>
+            </div>
+            <div className="text-right md:hidden">
+              <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Valor</p>
+              <div className="mt-1 font-semibold text-accent">
+                <MoneyValue value={formatCents(entry.amountInCents)} size="card" />
+              </div>
+            </div>
+          </div>
+          {entry.note ? <p title={entry.note} className="mt-2 truncate text-sm text-muted">{entry.note}</p> : null}
+        </div>
+
+        <div className="grid gap-1 text-sm">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Data</p>
+          <p className="font-medium text-ink">{formatLocalDate(entry.date)}</p>
+          <p className="text-xs text-muted">as {entry.time}</p>
+        </div>
+
+        <div className="grid gap-2 text-sm xl:justify-items-center">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Status</p>
+          <span className={`inline-grid h-9 w-[12.5rem] max-w-full grid-cols-[0.875rem_minmax(0,1fr)] items-center gap-2 rounded-full border px-3 text-xs font-medium leading-none ${incomeEntryStatusToneClass(entry.status)}`}>
+            <span className="flex h-3.5 w-3.5 items-center justify-center">{incomeEntryStatusIcon(entry.status)}</span>
+            <span className="truncate text-left">{incomeStatusLabels[entry.status]}</span>
+          </span>
+          {entry.status === "received" && entry.receivedAt ? <p className="text-xs text-muted xl:w-[12.5rem] xl:text-center">Recebido em {formatCompletedAt(entry.receivedAt).replace("Pago em ", "")}</p> : null}
+        </div>
+
+        <div className="hidden gap-1 text-sm md:grid xl:text-right">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted xl:hidden">Valor</p>
+          <div className="font-semibold text-accent">
+            <MoneyValue value={formatCents(entry.amountInCents)} size="table" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 xl:items-end">
+          <p className="hidden text-[11px] font-medium uppercase tracking-[0.14em] text-muted md:block xl:hidden">Acoes</p>
+          {canMarkIncomeEntryAsReceived(entry) ? (
+            <button
+              type="button"
+              onClick={() => onReceive(entry)}
+              disabled={isReceiving}
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
+            >
+              {isReceiving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+              Marcar recebida
+            </button>
+          ) : (
+            <div className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent xl:min-w-[11rem]">
+              {incomeStatusLabels[entry.status]}
+            </div>
+          )}
+          <details className="relative w-full xl:w-auto">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-center rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/40 hover:text-ink">
+              <MoreHorizontal size={16} />
+              <span className="sr-only">Mais acoes</span>
+            </summary>
+            <div className="absolute right-0 top-[calc(100%+0.5rem)] z-10 flex w-48 flex-col rounded-lg border border-line bg-panel p-2 shadow-soft">
+              <button type="button" onClick={() => onEdit(entry)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-ink">Editar</button>
+              <button type="button" onClick={() => onDelete(entry)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-rose">Excluir</button>
+              {entry.recurring ? <button type="button" onClick={() => onDeleteSeries(entry)} className="rounded-lg px-3 py-2 text-left text-sm text-muted transition hover:bg-elevated hover:text-rose">Excluir serie</button> : null}
+            </div>
+          </details>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export type PlanningView = "overview" | "budget" | "expenses" | "calendar" | "goals" | "analytics";
 
 type PlanningWorkspaceProps = {
@@ -602,6 +805,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const [includeDividendsAsIncome, setIncludeDividendsAsIncome] = useState(false);
   const [comparisonRange, setComparisonRange] = useState(1);
   const [search, setSearch] = useState("");
+  const [movementFilter, setMovementFilter] = useState<"all" | "expenses" | "income">("all");
   const [sectorFilter, setSectorFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState<ExpenseStatusFilter>("all");
   const [paymentFilter, setPaymentFilter] = useState("Todos");
@@ -609,23 +813,31 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const [toDate, setToDate] = useState("");
   const [categoryForm, setCategoryForm] = useState<CategoryForm>(categoryFormFromRecord());
   const [expenseForm, setExpenseForm] = useState<ExpenseForm>(expenseFormFromRecord());
+  const [incomeEntryForm, setIncomeEntryForm] = useState<IncomeEntryForm>(incomeEntryFormFromRecord());
   const [goalForm, setGoalForm] = useState<GoalForm>(goalFormFromRecord());
   const [completeExpenseForm, setCompleteExpenseForm] = useState<ExpenseCompletionForm>(expenseCompletionFormFromRecord());
+  const [receiveIncomeEntryForm, setReceiveIncomeEntryForm] = useState<IncomeEntryCompletionForm>(incomeEntryCompletionFormFromRecord());
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [editingExpense, setEditingExpense] = useState<MonthlyExpenseRecord | null>(null);
+  const [editingIncomeEntry, setEditingIncomeEntry] = useState<MonthlyIncomeEntryRecord | null>(null);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [deleteCategory, setDeleteCategory] = useState<MonthlyPlanCategoryRecord | null>(null);
   const [deleteExpense, setDeleteExpense] = useState<MonthlyExpenseRecord | null>(null);
   const [deleteExpenseSeries, setDeleteExpenseSeries] = useState<MonthlyExpenseRecord | null>(null);
+  const [deleteIncomeEntry, setDeleteIncomeEntry] = useState<MonthlyIncomeEntryRecord | null>(null);
+  const [deleteIncomeEntrySeries, setDeleteIncomeEntrySeries] = useState<MonthlyIncomeEntryRecord | null>(null);
   const [deleteGoal, setDeleteGoal] = useState<MonthlyFinancialGoalRecord | null>(null);
   const [completeExpenseTarget, setCompleteExpenseTarget] = useState<MonthlyExpenseRecord | null>(null);
+  const [receiveIncomeEntryTarget, setReceiveIncomeEntryTarget] = useState<MonthlyIncomeEntryRecord | null>(null);
   const [categoryDetails, setCategoryDetails] = useState<MonthlyPlanningOverview["categories"][number] | null>(null);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [isIncomeEntryModalOpen, setIsIncomeEntryModalOpen] = useState(false);
   const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [completingExpenseIds, setCompletingExpenseIds] = useState<string[]>([]);
+  const [receivingIncomeEntryIds, setReceivingIncomeEntryIds] = useState<string[]>([]);
   const [completionMessage, setCompletionMessage] = useState("");
   const [error, setError] = useState("");
   const [assets, setAssets] = useState<AssetRecord[]>([]);
@@ -714,6 +926,10 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     () => new Map((overview?.expenses ?? []).filter((expense): expense is MonthlyExpenseRecord & { id: string } => Boolean(expense.id)).map((expense) => [expense.id, expense])),
     [overview?.expenses]
   );
+  const incomeEntryById = useMemo(
+    () => new Map((overview?.incomeEntries ?? []).filter((entry): entry is MonthlyIncomeEntryRecord & { id: string } => Boolean(entry.id)).map((entry) => [entry.id, entry])),
+    [overview?.incomeEntries]
+  );
   useEffect(() => {
     if (!categoryId || !overview) return;
     const category = categoryById.get(categoryId);
@@ -723,6 +939,10 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const paymentOptions = useMemo(
     () => Array.from(new Set((overview?.paymentMethodStats ?? []).map((item) => normalizePaymentMethodLabel(item.paymentMethod)))),
     [overview?.paymentMethodStats]
+  );
+  const incomeCategoryFilterOptions = useMemo(
+    () => Array.from(new Set([...(overview?.incomeCategoryStats ?? []).map((item) => item.category), ...incomeCategoryOptions])).filter(Boolean),
+    [overview?.incomeCategoryStats]
   );
   const filteredExpenses = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -737,7 +957,25 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
       return matchesSearch && matchesSector && matchesStatus && matchesPayment && matchesFrom && matchesTo;
     });
   }, [categoryById, fromDate, overview?.expenses, paymentFilter, search, sectorFilter, statusFilter, toDate]);
-  const hasActiveExpenseFilters = search.trim().length > 0 || sectorFilter !== "Todos" || paymentFilter !== "Todos" || statusFilter !== "all" || Boolean(fromDate) || Boolean(toDate);
+  const filteredIncomeEntries = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return (overview?.incomeEntries ?? []).filter((entry) => {
+      const matchesSearch = [entry.description, entry.note, entry.category].some((value) => value?.toLowerCase().includes(term));
+      const matchesSector = sectorFilter === "Todos" || sectorFilter === `income:${entry.category}`;
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "paid" && entry.status === "received") ||
+        (statusFilter === "pending" && entry.status === "planned") ||
+        (statusFilter === "future" && entry.status === "planned");
+      const matchesPayment = paymentFilter === "Todos";
+      const matchesFrom = !fromDate || entry.date >= fromDate;
+      const matchesTo = !toDate || entry.date <= toDate;
+      return matchesSearch && matchesSector && matchesStatus && matchesPayment && matchesFrom && matchesTo;
+    });
+  }, [fromDate, overview?.incomeEntries, paymentFilter, search, sectorFilter, statusFilter, toDate]);
+  const visibleExpenses = movementFilter === "income" ? [] : filteredExpenses;
+  const visibleIncomeEntries = movementFilter === "expenses" ? [] : filteredIncomeEntries;
+  const hasActiveExpenseFilters = movementFilter !== "all" || search.trim().length > 0 || sectorFilter !== "Todos" || paymentFilter !== "Todos" || statusFilter !== "all" || Boolean(fromDate) || Boolean(toDate);
 
   const selectedCalendarEvents = useMemo<CalendarEvent[]>(() => {
     if (!overview || !selectedCalendarDate) return [];
@@ -963,6 +1201,27 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     setError("");
   }
 
+  function openCreateIncomeEntry() {
+    setEditingIncomeEntry(null);
+    setIncomeEntryForm(incomeEntryFormFromRecord());
+    setIsIncomeEntryModalOpen(true);
+    setError("");
+  }
+
+  function openEditIncomeEntry(entry: MonthlyIncomeEntryRecord) {
+    setEditingIncomeEntry(entry);
+    setIncomeEntryForm(incomeEntryFormFromRecord(entry));
+    setIsIncomeEntryModalOpen(true);
+    setError("");
+  }
+
+  function openReceiveIncomeEntry(entry: MonthlyIncomeEntryRecord) {
+    setReceiveIncomeEntryTarget(entry);
+    setReceiveIncomeEntryForm(incomeEntryCompletionFormFromRecord());
+    setCompletionMessage("");
+    setError("");
+  }
+
   function updateUseCurrentMoment(useCurrentMoment: boolean) {
     const now = getLocalDateTimeFields();
     setExpenseForm((current) => ({
@@ -974,8 +1233,23 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     }));
   }
 
+  function updateIncomeEntryUseCurrentMoment(useCurrentMoment: boolean) {
+    const now = getLocalDateTimeFields();
+    setIncomeEntryForm((current) => ({
+      ...current,
+      useCurrentMoment,
+      date: useCurrentMoment ? now.date : current.date,
+      time: useCurrentMoment ? now.time : current.time,
+      status: useCurrentMoment ? "received" : current.status
+    }));
+  }
+
   function isCompletingExpense(expenseId?: string | null) {
     return Boolean(expenseId && completingExpenseIds.includes(expenseId));
+  }
+
+  function isReceivingIncomeEntry(entryId?: string | null) {
+    return Boolean(entryId && receivingIncomeEntryIds.includes(entryId));
   }
 
   async function submitExpense(event: FormEvent<HTMLFormElement>) {
@@ -1126,6 +1400,103 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     }
   }
 
+  async function submitIncomeEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!overview?.plan.id || isSaving) return;
+
+    const amountInCents = parseBrazilianMoneyToCents(incomeEntryForm.amount);
+    if (!incomeEntryForm.description.trim()) {
+      setError("Informe a descricao da entrada.");
+      return;
+    }
+    if (!amountInCents || amountInCents <= 0) {
+      setError("Informe uma entrada maior que zero.");
+      return;
+    }
+    if (!incomeEntryForm.category.trim()) {
+      setError("Informe a categoria da entrada.");
+      return;
+    }
+    if (!incomeEntryForm.date || !incomeEntryForm.time) {
+      setError("Informe data e horario.");
+      return;
+    }
+
+    const now = getLocalDateTimeFields();
+    const date = incomeEntryForm.useCurrentMoment ? now.date : incomeEntryForm.date;
+    const time = incomeEntryForm.useCurrentMoment ? now.time : incomeEntryForm.time;
+    const status: MonthlyIncomeEntryStatus = isFutureExpense(date, time) ? "planned" : incomeEntryForm.status;
+
+    setIsSaving(true);
+    setError("");
+    try {
+      const payload = {
+        description: incomeEntryForm.description.trim(),
+        amountInCents,
+        category: incomeEntryForm.category.trim(),
+        date,
+        time,
+        note: incomeEntryForm.note.trim(),
+        incomeType: incomeEntryForm.recurring ? "recurring" as const : incomeEntryForm.incomeType,
+        recurring: incomeEntryForm.recurring,
+        recurrenceFrequency: incomeEntryForm.recurring ? incomeEntryForm.recurrenceFrequency : null,
+        recurrenceInterval: incomeEntryForm.recurring ? Math.max(Number(incomeEntryForm.recurrenceInterval) || 1, 1) : null,
+        recurrenceDayOfMonth: incomeEntryForm.recurring ? Math.min(Math.max(Number(incomeEntryForm.recurrenceDayOfMonth) || Number(date.slice(8, 10)), 1), 31) : null,
+        recurrenceStartDate: incomeEntryForm.recurring ? incomeEntryForm.recurrenceStartDate || date : null,
+        recurrenceEndDate: incomeEntryForm.recurring ? incomeEntryForm.recurrenceEndDate || null : null,
+        status,
+        receivedAt: status === "received" ? editingIncomeEntry?.receivedAt ?? now.timestamp : null,
+        sourceType: "manual",
+        sourceId: null,
+        idempotencyKey: incomeEntryForm.idempotencyKey,
+        createdAt: editingIncomeEntry?.createdAt ?? now.timestamp,
+        updatedAt: now.timestamp
+      };
+
+      if (editingIncomeEntry?.id) await monthlyPlanningApi.updateIncomeEntry(editingIncomeEntry.id, payload, incomeEntryForm.editScope);
+      else await monthlyPlanningApi.createIncomeEntry(overview.plan.id, payload);
+
+      setIsIncomeEntryModalOpen(false);
+      setEditingIncomeEntry(null);
+      setCompletionMessage(`Entrada de ${formatCents(amountInCents)} registrada em ${incomeEntryForm.category.trim()}.`);
+      await loadOverview();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Falha ao salvar entrada.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function confirmDeleteIncomeEntry() {
+    if (!deleteIncomeEntry?.id || isSaving) return;
+    setIsSaving(true);
+    setError("");
+    try {
+      await monthlyPlanningApi.removeIncomeEntry(deleteIncomeEntry.id);
+      setDeleteIncomeEntry(null);
+      await loadOverview();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Falha ao excluir entrada.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function confirmDeleteIncomeEntrySeries() {
+    if (!deleteIncomeEntrySeries?.id || isSaving) return;
+    setIsSaving(true);
+    setError("");
+    try {
+      await monthlyPlanningApi.removeIncomeEntry(deleteIncomeEntrySeries.id, "series");
+      setDeleteIncomeEntrySeries(null);
+      await loadOverview();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Falha ao excluir recorrencia de entrada.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function submitCompleteExpense(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!completeExpenseTarget?.id || isCompletingExpense(completeExpenseTarget.id)) return;
@@ -1181,8 +1552,36 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     }
   }
 
+  async function submitReceiveIncomeEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!receiveIncomeEntryTarget?.id || isReceivingIncomeEntry(receiveIncomeEntryTarget.id)) return;
+
+    const receivedAt = receiveIncomeEntryForm.useCurrentMoment
+      ? undefined
+      : buildLocalTimestampFromDateTime(receiveIncomeEntryForm.receivedDate, receiveIncomeEntryForm.receivedTime);
+
+    setReceivingIncomeEntryIds((current) => current.includes(receiveIncomeEntryTarget.id!) ? current : [...current, receiveIncomeEntryTarget.id!]);
+    setError("");
+
+    try {
+      const result = await monthlyPlanningApi.receiveIncomeEntry(
+        receiveIncomeEntryTarget.id,
+        receivedAt ? { receivedAt } : {},
+        comparisonRange
+      );
+      applyOverview(result.overview, selected.year, selected.month);
+      setReceiveIncomeEntryTarget(null);
+      setCompletionMessage(result.message || `${receiveIncomeEntryTarget.description} marcada como recebida.`);
+    } catch (receiveError) {
+      setError(receiveError instanceof Error ? receiveError.message : "Falha ao marcar entrada como recebida.");
+    } finally {
+      setReceivingIncomeEntryIds((current) => current.filter((entryId) => entryId !== receiveIncomeEntryTarget.id));
+    }
+  }
+
   function clearExpenseFilters() {
     setSearch("");
+    setMovementFilter("all");
     setSectorFilter("Todos");
     setPaymentFilter("Todos");
     setStatusFilter("all");
@@ -1205,7 +1604,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   const isCalendar = view === "calendar";
   const isGoals = view === "goals";
   const isAnalytics = view === "analytics";
-  const hasConfiguredIncome = (overview?.summary.incomeInCents ?? 0) > 0;
+  const hasConfiguredIncome = (overview?.summary.currentTotalIncomeInCents ?? overview?.summary.incomeInCents ?? 0) > 0;
   const alertItems = isOverview ? (overview?.alerts ?? []).slice(0, 3) : (overview?.alerts ?? []);
   const insightItems = isOverview ? (overview?.insights ?? []).slice(0, 3) : (overview?.insights ?? []);
 
@@ -1268,19 +1667,19 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               </section>
               <PlanningSmartSummary alerts={alertItems} insights={insightItems} hasConfiguredIncome={hasConfiguredIncome} />
               <LazyAiAnalysisPanel year={selected.year} month={selected.month} analysisType="complete" compact />
-              <PlanningQuickActions onAddExpense={() => openCreateExpense()} />
+              <PlanningQuickActions onAddExpense={() => openCreateExpense()} onAddIncomeEntry={openCreateIncomeEntry} />
               <PlanningInvestmentSummary overview={overview} />
             </>
           ) : null}
 
           {isBudget ? (
           <section className="stat-card-grid stat-card-grid--wide mb-4">
-            <StatCard label="Renda mensal" value={formatCents(overview.summary.incomeInCents)} icon={<Coins size={18} />} />
-            <StatCard label="Total planejado" value={formatCents(overview.summary.totalPlannedInCents)} icon={<WalletCards size={18} />} tone="blue" />
+            <StatCard label="Renda base" value={formatCents(overview.summary.baseIncomeInCents ?? overview.summary.incomeInCents)} icon={<Coins size={18} />} />
+            <StatCard label="Entradas extras" value={formatCents(overview.summary.completedExtraIncomeInCents ?? 0)} detail={`${formatCents(overview.summary.plannedExtraIncomeInCents ?? 0)} previstas`} icon={<TrendingUp size={18} />} tone="green" />
+            <StatCard label="Renda projetada" value={formatCents(overview.summary.projectedTotalIncomeInCents ?? overview.summary.totalIncomeWithDividendsInCents)} detail="Base, entradas previstas e recebidas" icon={<WalletCards size={18} />} tone="blue" />
             <StatCard label="Gasto realizado" value={formatCents(overview.summary.completedInCents)} icon={<Coins size={18} />} tone="amber" />
             <StatCard label="Gastos previstos" value={formatCents(overview.summary.plannedExpensesInCents)} icon={<CalendarDays size={18} />} tone="violet" />
             <StatCard label="Restante atual" value={formatCents(overview.summary.remainingIncomeInCents)} detail="Restante da renda apos gastos realizados" icon={<Coins size={18} />} tone={overview.summary.remainingIncomeInCents < 0 ? "rose" : "green"} />
-            <StatCard label="Restante do orcamento" value={formatCents(overview.summary.remainingBudgetInCents)} detail="Total planejado menos gastos realizados" icon={<WalletCards size={18} />} tone={overview.summary.remainingBudgetInCents < 0 ? "rose" : "blue"} />
             <StatCard label="Restante apos previstos" value={formatCents(overview.summary.remainingIncomeAfterPlannedInCents)} detail="Saldo disponivel apos gastos previstos" icon={<CalendarDays size={18} />} tone={overview.summary.remainingIncomeAfterPlannedInCents < 0 ? "rose" : "blue"} />
             <StatCard label="Renda utilizada" value={formatPercentage(overview.summary.usedIncomePercent)} detail="Percentual da renda gasto ate agora" icon={<AlertTriangle size={18} />} tone={overview.summary.usedIncomePercent > 100 ? "rose" : "amber"} />
           </section>
@@ -1533,6 +1932,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               <div className="mt-4 grid gap-2">
                 {selectedCalendarEvents.length > 0 ? selectedCalendarEvents.map((event) => {
                   const linkedExpense = expenseById.get(event.id);
+                  const linkedIncomeEntry = incomeEntryById.get(event.id);
                   const dueState = linkedExpense ? getExpenseDueState(linkedExpense) : null;
 
                   return (
@@ -1542,7 +1942,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                         <span className="font-medium text-ink"><MoneyValue value={formatCents(event.amountInCents)} /></span>
                       </div>
                       <p className="mt-2 text-muted">{event.label}</p>
-                      {event.status ? <p className="mt-1 text-xs text-muted">{event.status === "planned" ? "Previsto" : "Pago"}</p> : null}
+                      {event.status ? <p className="mt-1 text-xs text-muted">{event.status === "planned" ? "Previsto" : linkedIncomeEntry ? "Recebido" : "Pago"}</p> : null}
                       {linkedExpense ? <p className="mt-1 text-xs text-muted">{dueState?.label}</p> : null}
                       {linkedExpense && canMarkExpenseAsPaid(linkedExpense) ? (
                         <button
@@ -1553,6 +1953,17 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                         >
                           {isCompletingExpense(linkedExpense.id) ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                           Marcar como pago
+                        </button>
+                      ) : null}
+                      {linkedIncomeEntry && canMarkIncomeEntryAsReceived(linkedIncomeEntry) ? (
+                        <button
+                          type="button"
+                          onClick={() => openReceiveIncomeEntry(linkedIncomeEntry)}
+                          disabled={isReceivingIncomeEntry(linkedIncomeEntry.id)}
+                          className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isReceivingIncomeEntry(linkedIncomeEntry.id) ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                          Marcar recebida
                         </button>
                       ) : null}
                     </div>
@@ -1613,15 +2024,21 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
             <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-semibold text-ink">Historico de gastos</h2>
-                  <span className="rounded-full bg-elevated px-2.5 py-1 text-xs text-muted">{filteredExpenses.length} exibidos</span>
+                  <h2 className="text-base font-semibold text-ink">Historico de movimentacoes</h2>
+                  <span className="rounded-full bg-elevated px-2.5 py-1 text-xs text-muted">{visibleExpenses.length + visibleIncomeEntries.length} exibidos</span>
                 </div>
-                <p className="mt-1 text-sm text-muted">Edite, filtre e acompanhe todos os gastos deste planejamento mensal.</p>
+                <p className="mt-1 text-sm text-muted">Edite, filtre e acompanhe gastos, entradas realizadas, previstas e recorrentes.</p>
               </div>
-              <button type="button" onClick={() => openCreateExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
-                <Plus size={16} />
-                Adicionar gasto
-              </button>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button type="button" onClick={() => openCreateIncomeEntry()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-4 text-sm font-medium text-accent transition hover:border-accent/70 hover:bg-accent/15">
+                  <Plus size={16} />
+                  Nova entrada
+                </button>
+                <button type="button" onClick={() => openCreateExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
+                  <Plus size={16} />
+                  Adicionar gasto
+                </button>
+              </div>
             </div>
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(12rem,0.7fr)_minmax(12rem,0.7fr)_minmax(0,1fr)_auto]">
               <label className="relative min-w-0">
@@ -1631,6 +2048,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               <select value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value)} className={fieldClass}>
                 <option>Todos</option>
                 {overview.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                {incomeCategoryFilterOptions.map((category) => <option key={`income:${category}`} value={`income:${category}`}>Entrada · {category}</option>)}
               </select>
               <select value={paymentFilter} onChange={(event) => setPaymentFilter(event.target.value)} className={fieldClass}>
                 <option>Todos</option>
@@ -1652,6 +2070,22 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
             <div>
               <p className="mb-2 text-xs uppercase tracking-[0.14em] text-muted">Filtros rapidos</p>
               <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "all", label: "Todos" },
+                  { value: "expenses", label: "Gastos" },
+                  { value: "income", label: "Entradas" }
+                ].map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => setMovementFilter(filter.value as "all" | "expenses" | "income")}
+                    className={`inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-sm transition ${
+                      movementFilter === filter.value ? "border-accent bg-accent/10 text-accent" : "border-line bg-elevated text-muted hover:border-accent/40 hover:text-ink"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
                 {expenseStatusFilters.map((filter) => (
                   <button
                     key={filter.value}
@@ -1670,7 +2104,32 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
           </section>
 
           <section className="rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
-            {filteredExpenses.length > 0 ? (
+            {visibleIncomeEntries.length > 0 ? (
+              <div className={visibleExpenses.length > 0 ? "mb-6" : ""}>
+                <div className="mb-3 hidden xl:grid xl:grid-cols-[minmax(0,2.45fr)_minmax(10rem,0.9fr)_minmax(12.5rem,1fr)_minmax(8.5rem,0.75fr)_minmax(12rem,1fr)] xl:gap-4 xl:px-4">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Entrada</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Data</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Status</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-right text-muted">Valor</span>
+                  <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-right text-muted">Acoes</span>
+                </div>
+                <div className="space-y-3">
+                  {visibleIncomeEntries.map((entry) => (
+                    <IncomeEntryListItem
+                      key={entry.id ?? `${entry.date}-${entry.time}-${entry.description}`}
+                      entry={entry}
+                      isReceiving={isReceivingIncomeEntry(entry.id)}
+                      onReceive={openReceiveIncomeEntry}
+                      onEdit={openEditIncomeEntry}
+                      onDelete={setDeleteIncomeEntry}
+                      onDeleteSeries={setDeleteIncomeEntrySeries}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {visibleExpenses.length > 0 ? (
               <>
                 <div className="mb-3 hidden xl:grid xl:grid-cols-[minmax(0,2.45fr)_minmax(10rem,0.9fr)_minmax(12.5rem,1fr)_minmax(8.5rem,0.75fr)_minmax(12rem,1fr)] xl:gap-4 xl:px-4">
                   <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Gasto</span>
@@ -1680,7 +2139,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                   <span className="text-[11px] font-medium uppercase tracking-[0.14em] text-right text-muted">Acoes</span>
                 </div>
                 <div className="space-y-3">
-                  {filteredExpenses.map((expense) => {
+                  {visibleExpenses.map((expense) => {
                     const category = categoryById.get(expense.categoryId);
                     const dueState = getExpenseDueState(expense);
 
@@ -1700,9 +2159,10 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                   })}
                 </div>
               </>
-            ) : (
-              <p className="rounded-lg bg-elevated px-3 py-4 text-sm text-muted">Nenhum gasto encontrado para os filtros atuais.</p>
-            )}
+            ) : null}
+            {visibleExpenses.length === 0 && visibleIncomeEntries.length === 0 ? (
+              <p className="rounded-lg bg-elevated px-3 py-4 text-sm text-muted">Nenhuma movimentacao encontrada para os filtros atuais.</p>
+            ) : null}
           </section>
           </>
           ) : null}
@@ -1921,6 +2381,75 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         <textarea value={expenseForm.note} onChange={(event) => setExpenseForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Observacao" />
       </ManagementModal>
 
+      <ManagementModal title={editingIncomeEntry ? "Editar entrada" : "Nova entrada"} isOpen={isIncomeEntryModalOpen} onClose={() => setIsIncomeEntryModalOpen(false)} onSubmit={submitIncomeEntry} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
+        <input required value={incomeEntryForm.description} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
+        <input required value={incomeEntryForm.amount} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, amount: event.target.value }))} className={fieldClass} placeholder="Valor" inputMode="decimal" />
+        <input required list="monthly-income-categories" value={incomeEntryForm.category} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, category: event.target.value }))} className={fieldClass} placeholder="Categoria da entrada" />
+        <datalist id="monthly-income-categories">
+          {incomeCategoryFilterOptions.map((category) => <option key={category} value={category} />)}
+        </datalist>
+        <fieldset className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+          <legend className="px-1 text-xs uppercase tracking-[0.14em]">Momento da entrada</legend>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={incomeEntryForm.useCurrentMoment} onChange={() => updateIncomeEntryUseCurrentMoment(true)} className="h-4 w-4 accent-accent" />
+              Agora
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" checked={!incomeEntryForm.useCurrentMoment} onChange={() => updateIncomeEntryUseCurrentMoment(false)} className="h-4 w-4 accent-accent" />
+              Escolher data e horario
+            </label>
+          </div>
+        </fieldset>
+        {!incomeEntryForm.useCurrentMoment ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input type="date" required value={incomeEntryForm.date} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, date: event.target.value, status: isFutureExpense(event.target.value, current.time) ? "planned" : current.status }))} className={fieldClass} />
+            <input type="time" required value={incomeEntryForm.time} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, time: event.target.value, status: isFutureExpense(current.date, event.target.value) ? "planned" : current.status }))} className={fieldClass} />
+          </div>
+        ) : (
+          <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">Sera registrada com a data e horario atuais: {formatLocalDate(today.date)} as {today.time}.</p>
+        )}
+        <select value={incomeEntryForm.status} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, status: event.target.value as MonthlyIncomeEntryStatus }))} className={fieldClass}>
+          <option value="received">Recebida</option>
+          <option value="planned">Prevista</option>
+        </select>
+        {isFutureExpense(incomeEntryForm.date, incomeEntryForm.time) ? <p className="rounded-lg bg-amber/10 px-3 py-2 text-sm text-amber">Datas futuras serao salvas automaticamente como entrada prevista.</p> : null}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <select value={incomeEntryForm.incomeType} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, incomeType: event.target.value as "single" | "recurring", recurring: event.target.value === "recurring" }))} className={fieldClass}>
+            <option value="single">Unica</option>
+            <option value="recurring">Recorrente</option>
+          </select>
+          <label className="flex items-center gap-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+            <input type="checkbox" checked={incomeEntryForm.recurring} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurring: event.target.checked, incomeType: event.target.checked ? "recurring" : "single" }))} className="h-4 w-4 accent-accent" />
+            Recorrente
+          </label>
+        </div>
+        {incomeEntryForm.recurring ? (
+          <fieldset className="grid gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+            <legend className="px-1 text-xs uppercase tracking-[0.14em]">Recorrencia</legend>
+            {editingIncomeEntry?.recurrenceId ? (
+              <select value={incomeEntryForm.editScope} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, editScope: event.target.value as "single" | "series" }))} className={fieldClass}>
+                <option value="single">Editar somente este lancamento</option>
+                <option value="series">Editar toda recorrencia</option>
+              </select>
+            ) : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <select value={incomeEntryForm.recurrenceFrequency} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceFrequency: event.target.value as MonthlyRecurrenceFrequency }))} className={fieldClass}>
+                {Object.entries(recurrenceFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <input type="number" min="1" max="60" value={incomeEntryForm.recurrenceInterval} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceInterval: Number(event.target.value) }))} className={fieldClass} placeholder="Intervalo" />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <input type="number" min="1" max="31" value={incomeEntryForm.recurrenceDayOfMonth} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceDayOfMonth: Number(event.target.value) }))} className={fieldClass} placeholder="Dia do mes" />
+              <input type="date" value={incomeEntryForm.recurrenceStartDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceStartDate: event.target.value }))} className={fieldClass} aria-label="Data inicial da recorrencia" />
+              <input type="date" value={incomeEntryForm.recurrenceEndDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceEndDate: event.target.value }))} className={fieldClass} aria-label="Data final da recorrencia" />
+            </div>
+            <p className="text-xs text-muted">Entradas futuras serao geradas como previstas, sem duplicar a recorrencia original.</p>
+          </fieldset>
+        ) : null}
+        <textarea value={incomeEntryForm.note} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Observacao" />
+      </ManagementModal>
+
       <ManagementModal
         title="Marcar como pago"
         isOpen={completeExpenseTarget !== null}
@@ -1958,6 +2487,46 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               <div className="grid gap-3 sm:grid-cols-2">
                 <input type="date" required value={completeExpenseForm.completedDate} onChange={(event) => setCompleteExpenseForm((current) => ({ ...current, completedDate: event.target.value }))} className={fieldClass} />
                 <input type="time" required value={completeExpenseForm.completedTime} onChange={(event) => setCompleteExpenseForm((current) => ({ ...current, completedTime: event.target.value }))} className={fieldClass} />
+              </div>
+            )}
+          </>
+        ) : null}
+      </ManagementModal>
+
+      <ManagementModal
+        title="Marcar entrada como recebida"
+        isOpen={receiveIncomeEntryTarget !== null}
+        onClose={() => setReceiveIncomeEntryTarget(null)}
+        onSubmit={submitReceiveIncomeEntry}
+        submitDisabled={isReceivingIncomeEntry(receiveIncomeEntryTarget?.id)}
+        submitLabel={isReceivingIncomeEntry(receiveIncomeEntryTarget?.id) ? "Marcando..." : "Confirmar"}
+      >
+        {receiveIncomeEntryTarget ? (
+          <>
+            <div className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+              <p className="font-medium text-ink">{receiveIncomeEntryTarget.description} · {receiveIncomeEntryTarget.category}</p>
+              <p className="mt-2 text-ink"><MoneyValue value={formatCents(receiveIncomeEntryTarget.amountInCents)} /></p>
+              <p className="mt-2">Previsto para: {formatLocalDate(receiveIncomeEntryTarget.date)} as {receiveIncomeEntryTarget.time}</p>
+            </div>
+            <fieldset className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+              <legend className="px-1 text-xs uppercase tracking-[0.14em]">Recebimento</legend>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={receiveIncomeEntryForm.useCurrentMoment} onChange={() => setReceiveIncomeEntryForm((current) => ({ ...current, useCurrentMoment: true }))} className="h-4 w-4 accent-accent" />
+                  Agora
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={!receiveIncomeEntryForm.useCurrentMoment} onChange={() => setReceiveIncomeEntryForm((current) => ({ ...current, useCurrentMoment: false }))} className="h-4 w-4 accent-accent" />
+                  Escolher data e horario
+                </label>
+              </div>
+            </fieldset>
+            {receiveIncomeEntryForm.useCurrentMoment ? (
+              <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">Recebimento: agora, com a data atual ({formatLocalDate(today.date)}) e o horario atual do dispositivo.</p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input type="date" required value={receiveIncomeEntryForm.receivedDate} onChange={(event) => setReceiveIncomeEntryForm((current) => ({ ...current, receivedDate: event.target.value }))} className={fieldClass} />
+                <input type="time" required value={receiveIncomeEntryForm.receivedTime} onChange={(event) => setReceiveIncomeEntryForm((current) => ({ ...current, receivedTime: event.target.value }))} className={fieldClass} />
               </div>
             )}
           </>
@@ -2068,6 +2637,8 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         onConfirm={() => void confirmDeleteExpense()}
       />
       <ConfirmDelete isOpen={deleteExpenseSeries !== null} title={`Excluir toda recorrencia de ${deleteExpenseSeries?.description}?`} onCancel={() => setDeleteExpenseSeries(null)} onConfirm={() => void confirmDeleteExpenseSeries()} />
+      <ConfirmDelete isOpen={deleteIncomeEntry !== null} title={`Excluir a entrada ${deleteIncomeEntry?.description}?${deleteIncomeEntry?.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`} onCancel={() => setDeleteIncomeEntry(null)} onConfirm={() => void confirmDeleteIncomeEntry()} />
+      <ConfirmDelete isOpen={deleteIncomeEntrySeries !== null} title={`Excluir toda recorrencia de entrada ${deleteIncomeEntrySeries?.description}?`} onCancel={() => setDeleteIncomeEntrySeries(null)} onConfirm={() => void confirmDeleteIncomeEntrySeries()} />
       <ConfirmDelete isOpen={deleteGoal !== null} title={`Excluir o objetivo ${deleteGoal?.name}?`} onCancel={() => setDeleteGoal(null)} onConfirm={() => void confirmDeleteGoal()} />
     </div>
   );

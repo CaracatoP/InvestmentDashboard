@@ -145,12 +145,71 @@ export const monthlyExpenseUpdateSchema = z.object({
   updatedAt: z.string().optional()
 });
 
+export const monthlyIncomeEntrySchema = z.object({
+  planId: z.string().trim().min(1).optional(),
+  description: z.string().trim().min(1),
+  amountInCents: z.number().int().positive(),
+  category: z.string().trim().min(1).default("Outros"),
+  date: dateSchema,
+  time: timeSchema,
+  status: z.enum(["received", "planned", "cancelled"]).optional(),
+  incomeType: z.enum(["single", "recurring"]).default("single"),
+  recurring: z.boolean().default(false),
+  recurrenceId: z.string().trim().nullable().optional(),
+  recurrenceSourceId: z.string().trim().nullable().optional(),
+  recurrenceFrequency: recurrenceFrequencySchema.nullable().optional(),
+  recurrenceInterval: z.number().int().min(1).max(60).nullable().optional(),
+  recurrenceDayOfMonth: z.number().int().min(1).max(31).nullable().optional(),
+  recurrenceStartDate: dateSchema.nullable().optional(),
+  recurrenceEndDate: dateSchema.nullable().optional(),
+  recurrenceOriginalDate: dateSchema.nullable().optional(),
+  recurrenceCancelled: z.boolean().optional(),
+  receivedAt: timestampSchema.nullable().optional(),
+  note: z.string().trim().optional(),
+  sourceType: z.string().trim().nullable().optional(),
+  sourceId: z.string().trim().nullable().optional(),
+  idempotencyKey: z.string().trim().min(8).nullable().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional()
+});
+
+export const monthlyIncomeEntryUpdateSchema = z.object({
+  planId: z.string().trim().min(1).optional(),
+  description: z.string().trim().min(1).optional(),
+  amountInCents: z.number().int().positive().optional(),
+  category: z.string().trim().min(1).optional(),
+  date: dateSchema.optional(),
+  time: timeSchema.optional(),
+  status: z.enum(["received", "planned", "cancelled"]).optional(),
+  incomeType: z.enum(["single", "recurring"]).optional(),
+  recurring: z.boolean().optional(),
+  recurrenceId: z.string().trim().nullable().optional(),
+  recurrenceSourceId: z.string().trim().nullable().optional(),
+  recurrenceFrequency: recurrenceFrequencySchema.nullable().optional(),
+  recurrenceInterval: z.number().int().min(1).max(60).nullable().optional(),
+  recurrenceDayOfMonth: z.number().int().min(1).max(31).nullable().optional(),
+  recurrenceStartDate: dateSchema.nullable().optional(),
+  recurrenceEndDate: dateSchema.nullable().optional(),
+  recurrenceOriginalDate: dateSchema.nullable().optional(),
+  recurrenceCancelled: z.boolean().optional(),
+  receivedAt: timestampSchema.nullable().optional(),
+  note: z.string().trim().optional(),
+  sourceType: z.string().trim().nullable().optional(),
+  sourceId: z.string().trim().nullable().optional(),
+  idempotencyKey: z.string().trim().min(8).nullable().optional(),
+  updatedAt: z.string().optional()
+});
+
 export const monthlyExpenseMutationQuerySchema = z.object({
   scope: z.enum(["single", "series"]).default("single")
 });
 
 export const monthlyExpenseCompletionSchema = z.object({
   completedAt: timestampSchema.optional()
+});
+
+export const monthlyIncomeEntryCompletionSchema = z.object({
+  receivedAt: timestampSchema.optional()
 });
 
 export const monthlyExpenseCompletionQuerySchema = z.object({

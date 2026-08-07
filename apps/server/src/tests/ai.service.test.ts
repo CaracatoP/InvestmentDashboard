@@ -10,6 +10,7 @@ import { handleOperationalChatMessage } from "../ai/tools/ai-action-tools";
 import { addAiChatMessage, findActiveAiPendingAction, updateAiPendingAction } from "../repositories/ai.repository";
 import { resetSettingsRecord } from "../repositories/investment.repository";
 import { listDividends, listOperations } from "../repositories/investment.repository";
+import { listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
 import { getSettings } from "../services/portfolio.service";
 
@@ -233,6 +234,37 @@ test("monthly income does not invent description fields", async () => {
   assert.equal(action?.extractedFields.month, 8);
   assert.equal(action?.extractedFields.incomeInCents, 450000);
   assert.equal("description" in (action?.extractedFields ?? {}), false);
+});
+
+test("extra income creates income entry instead of updating monthly base income", async () => {
+  const sessionId = "ai-action-income-entry-extra";
+  const result = await handleOperationalChatMessage({ sessionId, message: "Recebi R$ 800,00 de freelance." });
+  const action = await findActiveAiPendingAction(sessionId);
+
+  assert.equal(result.handled, true);
+  assert.equal(result.response.responseType, "confirmation");
+  assert.equal(action?.toolName, "createIncomeEntry");
+  assert.equal(action?.extractedFields.amountInCents, 80000);
+  assert.equal(action?.extractedFields.category, "Freelance");
+  assert.equal(action?.extractedFields.status, "received");
+  assert.equal("incomeInCents" in (action?.extractedFields ?? {}), false);
+});
+
+test("chat confirmation executes monthly income entry registration", async () => {
+  const session = await createChatSession("Teste entrada IA");
+  assert.ok(session.id);
+
+  const first = await sendChatMessage(session.id, "Recebi R$ 321,00 de cashback.");
+  assert.equal(first.assistantMessage.structuredResponse?.responseType, "confirmation");
+
+  const confirmed = await sendChatMessage(session.id, "confirmo");
+  assert.equal(confirmed.assistantMessage.structuredResponse?.responseType, "success");
+  assert.equal(confirmed.assistantMessage.structuredResponse?.metadata.mutationKey, "monthlyPlanning.createIncomeEntry");
+
+  const entries = await listAllMonthlyIncomeEntries();
+  const entry = entries.find((item) => item.description === "Cashback" && item.amountInCents === 32100);
+  assert.equal(entry?.status, "received");
+  assert.equal(entry?.category, "Cashback");
 });
 
 test("operational chat prepares settings update with confirmation", async () => {

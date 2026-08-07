@@ -20,6 +20,7 @@ interface PlanningSmartSummaryProps {
 
 interface PlanningQuickActionsProps {
   onAddExpense: () => void;
+  onAddIncomeEntry: () => void;
 }
 
 function unavailable(hasConfiguredIncome: boolean, value: string) {
@@ -77,16 +78,16 @@ export function PlanningPrimarySummary({ overview, hasConfiguredIncome }: Planni
   return (
     <section className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <SummaryMetric
-        label="Renda total"
-        value={formatCents(overview.summary.totalIncomeWithDividendsInCents)}
-        detail={hasConfiguredIncome ? (overview.plan.includeDividendsAsIncome ? "Inclui dividendos do mes" : "Renda configurada") : "Configure a renda mensal"}
+        label="Renda base"
+        value={formatCents(overview.summary.baseIncomeInCents ?? overview.summary.incomeInCents)}
+        detail={hasConfiguredIncome ? "Salario/renda fixa do planejamento" : "Configure a renda mensal"}
       />
-      <SummaryMetric label="Gastos realizados" value={formatCents(overview.summary.completedInCents)} detail="Lancamentos ja realizados" />
-      <SummaryMetric label="Gastos previstos" value={formatCents(overview.summary.plannedExpensesInCents)} detail="Contas e recorrencias futuras" />
+      <SummaryMetric label="Entradas extras" value={formatCents(overview.summary.completedExtraIncomeInCents ?? 0)} detail="Recebidas no mes" />
+      <SummaryMetric label="Renda total" value={formatCents(overview.summary.currentTotalIncomeInCents ?? overview.summary.totalIncomeWithDividendsInCents)} detail={overview.plan.includeDividendsAsIncome ? "Inclui entradas e dividendos recebidos" : "Inclui entradas recebidas"} />
       <SummaryMetric
         label="Saldo apos previstos"
         value={unavailable(hasConfiguredIncome, formatCents(overview.summary.remainingIncomeAfterPlannedInCents))}
-        detail={hasConfiguredIncome ? "Renda menos gastos realizados e previstos" : "Depende da renda mensal"}
+        detail={hasConfiguredIncome ? "Renda total menos gastos realizados e previstos" : "Depende da renda mensal"}
       />
     </section>
   );
@@ -179,13 +180,17 @@ export function PlanningSmartSummary({ alerts, insights, hasConfiguredIncome }: 
   );
 }
 
-export function PlanningQuickActions({ onAddExpense }: PlanningQuickActionsProps) {
+export function PlanningQuickActions({ onAddExpense, onAddIncomeEntry }: PlanningQuickActionsProps) {
   return (
     <section className="mb-4 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
         <button type="button" onClick={onAddExpense} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <Plus size={16} />
           Adicionar gasto
+        </button>
+        <button type="button" onClick={onAddIncomeEntry} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-4 text-sm font-medium text-accent transition hover:border-accent/70 hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          <Plus size={16} />
+          Nova entrada
         </button>
         <Link to="/planejamento-mensal/orcamento" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-line bg-elevated px-3 text-sm text-muted transition hover:border-accent/50 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <WalletCards size={16} />

@@ -13,6 +13,7 @@ const eventTypeOptions = [
   { value: "compra", label: "Compra" },
   { value: "venda", label: "Venda" },
   { value: "aporte", label: "Aporte" },
+  { value: "income", label: "Entrada" },
   { value: "dividendo", label: "Dividendo" },
   { value: "rendimento", label: "Rendimento" },
   { value: "rebalanceamento", label: "Rebalanceamento" },
@@ -65,6 +66,7 @@ function normalizeEventType(event: Movement) {
   if (label.includes("compra")) return "compra";
   if (label.includes("venda")) return "venda";
   if (label.includes("aporte") || label.includes("deposito")) return "aporte";
+  if (label.includes("entrada")) return "income";
   if (label.includes("dividendo")) return "dividendo";
   if (label.includes("rendimento")) return "rendimento";
   if (label.includes("rebalance")) return "rebalanceamento";

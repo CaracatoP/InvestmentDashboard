@@ -28,6 +28,25 @@ function compactExpense(expense: {
   };
 }
 
+function compactIncomeEntry(entry: {
+  description: string;
+  amountInCents: number;
+  date: string;
+  time?: string;
+  category: string;
+  status: string;
+  recurring?: boolean;
+}) {
+  return {
+    description: entry.description,
+    amountInCents: entry.amountInCents,
+    date: entry.date,
+    category: entry.category,
+    status: entry.status,
+    recurring: Boolean(entry.recurring)
+  };
+}
+
 export async function buildPlanningContext(year: number, month: number, categoryId?: string, focus: PlanningContextFocus = "overview") {
   const overview = await getMonthlyPlanningOverview(year, month);
   const category = categoryId ? overview.categories.find((item) => item.id === categoryId) ?? null : null;
@@ -35,6 +54,7 @@ export async function buildPlanningContext(year: number, month: number, category
   const largestExpenses = sortByAmountDesc(scopedExpenses).slice(0, focus === "expenses" ? 20 : 10).map(compactExpense);
   const recentExpenses = [...scopedExpenses].slice(0, focus === "expenses" ? 20 : 10).map(compactExpense);
   const recurringExpenses = scopedExpenses.filter((expense) => expense.recurring).slice(0, 15).map(compactExpense);
+  const recentIncomeEntries = [...overview.incomeEntries].slice(0, focus === "expenses" ? 20 : 10).map(compactIncomeEntry);
   const categoryEvolution = categoryId
     ? overview.categoryEvolution.find((item) => item.categoryId === categoryId) ?? null
     : overview.categoryEvolution.map((item) => ({
@@ -63,13 +83,23 @@ export async function buildPlanningContext(year: number, month: number, category
     alerts: overview.alerts.slice(0, 5),
     insights: overview.insights.slice(0, 5),
     comparisons: overview.comparisons.slice(0, focus === "compare" ? 12 : 6),
-    investmentSummary: overview.investmentSummary
+    investmentSummary: overview.investmentSummary,
+    income: {
+      baseIncomeInCents: overview.summary.baseIncomeInCents,
+      completedExtraIncomeInCents: overview.summary.completedExtraIncomeInCents,
+      plannedExtraIncomeInCents: overview.summary.plannedExtraIncomeInCents,
+      dividendIncomeInCents: overview.summary.dividendIncomeInCents,
+      currentTotalIncomeInCents: overview.summary.currentTotalIncomeInCents,
+      projectedTotalIncomeInCents: overview.summary.projectedTotalIncomeInCents
+    }
   };
 
   if (focus === "payment_methods") {
     return filterSensitiveData({
       ...baseContext,
       paymentMethodStats: overview.paymentMethodStats.slice(0, 10),
+      incomeCategoryStats: overview.incomeCategoryStats.slice(0, 10),
+      recentIncomeEntries,
       recentExpenses,
       largestExpenses
     });
@@ -79,6 +109,7 @@ export async function buildPlanningContext(year: number, month: number, category
     return filterSensitiveData({
       ...baseContext,
       recurringExpenses,
+      recurringIncomeEntries: recentIncomeEntries.filter((entry) => entry.recurring),
       recurringTotalInCents: recurringExpenses.reduce((total, expense) => total + expense.amountInCents, 0)
     });
   }
@@ -87,6 +118,8 @@ export async function buildPlanningContext(year: number, month: number, category
     return filterSensitiveData({
       ...baseContext,
       categories,
+      incomeCategoryStats: overview.incomeCategoryStats.slice(0, 10),
+      recentIncomeEntries,
       recentExpenses,
       largestExpenses,
       paymentMethodStats: overview.paymentMethodStats.slice(0, 8)
@@ -97,6 +130,7 @@ export async function buildPlanningContext(year: number, month: number, category
     return filterSensitiveData({
       ...baseContext,
       selectedCategory: category,
+      recentIncomeEntries,
       recentExpenses,
       largestExpenses,
       categoryEvolution
@@ -106,6 +140,8 @@ export async function buildPlanningContext(year: number, month: number, category
   return filterSensitiveData({
     ...baseContext,
     categories,
+    incomeCategoryStats: overview.incomeCategoryStats.slice(0, 10),
+    recentIncomeEntries,
     largestExpenses,
     paymentMethodStats: overview.paymentMethodStats.slice(0, 8),
     categoryEvolution

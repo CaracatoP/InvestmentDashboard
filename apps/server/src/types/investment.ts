@@ -213,6 +213,7 @@ export interface SettingsRecord {
 
 export type MonthlyBudgetType = "percentage" | "fixed";
 export type MonthlyExpenseStatus = "completed" | "planned";
+export type MonthlyIncomeEntryStatus = "received" | "planned" | "cancelled";
 export type MonthlyExpenseType = "single" | "recurring";
 export type MonthlyRecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "annual" | "custom";
 export type MonthlyExpenseAllocationKind = "expense" | "investment_contribution" | "cash_box_contribution";
@@ -294,6 +295,35 @@ export interface MonthlyExpenseRecord {
   allocationKind?: MonthlyExpenseAllocationKind;
   integration?: MonthlyExpenseIntegrationRecord | null;
   completedAt?: string | null;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+}
+
+export interface MonthlyIncomeEntryRecord {
+  id?: string;
+  planId: string;
+  description: string;
+  amountInCents: number;
+  category: string;
+  date: string;
+  time: string;
+  status: MonthlyIncomeEntryStatus;
+  incomeType: MonthlyExpenseType;
+  recurring: boolean;
+  recurrenceId?: string | null;
+  recurrenceSourceId?: string | null;
+  recurrenceFrequency?: MonthlyRecurrenceFrequency | null;
+  recurrenceInterval?: number | null;
+  recurrenceDayOfMonth?: number | null;
+  recurrenceStartDate?: string | null;
+  recurrenceEndDate?: string | null;
+  recurrenceOriginalDate?: string | null;
+  recurrenceCancelled?: boolean;
+  receivedAt?: string | null;
+  note?: string;
+  sourceType?: "manual" | "dividend" | string | null;
+  sourceId?: string | null;
+  idempotencyKey?: string | null;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }

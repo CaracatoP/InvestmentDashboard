@@ -2,17 +2,27 @@ import { randomUUID } from "crypto";
 import {
   createMonthlyExpense,
   createMonthlyExpenseIfMissing,
+  createMonthlyIncomeEntry,
+  createMonthlyIncomeEntryIfMissing,
   deleteMonthlyExpense,
   deleteMonthlyExpensesByRecurrenceId,
+  deleteMonthlyIncomeEntriesByRecurrenceId,
+  deleteMonthlyIncomeEntry,
   findMonthlyExpenseById,
   findMonthlyExpenseByIdempotencyKey,
+  findMonthlyIncomeEntryById,
+  findMonthlyIncomeEntryByIdempotencyKey,
   findMonthlyPlanById,
   findMonthlyPlanByMonth,
+  listAllMonthlyIncomeEntries,
   listAllMonthlyExpenses,
+  listMonthlyIncomeEntries,
   listMonthlyExpenses,
   listMonthlyPlans,
   updateMonthlyExpense,
   updateMonthlyExpensesByRecurrenceId,
+  updateMonthlyIncomeEntriesByRecurrenceId,
+  updateMonthlyIncomeEntry,
   updateMonthlyPlan,
   upsertMonthlyPlan
 } from "../repositories/monthly-planning.repository";
@@ -42,6 +52,8 @@ import type {
   MonthlyExpenseStatus,
   MonthlyExpenseType,
   MonthlyFinancialGoalRecord,
+  MonthlyIncomeEntryRecord,
+  MonthlyIncomeEntryStatus,
   MonthlyPlanCategoryRecord,
   MonthlyPlanRecord,
   OperationRecord
@@ -64,7 +76,13 @@ type MonthlyExpenseInput = Omit<MonthlyExpenseRecord, "id" | "status" | "expense
 type MonthlyExpenseCreateInput = Omit<MonthlyExpenseInput, "planId">;
 type MonthlyExpensePatchInput = Partial<MonthlyExpenseInput>;
 type MonthlyExpenseCompletionInput = Pick<MonthlyExpenseRecord, "completedAt">;
+type MonthlyIncomeEntryInput = Omit<MonthlyIncomeEntryRecord, "id" | "status" | "incomeType" | "recurring"> &
+  Partial<Pick<MonthlyIncomeEntryRecord, "status" | "incomeType" | "recurring">>;
+type MonthlyIncomeEntryCreateInput = Omit<MonthlyIncomeEntryInput, "planId">;
+type MonthlyIncomeEntryPatchInput = Partial<MonthlyIncomeEntryInput>;
+type MonthlyIncomeEntryCompletionInput = Pick<MonthlyIncomeEntryRecord, "receivedAt">;
 type NormalizeExpenseOptions = { allowFutureCompletion?: boolean; defaultCompletedAt?: string | null };
+type NormalizeIncomeEntryOptions = { allowFutureReceived?: boolean; defaultReceivedAt?: string | null };
 type ExpenseIntegrationInput = NonNullable<MonthlyExpenseRecord["integration"]>;
 
 export interface MonthlyExpenseCompletionResult {
@@ -76,6 +94,19 @@ export interface MonthlyExpenseCompletionResult {
     balanceInCents: number;
   };
   alreadyCompleted: boolean;
+  message: string;
+}
+
+export interface MonthlyIncomeEntryCompletionResult {
+  incomeEntry: MonthlyIncomeEntryRecord;
+  overview: MonthlyPlanningOverview;
+  summary: {
+    receivedExtraIncomeInCents: number;
+    plannedExtraIncomeInCents: number;
+    currentBalanceInCents: number;
+    projectedBalanceInCents: number;
+  };
+  alreadyReceived: boolean;
   message: string;
 }
 
@@ -110,8 +141,15 @@ export interface MonthlyPlanningOverview {
   plan: MonthlyPlanRecord;
   categories: MonthlyCategorySummary[];
   expenses: MonthlyExpenseRecord[];
+  incomeEntries: MonthlyIncomeEntryRecord[];
   summary: {
     incomeInCents: number;
+    baseIncomeInCents: number;
+    completedExtraIncomeInCents: number;
+    plannedExtraIncomeInCents: number;
+    dividendIncomeInCents: number;
+    currentTotalIncomeInCents: number;
+    projectedTotalIncomeInCents: number;
     totalPlannedInCents: number;
     completedInCents: number;
     plannedExpensesInCents: number;
@@ -147,6 +185,7 @@ export interface MonthlyPlanningOverview {
   insights: string[];
   comparisons: Array<{ label: string; currentInCents: number; previousInCents: number; variationPercent: number; valueType?: "money" | "percent" }>;
   paymentMethodStats: Array<{ paymentMethod: string; amountInCents: number; count: number }>;
+  incomeCategoryStats: Array<{ category: string; amountInCents: number; plannedInCents: number; receivedCount: number; plannedCount: number }>;
   calendarDays: Array<{ date: string; events: Array<{ id: string; type: string; label: string; amountInCents: number; status?: string }> }>;
   categoryEvolution: Array<{
     categoryId: string;
@@ -192,6 +231,8 @@ const paymentMethodLabels: Record<string, string> = {
 };
 
 const monthlyExpenseCompletionLocks = new Map<string, Promise<MonthlyExpenseCompletionResult>>();
+const monthlyIncomeEntryCompletionLocks = new Map<string, Promise<MonthlyIncomeEntryCompletionResult>>();
+const monthlyIncomeEntryMutationLocks = new Map<string, Promise<MonthlyIncomeEntryRecord>>();
 const integratedExpenseMutationLocks = new Map<string, Promise<MonthlyExpenseRecord>>();
 
 export function getLocalTimestampWithOffset(date = new Date()) {
@@ -341,6 +382,37 @@ export function determineExpenseStatus(
   return requestedStatus ?? "completed";
 }
 
+export function isFutureIncomeEntry(date: string, time: string, now = new Date()) {
+  return parseLocalExpenseDate(date, time).getTime() > now.getTime();
+}
+
+function resolveReceivedAt(
+  date: string,
+  time: string,
+  status: MonthlyIncomeEntryStatus,
+  requestedReceivedAt: string | null | undefined,
+  existing?: MonthlyIncomeEntryRecord | null,
+  options: NormalizeIncomeEntryOptions = {}
+) {
+  if (status !== "received") return null;
+  if (requestedReceivedAt) return normalizeTimestampWithOffset(requestedReceivedAt);
+  if (existing?.status === "received") return existing.receivedAt ?? null;
+  return options.defaultReceivedAt ?? occurrenceTimestamp(date, time);
+}
+
+export function determineIncomeEntryStatus(
+  date: string,
+  time: string,
+  requestedStatus?: MonthlyIncomeEntryStatus,
+  now = new Date(),
+  options: { allowFutureReceived?: boolean; receivedAt?: string | null; wasReceived?: boolean } = {}
+): MonthlyIncomeEntryStatus {
+  if (requestedStatus === "cancelled") return "cancelled";
+  if (requestedStatus === "received" && (options.allowFutureReceived || options.wasReceived || Boolean(options.receivedAt))) return "received";
+  if (isFutureIncomeEntry(date, time, now)) return "planned";
+  return requestedStatus ?? "received";
+}
+
 export function calculateCategoryLimit(category: Pick<MonthlyPlanCategoryRecord, "budgetType" | "percentage" | "fixedAmountInCents">, incomeInCents: number) {
   if (category.budgetType === "percentage") {
     return Math.round(incomeInCents * (category.percentage / 100));
@@ -461,6 +533,8 @@ type MonthlyCalculationContext = {
   dividends?: DividendRecord[];
   cashBoxes?: CashBoxRecord[];
   allExpenses?: MonthlyExpenseRecord[];
+  incomeEntries?: MonthlyIncomeEntryRecord[];
+  allIncomeEntries?: MonthlyIncomeEntryRecord[];
   dashboard?: Awaited<ReturnType<typeof getDashboard>>;
 };
 
@@ -476,6 +550,29 @@ function buildPaymentMethodStats(expenses: MonthlyExpenseRecord[]) {
   }
 
   return Array.from(totals.values()).sort((left, right) => right.amountInCents - left.amountInCents);
+}
+
+function incomeEntryReferenceDate(entry: Pick<MonthlyIncomeEntryRecord, "date" | "receivedAt">) {
+  return trimNullable(entry.receivedAt)?.slice(0, 10) ?? entry.date;
+}
+
+function buildIncomeCategoryStats(incomeEntries: MonthlyIncomeEntryRecord[]) {
+  const totals = new Map<string, { category: string; amountInCents: number; plannedInCents: number; receivedCount: number; plannedCount: number }>();
+
+  for (const entry of incomeEntries) {
+    const category = normalizeIncomeCategory(entry.category);
+    const current = totals.get(category) ?? { category, amountInCents: 0, plannedInCents: 0, receivedCount: 0, plannedCount: 0 };
+    if (entry.status === "received") {
+      current.amountInCents += entry.amountInCents;
+      current.receivedCount += 1;
+    } else if (entry.status === "planned") {
+      current.plannedInCents += entry.amountInCents;
+      current.plannedCount += 1;
+    }
+    totals.set(category, current);
+  }
+
+  return Array.from(totals.values()).sort((left, right) => (right.amountInCents + right.plannedInCents) - (left.amountInCents + left.plannedInCents));
 }
 
 function variationPercent(current: number, previous: number) {
@@ -582,6 +679,7 @@ function buildCalendarDays(
   year: number,
   month: number,
   expenses: MonthlyExpenseRecord[],
+  incomeEntries: MonthlyIncomeEntryRecord[],
   contributions: ContributionRecord[],
   dividends: DividendRecord[],
   incomeInCents: number
@@ -606,6 +704,15 @@ function buildCalendarDays(
             ? "recurring-expense"
             : "expense";
     addEvent(expense.date, { id: expense.id ?? `${expense.date}-${expense.description}`, type: expenseEventType, label: expense.description, amountInCents: expense.amountInCents, status: expense.status });
+  }
+  for (const entry of incomeEntries) {
+    addEvent(entry.date, {
+      id: entry.id ?? `${entry.date}-${entry.description}`,
+      type: entry.recurring ? "recurring-income" : "income",
+      label: entry.description,
+      amountInCents: entry.amountInCents,
+      status: entry.status
+    });
   }
   for (const contribution of contributions.filter((item) => isDateInMonth(item.date, year, month))) {
     addEvent(dateKey(contribution.date), { id: contribution.id ?? String(contribution.date), type: "contribution", label: contribution.description || "Aporte", amountInCents: toCents(contributionAmount(contribution)), status: "completed" });
@@ -757,6 +864,55 @@ function normalizeExpense(input: MonthlyExpenseInput, existing?: MonthlyExpenseR
   };
 }
 
+function normalizeIncomeCategory(category?: string | null) {
+  const value = category?.trim();
+  return value || "Outros";
+}
+
+function normalizeIncomeEntry(input: MonthlyIncomeEntryInput, existing?: MonthlyIncomeEntryRecord | null, options: NormalizeIncomeEntryOptions = {}): Omit<MonthlyIncomeEntryRecord, "id"> {
+  const timestamp = getLocalTimestampWithOffset();
+  const date = input.date;
+  const time = input.time;
+  const status = determineIncomeEntryStatus(date, time, input.status, new Date(), {
+    allowFutureReceived: options.allowFutureReceived,
+    receivedAt: input.receivedAt,
+    wasReceived: existing?.status === "received"
+  });
+  const receivedAt = resolveReceivedAt(date, time, status, input.receivedAt, existing, options);
+  const incomeType: MonthlyExpenseType = input.recurring ? "recurring" : input.incomeType ?? "single";
+  const recurring = incomeType === "recurring" || Boolean(input.recurring);
+  const recurrenceFrequency = recurring ? input.recurrenceFrequency ?? existing?.recurrenceFrequency ?? "monthly" : null;
+  const recurrenceDayOfMonth = recurring ? input.recurrenceDayOfMonth ?? existing?.recurrenceDayOfMonth ?? Number(date.slice(8, 10)) : null;
+  const recurrenceStartDate = recurring ? input.recurrenceStartDate ?? existing?.recurrenceStartDate ?? date : null;
+  const recurrenceEndDate = recurring ? input.recurrenceEndDate ?? existing?.recurrenceEndDate ?? null : null;
+  const recurrenceId = recurring ? input.recurrenceId ?? existing?.recurrenceId ?? randomUUID() : null;
+
+  return {
+    ...input,
+    description: input.description.trim(),
+    category: normalizeIncomeCategory(input.category),
+    note: input.note ?? "",
+    incomeType,
+    recurring,
+    recurrenceId,
+    recurrenceSourceId: input.recurrenceSourceId ?? existing?.recurrenceSourceId ?? null,
+    recurrenceFrequency,
+    recurrenceInterval: recurring ? input.recurrenceInterval ?? existing?.recurrenceInterval ?? 1 : null,
+    recurrenceDayOfMonth,
+    recurrenceStartDate,
+    recurrenceEndDate,
+    recurrenceOriginalDate: input.recurrenceOriginalDate ?? existing?.recurrenceOriginalDate ?? date,
+    recurrenceCancelled: input.recurrenceCancelled ?? existing?.recurrenceCancelled ?? false,
+    status,
+    receivedAt,
+    sourceType: input.sourceType ?? existing?.sourceType ?? "manual",
+    sourceId: input.sourceId ?? existing?.sourceId ?? null,
+    idempotencyKey: input.idempotencyKey ?? existing?.idempotencyKey ?? null,
+    createdAt: existing?.createdAt ?? input.createdAt ?? timestamp,
+    updatedAt: timestamp
+  };
+}
+
 function normalizeExpenseIntegration(
   category: MonthlyPlanCategoryRecord | undefined,
   amountInCents: number,
@@ -864,13 +1020,39 @@ function isRecurringTemplate(expense: MonthlyExpenseRecord) {
   return expense.recurring && expense.recurrenceId && !expense.recurrenceSourceId;
 }
 
+function isRecurringIncomeEntryTemplate(entry: MonthlyIncomeEntryRecord) {
+  return entry.recurring && entry.recurrenceId && !entry.recurrenceSourceId;
+}
+
 function stripExpenseIdentityForClone(expense: MonthlyExpenseRecord) {
   const source = expense as MonthlyExpenseRecord & { _id?: unknown };
   const { id: _ignoredId, _id: _ignoredMongoId, ...clone } = source;
   return clone;
 }
 
+function stripIncomeEntryIdentityForClone(entry: MonthlyIncomeEntryRecord) {
+  const source = entry as MonthlyIncomeEntryRecord & { _id?: unknown };
+  const { id: _ignoredId, _id: _ignoredMongoId, ...clone } = source;
+  return clone;
+}
+
 function buildMonthlyOccurrenceDate(template: MonthlyExpenseRecord, year: number, month: number) {
+  const startDate = template.recurrenceStartDate ?? template.date;
+  const day = template.recurrenceDayOfMonth ?? Number(template.date.slice(8, 10));
+  const distance = monthDistance(startDate, year, month);
+  if (distance < 0) return null;
+
+  const frequency = template.recurrenceFrequency ?? "monthly";
+  const interval = Math.max(template.recurrenceInterval ?? 1, 1);
+  if (frequency === "annual" && (month !== Number(startDate.slice(5, 7)) || distance % 12 !== 0)) return null;
+  if (frequency === "monthly" && distance % interval !== 0) return null;
+  if (frequency === "custom" && distance % interval !== 0) return null;
+  if (frequency === "weekly" || frequency === "biweekly") return null;
+
+  return buildDate(year, month, day);
+}
+
+function buildMonthlyIncomeOccurrenceDate(template: MonthlyIncomeEntryRecord, year: number, month: number) {
   const startDate = template.recurrenceStartDate ?? template.date;
   const day = template.recurrenceDayOfMonth ?? Number(template.date.slice(8, 10));
   const distance = monthDistance(startDate, year, month);
@@ -909,9 +1091,45 @@ function buildWeeklyOccurrenceDates(template: MonthlyExpenseRecord, year: number
   return dates;
 }
 
+function buildWeeklyIncomeOccurrenceDates(template: MonthlyIncomeEntryRecord, year: number, month: number) {
+  const frequency = template.recurrenceFrequency ?? "monthly";
+  if (frequency !== "weekly" && frequency !== "biweekly") return [];
+
+  const start = parseLocalExpenseDate(template.recurrenceStartDate ?? template.date, template.time);
+  const intervalDays = frequency === "biweekly" ? 14 : 7;
+  const targetStart = new Date(year, month - 1, 1);
+  const targetEnd = new Date(year, month, 0, 23, 59, 59, 999);
+  const dates: string[] = [];
+  const cursor = new Date(start);
+
+  while (cursor < targetStart) {
+    cursor.setDate(cursor.getDate() + intervalDays);
+  }
+
+  while (cursor <= targetEnd) {
+    dates.push(dateKey(cursor));
+    cursor.setDate(cursor.getDate() + intervalDays);
+  }
+
+  return dates;
+}
+
 function buildOccurrenceDates(template: MonthlyExpenseRecord, year: number, month: number) {
   const dates = buildWeeklyOccurrenceDates(template, year, month);
   const monthlyDate = buildMonthlyOccurrenceDate(template, year, month);
+  if (monthlyDate) dates.push(monthlyDate);
+
+  const endDate = template.recurrenceEndDate;
+  return Array.from(new Set(dates)).filter((date) => {
+    if (date < (template.recurrenceStartDate ?? template.date)) return false;
+    if (endDate && date > endDate) return false;
+    return isDateInMonth(date, year, month);
+  });
+}
+
+function buildIncomeOccurrenceDates(template: MonthlyIncomeEntryRecord, year: number, month: number) {
+  const dates = buildWeeklyIncomeOccurrenceDates(template, year, month);
+  const monthlyDate = buildMonthlyIncomeOccurrenceDate(template, year, month);
   if (monthlyDate) dates.push(monthlyDate);
 
   const endDate = template.recurrenceEndDate;
@@ -956,6 +1174,38 @@ function buildGeneratedExpense(template: MonthlyExpenseRecord, planId: string, d
         }
       : null,
     completedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+}
+
+function buildGeneratedIncomeEntry(template: MonthlyIncomeEntryRecord, planId: string, date: string): Omit<MonthlyIncomeEntryRecord, "id"> {
+  const timestamp = getLocalTimestampWithOffset();
+
+  return {
+    planId,
+    description: template.description,
+    amountInCents: template.amountInCents,
+    category: template.category,
+    date,
+    time: template.time,
+    status: "planned",
+    incomeType: "recurring",
+    recurring: true,
+    recurrenceId: template.recurrenceId ?? randomUUID(),
+    recurrenceSourceId: template.id ?? null,
+    recurrenceFrequency: template.recurrenceFrequency ?? "monthly",
+    recurrenceInterval: template.recurrenceInterval ?? 1,
+    recurrenceDayOfMonth: template.recurrenceDayOfMonth ?? Number(template.date.slice(8, 10)),
+    recurrenceStartDate: template.recurrenceStartDate ?? template.date,
+    recurrenceEndDate: template.recurrenceEndDate ?? null,
+    recurrenceOriginalDate: date,
+    recurrenceCancelled: false,
+    receivedAt: null,
+    note: template.note ?? "",
+    sourceType: template.sourceType ?? "manual",
+    sourceId: null,
+    idempotencyKey: null,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -1160,6 +1410,32 @@ async function ensureRecurringExpensesForMonth(plan: MonthlyPlanRecord, year: nu
   return created;
 }
 
+async function ensureRecurringIncomeEntriesForMonth(plan: MonthlyPlanRecord, year: number, month: number) {
+  if (!plan.id) return [];
+  const [allEntries, currentEntries] = await Promise.all([listAllMonthlyIncomeEntries(), listMonthlyIncomeEntries(plan.id)]);
+  const templates = allEntries.filter(isRecurringIncomeEntryTemplate);
+
+  const existingKeys = new Set(
+    currentEntries
+      .filter((entry) => entry.recurrenceId)
+      .map((entry) => `${entry.recurrenceId}-${entry.recurrenceOriginalDate ?? entry.date}`)
+  );
+  const created: MonthlyIncomeEntryRecord[] = [];
+
+  for (const template of templates) {
+    const occurrenceDates = buildIncomeOccurrenceDates(template, year, month);
+    for (const occurrenceDate of occurrenceDates) {
+      const key = `${template.recurrenceId}-${occurrenceDate}`;
+      if (existingKeys.has(key)) continue;
+      const { incomeEntry, created: wasCreated } = await createMonthlyIncomeEntryIfMissing(buildGeneratedIncomeEntry(template, plan.id, occurrenceDate));
+      existingKeys.add(key);
+      if (wasCreated) created.push(incomeEntry);
+    }
+  }
+
+  return created;
+}
+
 async function createHiddenRecurringTemplate(expense: MonthlyExpenseRecord) {
   if (!expense.recurrenceId || expense.recurrenceSourceId) return null;
 
@@ -1175,11 +1451,37 @@ async function createHiddenRecurringTemplate(expense: MonthlyExpenseRecord) {
   });
 }
 
+async function createHiddenRecurringIncomeEntryTemplate(entry: MonthlyIncomeEntryRecord) {
+  if (!entry.recurrenceId || entry.recurrenceSourceId) return null;
+
+  const timestamp = getLocalTimestampWithOffset();
+  return createMonthlyIncomeEntry({
+    ...stripIncomeEntryIdentityForClone(entry),
+    recurrenceSourceId: null,
+    recurrenceCancelled: true,
+    status: "planned",
+    receivedAt: null,
+    idempotencyKey: null,
+    sourceId: null,
+    createdAt: entry.createdAt ?? timestamp,
+    updatedAt: timestamp
+  });
+}
+
 function buildCompletionSummary(overview: MonthlyPlanningOverview) {
   return {
     completedExpensesInCents: overview.summary.completedInCents,
     plannedExpensesInCents: overview.summary.plannedExpensesInCents,
     balanceInCents: overview.summary.remainingIncomeInCents
+  };
+}
+
+function buildIncomeEntryCompletionSummary(overview: MonthlyPlanningOverview) {
+  return {
+    receivedExtraIncomeInCents: overview.summary.completedExtraIncomeInCents,
+    plannedExtraIncomeInCents: overview.summary.plannedExtraIncomeInCents,
+    currentBalanceInCents: overview.summary.remainingIncomeInCents,
+    projectedBalanceInCents: overview.summary.remainingIncomeAfterPlannedInCents
   };
 }
 
@@ -1204,6 +1506,27 @@ async function buildExpenseCompletionResult(
   };
 }
 
+async function buildIncomeEntryCompletionResult(
+  incomeEntry: MonthlyIncomeEntryRecord,
+  comparisonRange: number,
+  alreadyReceived: boolean,
+  message: string
+): Promise<MonthlyIncomeEntryCompletionResult> {
+  const plan = await findMonthlyPlanById(incomeEntry.planId);
+  if (!plan) throw notFound("Monthly plan not found");
+
+  const overview = await getMonthlyPlanningOverview(plan.year, plan.month, comparisonRange);
+  const updatedIncomeEntry = overview.incomeEntries.find((item) => item.id === incomeEntry.id) ?? incomeEntry;
+
+  return {
+    incomeEntry: updatedIncomeEntry,
+    overview,
+    summary: buildIncomeEntryCompletionSummary(overview),
+    alreadyReceived,
+    message
+  };
+}
+
 export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: MonthlyExpenseRecord[], context: MonthlyCalculationContext = {}): MonthlyPlanningOverview {
   const year = context.year ?? plan.year;
   const month = context.month ?? plan.month;
@@ -1211,12 +1534,17 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
   const dividends = context.dividends ?? [];
   const dashboard = context.dashboard;
   const activeExpenses = expenses.filter((expense) => !expense.recurrenceCancelled);
+  const activeIncomeEntries = (context.incomeEntries ?? []).filter((entry) => !entry.recurrenceCancelled && entry.status !== "cancelled");
   const monthlyDividendsInCents = sum(dividends.filter((dividend) => isReceivedDividend(dividend) && isDateInMonth(dividend.paymentDate, year, month)).map((dividend) => toCents(dividendAmount(dividend))));
   const manualMonthlyContributionsInCents = sum(contributions.filter((contribution) => isDateInMonth(contribution.date, year, month)).map((contribution) => toCents(contributionAmount(contribution))));
   const monthlyIntegratedAssetContributionsInCents = sum(activeExpenses.filter((expense) => isCompletedAssetContributionExpense(expense, year, month)).map((expense) => expense.amountInCents));
   const monthlyIntegratedCashBoxContributionsInCents = sum(activeExpenses.filter((expense) => isCompletedCashBoxContributionExpense(expense, year, month)).map((expense) => expense.amountInCents));
   const monthlyContributionsInCents = manualMonthlyContributionsInCents + monthlyIntegratedAssetContributionsInCents;
-  const totalIncomeWithDividendsInCents = plan.incomeInCents + (plan.includeDividendsAsIncome ? monthlyDividendsInCents : 0);
+  const completedExtraIncomeInCents = sum(activeIncomeEntries.filter((entry) => entry.status === "received" && isDateInMonth(incomeEntryReferenceDate(entry), year, month)).map((entry) => entry.amountInCents));
+  const plannedExtraIncomeInCents = sum(activeIncomeEntries.filter((entry) => entry.status === "planned" && isDateInMonth(entry.date, year, month)).map((entry) => entry.amountInCents));
+  const dividendIncomeInCents = plan.includeDividendsAsIncome ? monthlyDividendsInCents : 0;
+  const totalIncomeWithDividendsInCents = plan.incomeInCents + completedExtraIncomeInCents + dividendIncomeInCents;
+  const projectedTotalIncomeInCents = totalIncomeWithDividendsInCents + plannedExtraIncomeInCents;
   const monthlyContributionGoalInCents = plan.monthlyContributionGoalInCents ?? 0;
   const goalsReserveInCents = sum((plan.goals ?? []).filter((goal) => goal.active).map((goal) => goal.monthlyContributionInCents ?? 0));
   const enrichedPlan = {
@@ -1266,7 +1594,7 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
   if (plan.incomeInCents > 0 && totalPlannedInCents > plan.incomeInCents) {
     warnings.push("O total planejado em reais ultrapassa a renda mensal.");
   }
-  const remainingIncomeAfterPlannedInCents = totalIncomeWithDividendsInCents - completedInCents - plannedExpensesInCents;
+  const remainingIncomeAfterPlannedInCents = projectedTotalIncomeInCents - completedInCents - plannedExpensesInCents;
   const availableToInvestInCents = Math.max(remainingIncomeAfterPlannedInCents - goalsReserveInCents, 0);
   const now = new Date();
   const selectedMonthDays = daysInMonth(year, month);
@@ -1277,8 +1605,15 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
     plan: enrichedPlan,
     categories,
     expenses: [...activeExpenses].sort((left, right) => `${right.date}T${right.time}`.localeCompare(`${left.date}T${left.time}`)),
+    incomeEntries: [...activeIncomeEntries].sort((left, right) => `${right.date}T${right.time}`.localeCompare(`${left.date}T${left.time}`)),
     summary: {
       incomeInCents: plan.incomeInCents,
+      baseIncomeInCents: plan.incomeInCents,
+      completedExtraIncomeInCents,
+      plannedExtraIncomeInCents,
+      dividendIncomeInCents,
+      currentTotalIncomeInCents: totalIncomeWithDividendsInCents,
+      projectedTotalIncomeInCents,
       totalPlannedInCents,
       completedInCents,
       plannedExpensesInCents,
@@ -1314,7 +1649,8 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
     insights: [],
     comparisons: [],
     paymentMethodStats: buildPaymentMethodStats(activeExpenses),
-    calendarDays: buildCalendarDays(year, month, activeExpenses, contributions, dividends, plan.incomeInCents),
+    incomeCategoryStats: buildIncomeCategoryStats(activeIncomeEntries),
+    calendarDays: buildCalendarDays(year, month, activeExpenses, activeIncomeEntries, contributions, dividends, plan.incomeInCents),
     categoryEvolution: buildCategoryEvolution(plan, context, activeExpenses),
     investmentSummary: {
       totalWealthInCents: toCents(dashboard?.metrics.totalEquity ?? dashboard?.metrics.totalWealth ?? 0),
@@ -1359,24 +1695,32 @@ async function getPreviousOverview(year: number, month: number, range: number, c
   const target = shiftMonth(year, month, -Math.max(range, 1));
   const previousPlan = await findMonthlyPlanByMonth(target.year, target.month);
   if (!previousPlan?.id) return undefined;
-  const previousExpenses = await listMonthlyExpenses(previousPlan.id);
-  return calculateMonthlyPlanning(previousPlan, previousExpenses, { ...context, year: target.year, month: target.month });
+  const [previousExpenses, previousIncomeEntries] = await Promise.all([
+    listMonthlyExpenses(previousPlan.id),
+    listMonthlyIncomeEntries(previousPlan.id)
+  ]);
+  return calculateMonthlyPlanning(previousPlan, previousExpenses, { ...context, incomeEntries: previousIncomeEntries, year: target.year, month: target.month });
 }
 
 export async function getMonthlyPlanningOverview(year: number, month: number, comparisonRange = 1) {
   const plan = await getOrCreateMonthlyPlan(year, month);
-  await ensureRecurringExpensesForMonth(plan, year, month);
-  const [expenses, allExpenses, contributions, dividends, cashBoxes, dashboard] = await Promise.all([
+  await Promise.all([
+    ensureRecurringExpensesForMonth(plan, year, month),
+    ensureRecurringIncomeEntriesForMonth(plan, year, month)
+  ]);
+  const [expenses, incomeEntries, allExpenses, allIncomeEntries, contributions, dividends, cashBoxes, dashboard] = await Promise.all([
     plan.id ? listMonthlyExpenses(plan.id) : [],
+    plan.id ? listMonthlyIncomeEntries(plan.id) : [],
     listAllMonthlyExpenses(),
+    listAllMonthlyIncomeEntries(),
     listContributions(),
     listDividends(),
     listCashBoxes(),
     getDashboard()
   ]);
-  const context = { allExpenses, contributions, dividends, cashBoxes, dashboard };
+  const context = { allExpenses, allIncomeEntries, contributions, dividends, cashBoxes, dashboard };
   const previousOverview = await getPreviousOverview(year, month, comparisonRange, context);
-  return calculateMonthlyPlanning(plan, expenses, { ...context, previousOverview, year, month });
+  return calculateMonthlyPlanning(plan, expenses, { ...context, incomeEntries, previousOverview, year, month });
 }
 
 export async function saveMonthlyPlan(input: MonthlyPlanInput) {
@@ -1438,6 +1782,12 @@ async function resolvePlanAndCategory(planId: string, categoryId: string) {
   if (!category) throw badRequest("Expense category does not exist in this monthly plan");
 
   return { plan, category };
+}
+
+async function resolvePlanForIncomeEntry(planId: string) {
+  const plan = await findMonthlyPlanById(planId);
+  if (!plan) throw notFound("Monthly plan not found");
+  return plan;
 }
 
 export async function addMonthlyExpense(planId: string, input: MonthlyExpenseCreateInput) {
@@ -1504,6 +1854,33 @@ export async function addMonthlyExpense(planId: string, input: MonthlyExpenseCre
   return mutation;
 }
 
+export async function addMonthlyIncomeEntry(planId: string, input: MonthlyIncomeEntryCreateInput) {
+  await resolvePlanForIncomeEntry(planId);
+  const lockKey = trimNullable(input.idempotencyKey) ?? "";
+  const createWithIdempotency = async () => {
+    if (lockKey) {
+      const existingByKey = await findMonthlyIncomeEntryByIdempotencyKey(lockKey);
+      if (existingByKey) return existingByKey;
+    }
+
+    return createMonthlyIncomeEntry({
+      ...normalizeIncomeEntry({ ...input, planId }),
+      idempotencyKey: lockKey || input.idempotencyKey || null
+    });
+  };
+
+  if (!lockKey) return createWithIdempotency();
+
+  const existingLock = monthlyIncomeEntryMutationLocks.get(lockKey);
+  if (existingLock) return existingLock;
+
+  const mutation = createWithIdempotency().finally(() => {
+    monthlyIncomeEntryMutationLocks.delete(lockKey);
+  });
+  monthlyIncomeEntryMutationLocks.set(lockKey, mutation);
+  return mutation;
+}
+
 export async function editMonthlyExpense(id: string, input: MonthlyExpensePatchInput) {
   const existing = await findMonthlyExpenseById(id);
   if (!existing) throw notFound("Monthly expense not found");
@@ -1527,6 +1904,22 @@ export async function editMonthlyExpense(id: string, input: MonthlyExpensePatchI
     await syncIntegratedExpenseEntity(existing, synced).catch(() => undefined);
     throw error;
   }
+}
+
+export async function editMonthlyIncomeEntry(id: string, input: MonthlyIncomeEntryPatchInput) {
+  const existing = await findMonthlyIncomeEntryById(id);
+  if (!existing) throw notFound("Monthly income entry not found");
+  const hiddenTemplate = await createHiddenRecurringIncomeEntryTemplate(existing);
+  const merged = {
+    ...existing,
+    ...input,
+    recurrenceSourceId: hiddenTemplate?.id ?? existing.recurrenceSourceId ?? null
+  } as Omit<MonthlyIncomeEntryRecord, "id">;
+  await resolvePlanForIncomeEntry(merged.planId);
+  const normalized = normalizeIncomeEntry(merged, existing);
+  const updated = await updateMonthlyIncomeEntry(id, normalized);
+  if (!updated) throw notFound("Monthly income entry not found");
+  return updated;
 }
 
 export async function completeMonthlyExpense(id: string, input: MonthlyExpenseCompletionInput = {}, comparisonRange = 1) {
@@ -1582,6 +1975,45 @@ export async function completeMonthlyExpense(id: string, input: MonthlyExpenseCo
   return completion;
 }
 
+export async function completeMonthlyIncomeEntry(id: string, input: MonthlyIncomeEntryCompletionInput = {}, comparisonRange = 1) {
+  const existingLock = monthlyIncomeEntryCompletionLocks.get(id);
+  if (existingLock) return existingLock;
+
+  const completion = (async () => {
+    const existing = await findMonthlyIncomeEntryById(id);
+    if (!existing) throw notFound("Monthly income entry not found");
+    await resolvePlanForIncomeEntry(existing.planId);
+
+    const normalizedReceivedAt = input.receivedAt ? normalizeTimestampWithOffset(input.receivedAt) : null;
+    if (existing.status === "received" && (!normalizedReceivedAt || normalizedReceivedAt === (existing.receivedAt ?? null))) {
+      return buildIncomeEntryCompletionResult(existing, comparisonRange, true, "A entrada ja estava recebida.");
+    }
+
+    const normalized = normalizeIncomeEntry(
+      {
+        ...existing,
+        status: "received",
+        receivedAt: normalizedReceivedAt ?? undefined
+      },
+      existing,
+      {
+        allowFutureReceived: true,
+        defaultReceivedAt: normalizedReceivedAt ?? existing.receivedAt ?? getLocalTimestampWithOffset()
+      }
+    );
+    const updated = await updateMonthlyIncomeEntry(id, normalized);
+    if (!updated) throw notFound("Monthly income entry not found");
+
+    const message = existing.status === "received" ? "Data de recebimento atualizada." : "Entrada marcada como recebida.";
+    return buildIncomeEntryCompletionResult(updated, comparisonRange, false, message);
+  })().finally(() => {
+    monthlyIncomeEntryCompletionLocks.delete(id);
+  });
+
+  monthlyIncomeEntryCompletionLocks.set(id, completion);
+  return completion;
+}
+
 export async function editMonthlyExpenseSeries(id: string, input: MonthlyExpensePatchInput) {
   const existing = await findMonthlyExpenseById(id);
   if (!existing) throw notFound("Monthly expense not found");
@@ -1610,6 +2042,34 @@ export async function editMonthlyExpenseSeries(id: string, input: MonthlyExpense
   return findMonthlyExpenseById(id);
 }
 
+export async function editMonthlyIncomeEntrySeries(id: string, input: MonthlyIncomeEntryPatchInput) {
+  const existing = await findMonthlyIncomeEntryById(id);
+  if (!existing) throw notFound("Monthly income entry not found");
+  if (!existing.recurrenceId) return editMonthlyIncomeEntry(id, input);
+
+  const merged = { ...existing, ...input, recurrenceId: existing.recurrenceId, recurring: true, incomeType: "recurring" as const } as Omit<MonthlyIncomeEntryRecord, "id">;
+  const normalized = normalizeIncomeEntry(merged, existing);
+  await updateMonthlyIncomeEntriesByRecurrenceId(existing.recurrenceId, {
+    description: normalized.description,
+    amountInCents: normalized.amountInCents,
+    category: normalized.category,
+    time: normalized.time,
+    note: normalized.note,
+    incomeType: normalized.incomeType,
+    recurring: normalized.recurring,
+    recurrenceFrequency: normalized.recurrenceFrequency,
+    recurrenceInterval: normalized.recurrenceInterval,
+    recurrenceDayOfMonth: normalized.recurrenceDayOfMonth,
+    recurrenceStartDate: normalized.recurrenceStartDate,
+    recurrenceEndDate: normalized.recurrenceEndDate,
+    recurrenceCancelled: normalized.recurrenceCancelled,
+    sourceType: normalized.sourceType,
+    updatedAt: normalized.updatedAt
+  });
+
+  return findMonthlyIncomeEntryById(id);
+}
+
 export async function removeMonthlyExpense(id: string) {
   const existing = await findMonthlyExpenseById(id);
   if (!existing) throw notFound("Monthly expense not found");
@@ -1622,6 +2082,19 @@ export async function removeMonthlyExpense(id: string) {
   await removeLinkedEntityForExpense(existing);
   const deleted = await deleteMonthlyExpense(id);
   if (!deleted) throw notFound("Monthly expense not found");
+  return existing;
+}
+
+export async function removeMonthlyIncomeEntry(id: string) {
+  const existing = await findMonthlyIncomeEntryById(id);
+  if (!existing) throw notFound("Monthly income entry not found");
+  if (existing.recurrenceId) {
+    await updateMonthlyIncomeEntry(id, { recurrenceCancelled: true, status: "cancelled", updatedAt: getLocalTimestampWithOffset() });
+    return existing;
+  }
+
+  const deleted = await deleteMonthlyIncomeEntry(id);
+  if (!deleted) throw notFound("Monthly income entry not found");
   return existing;
 }
 
@@ -1639,4 +2112,17 @@ export async function removeMonthlyExpenseSeries(id: string) {
   const deleted = await deleteMonthlyExpensesByRecurrenceId(existing.recurrenceId);
   if (deleted === 0) throw notFound("Monthly expense not found");
   return seriesExpenses;
+}
+
+export async function removeMonthlyIncomeEntrySeries(id: string) {
+  const existing = await findMonthlyIncomeEntryById(id);
+  if (!existing) throw notFound("Monthly income entry not found");
+  if (!existing.recurrenceId) {
+    return [await removeMonthlyIncomeEntry(id)];
+  }
+
+  const seriesEntries = (await listAllMonthlyIncomeEntries()).filter((entry) => entry.recurrenceId === existing.recurrenceId);
+  const deleted = await deleteMonthlyIncomeEntriesByRecurrenceId(existing.recurrenceId);
+  if (deleted === 0) throw notFound("Monthly income entry not found");
+  return seriesEntries;
 }

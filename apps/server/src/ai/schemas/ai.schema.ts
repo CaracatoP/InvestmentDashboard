@@ -156,10 +156,12 @@ export type AiPendingActionStatus = (typeof aiPendingActionStatuses)[number];
 export type AiPendingActionRiskLevel = "low" | "medium" | "high";
 export type AiToolName =
   | "createMonthlyExpense"
+  | "createIncomeEntry"
   | "createContribution"
   | "updateMonthlyIncome"
   | "createFinancialGoal"
   | "markExpenseAsCompleted"
+  | "markIncomeEntryAsReceived"
   | "createInvestmentPurchase"
   | "createInvestmentSale"
   | "registerDividend"
