@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Edit2, Landmark, Percent, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { LazyAreaChart } from "../components/charts/LazyCharts";
 import { ChartCard } from "../components/ui/ChartCard";
-import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar } from "../components/ui/Management";
+import { ConfirmDelete, ManagementField, fieldClass, ManagementModal, ManagementTable, ManagementToolbar } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
@@ -13,22 +13,43 @@ import type { CdiStatusResponse } from "../types/investments";
 import type { CashBoxMovementRecord, CashBoxMovementType, CashBoxRecord } from "../types/management";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 
-const emptyCashBox: CashBoxRecord = {
-  name: "",
-  type: "",
-  currentBalance: 0,
-  cdiPercentage: 0,
-  createdAt: new Date().toISOString().slice(0, 10),
-  active: true,
-  movements: []
+type CashBoxFormState = {
+  name: string;
+  type: string;
+  currentBalance: string;
+  cdiPercentage: string;
+  createdAt: string;
+  active: boolean;
 };
 
-const emptyMovement: CashBoxMovementRecord = {
+type CashBoxMovementFormState = {
+  type: CashBoxMovementType;
+  value: string;
+  date: string;
+  description: string;
+};
+
+const emptyCashBoxForm: CashBoxFormState = {
+  name: "",
+  type: "",
+  currentBalance: "",
+  cdiPercentage: "",
+  createdAt: new Date().toISOString().slice(0, 10),
+  active: true
+};
+
+const emptyMovementForm: CashBoxMovementFormState = {
   type: "DEPOSITO",
-  value: 0,
+  value: "",
   date: new Date().toISOString().slice(0, 10),
   description: ""
 };
+
+function parseMoneyInput(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 interface CashBoxesOverview {
   totals: {
@@ -74,14 +95,16 @@ export function CashBoxesPage() {
   const [search, setSearch] = useState("");
   const [type, setType] = useState("Todos");
   const [editing, setEditing] = useState<CashBoxRecord | null>(null);
-  const [form, setForm] = useState<CashBoxRecord>(emptyCashBox);
-  const [movementForm, setMovementForm] = useState<CashBoxMovementRecord>(emptyMovement);
+  const [form, setForm] = useState<CashBoxFormState>(emptyCashBoxForm);
+  const [movementForm, setMovementForm] = useState<CashBoxMovementFormState>(emptyMovementForm);
   const [movementTarget, setMovementTarget] = useState<CashBoxRecord | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CashBoxRecord | null>(null);
   const [isRefreshingCdi, setIsRefreshingCdi] = useState(false);
   const [cdiFeedback, setCdiFeedback] = useState("");
+  const [formError, setFormError] = useState("");
+  const [movementError, setMovementError] = useState("");
 
   async function loadCashBoxes() {
     setOverview(await cashBoxRecordsApi.overview());
@@ -118,45 +141,101 @@ export function CashBoxesPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm(emptyCashBox);
+    setForm(emptyCashBoxForm);
+    setFormError("");
     setIsModalOpen(true);
   }
 
   function openEdit(cashBox: CashBoxRecord) {
     setEditing(cashBox);
-    setForm({ ...cashBox, createdAt: String(cashBox.createdAt).slice(0, 10), movements: cashBox.movements ?? [] });
+    setForm({
+      name: cashBox.name,
+      type: cashBox.type,
+      currentBalance: String(cashBox.currentBalance ?? ""),
+      cdiPercentage: cashBox.cdiPercentage ? String(cashBox.cdiPercentage) : "",
+      createdAt: String(cashBox.createdAt).slice(0, 10),
+      active: cashBox.active
+    });
+    setFormError("");
     setIsModalOpen(true);
   }
 
   function openMovement(cashBox: CashBoxRecord) {
     setMovementTarget(cashBox);
-    setMovementForm(emptyMovement);
+    setMovementForm(emptyMovementForm);
+    setMovementError("");
     setIsMovementModalOpen(true);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (editing?.id) await cashBoxRecordsApi.update(editing.id, form);
-    else await cashBoxRecordsApi.create(form);
+    const currentBalance = parseMoneyInput(form.currentBalance);
+    const cdiPercentage = parseMoneyInput(form.cdiPercentage);
+    const name = form.name.trim();
+    const cashBoxType = form.type.trim();
+
+    if (!name) {
+      setFormError("Informe o nome da caixinha.");
+      return;
+    }
+    if (!cashBoxType) {
+      setFormError("Informe o tipo da caixinha.");
+      return;
+    }
+    if (currentBalance === null || currentBalance < 0) {
+      setFormError("Informe um saldo atual valido para a caixinha.");
+      return;
+    }
+    if (!form.createdAt) {
+      setFormError("Selecione a data de criacao da caixinha.");
+      return;
+    }
+
+    const payload: CashBoxRecord = {
+      name,
+      type: cashBoxType,
+      currentBalance,
+      cdiPercentage: cdiPercentage === null ? 0 : Math.max(cdiPercentage, 0),
+      createdAt: form.createdAt,
+      active: form.active,
+      movements: editing?.movements ?? []
+    };
+
+    if (editing?.id) await cashBoxRecordsApi.update(editing.id, payload);
+    else await cashBoxRecordsApi.create(payload);
     setIsModalOpen(false);
     setEditing(null);
-    setForm(emptyCashBox);
+    setForm(emptyCashBoxForm);
+    setFormError("");
   }
 
   async function handleMovementSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!movementTarget?.id) return;
+    const value = parseMoneyInput(movementForm.value);
+    const description = movementForm.description.trim();
+
+    if (!value || value <= 0) {
+      setMovementError("Informe um valor maior que zero para a movimentacao.");
+      return;
+    }
+    if (!movementForm.date) {
+      setMovementError("Selecione a data da movimentacao.");
+      return;
+    }
+
     const payload = {
-      value: movementForm.value,
+      value,
       date: movementForm.date,
-      description: movementForm.description
+      description
     };
     const type = normalizeMovementType(movementForm.type);
     if (type === "withdrawal") await cashBoxRecordsApi.withdrawal(movementTarget.id, payload);
     else await cashBoxRecordsApi.contribution(movementTarget.id, payload);
     setIsMovementModalOpen(false);
     setMovementTarget(null);
-    setMovementForm(emptyMovement);
+    setMovementForm(emptyMovementForm);
+    setMovementError("");
   }
 
   async function confirmDelete() {
@@ -276,7 +355,18 @@ export function CashBoxesPage() {
       </section>
 
       <section className="mt-4">
-        <ManagementToolbar search={search} onSearchChange={setSearch} filter={type} onFilterChange={setType} filterOptions={types} onCreate={openCreate} />
+        <ManagementToolbar
+          search={search}
+          onSearchChange={setSearch}
+          filter={type}
+          onFilterChange={setType}
+          filterOptions={types}
+          onCreate={openCreate}
+          searchPlaceholder="Pesquise por nome ou tipo de caixinha"
+          searchLabel="Pesquisar caixinhas"
+          filterLabel="Filtrar caixinhas por tipo"
+          createLabel="Nova caixinha"
+        />
         <ManagementTable
           columns={["Nome", "Tipo", "Saldo", "CDI", "Criacao", "Status"]}
           rows={filtered}
@@ -351,29 +441,75 @@ export function CashBoxesPage() {
         />
       </section>
 
-      <ManagementModal title={editing ? "Editar caixinha" : "Nova caixinha"} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSubmit={handleSubmit}>
-        <input required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome" />
-        <input required value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value }))} className={fieldClass} placeholder="Tipo" />
-        <input type="number" min="0" step="0.01" value={form.currentBalance} onChange={(event) => setForm((current) => ({ ...current, currentBalance: Number(event.target.value) }))} className={fieldClass} placeholder="Saldo atual" />
-        <input type="number" min="0" step="0.01" value={form.cdiPercentage} onChange={(event) => setForm((current) => ({ ...current, cdiPercentage: Number(event.target.value) }))} className={fieldClass} placeholder="Percentual CDI" />
-        <input type="date" value={String(form.createdAt).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, createdAt: event.target.value }))} className={fieldClass} />
+      <ManagementModal
+        title={editing ? "Editar caixinha" : "Nova caixinha"}
+        description="Cadastre a reserva, o saldo atual e o percentual de CDI usado para acompanhar a rentabilidade."
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleSubmit}
+      >
+        <ManagementField label="Nome da caixinha" required helperText="Ex.: reserva de emergencia, viagens ou oportunidades.">
+          <input required autoFocus value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Ex.: Reserva de emergencia" />
+        </ManagementField>
+        <ManagementField label="Tipo" required helperText="Use o tipo para identificar rapidamente a finalidade desta reserva.">
+          <input required value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value }))} className={fieldClass} placeholder="Ex.: liquidez diaria" />
+        </ManagementField>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ManagementField label="Saldo atual" required helperText="Informe o saldo atual da caixinha no momento do cadastro.">
+            <input type="number" min="0" step="0.01" value={form.currentBalance} onChange={(event) => setForm((current) => ({ ...current, currentBalance: event.target.value }))} className={fieldClass} placeholder="Ex.: 2500,00" />
+          </ManagementField>
+          <ManagementField label="Percentual do CDI" optional helperText="Preencha somente se esta caixinha rende um percentual especifico do CDI.">
+            <input type="number" min="0" step="0.01" value={form.cdiPercentage} onChange={(event) => setForm((current) => ({ ...current, cdiPercentage: event.target.value }))} className={fieldClass} placeholder="Ex.: 100" />
+          </ManagementField>
+        </div>
+        <ManagementField label="Data de criacao" required>
+          <input type="date" value={String(form.createdAt).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, createdAt: event.target.value }))} className={fieldClass} />
+        </ManagementField>
         <label className="flex items-center justify-between gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
-          Ativa
+          Caixinha ativa
           <input type="checkbox" checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} className="h-4 w-4 accent-accent" />
         </label>
+        {formError ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{formError}</p> : null}
       </ManagementModal>
 
-      <ManagementModal title={`Movimentar ${movementTarget?.name ?? "caixinha"}`} isOpen={isMovementModalOpen} onClose={() => setIsMovementModalOpen(false)} onSubmit={handleMovementSubmit}>
-        <select value={movementForm.type} onChange={(event) => setMovementForm((current) => ({ ...current, type: event.target.value as CashBoxMovementType }))} className={fieldClass}>
-          <option value="DEPOSITO">Deposito</option>
-          <option value="RESGATE">Resgate</option>
-        </select>
-        <input type="number" min="0" step="0.01" value={movementForm.value} onChange={(event) => setMovementForm((current) => ({ ...current, value: Number(event.target.value) }))} className={fieldClass} placeholder="Valor" />
-        <input type="date" value={String(movementForm.date).slice(0, 10)} onChange={(event) => setMovementForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
-        <input value={movementForm.description ?? ""} onChange={(event) => setMovementForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
+      <ManagementModal
+        title={`Movimentar ${movementTarget?.name ?? "caixinha"}`}
+        description="Registre aportes ou resgates para manter o saldo e o historico da reserva atualizados."
+        isOpen={isMovementModalOpen}
+        onClose={() => setIsMovementModalOpen(false)}
+        onSubmit={handleMovementSubmit}
+      >
+        <ManagementField label="Tipo de movimentacao" required>
+          <select value={movementForm.type} onChange={(event) => setMovementForm((current) => ({ ...current, type: event.target.value as CashBoxMovementType }))} className={fieldClass}>
+            <option value="DEPOSITO">Aporte</option>
+            <option value="RESGATE">Resgate</option>
+          </select>
+        </ManagementField>
+        <ManagementField label="Valor da movimentacao" required helperText="Informe o valor do aporte ou do resgate.">
+          <input type="number" min="0" step="0.01" value={movementForm.value} onChange={(event) => setMovementForm((current) => ({ ...current, value: event.target.value }))} className={fieldClass} placeholder="Ex.: 300,00" />
+        </ManagementField>
+        <ManagementField label="Data da movimentacao" required>
+          <input type="date" value={String(movementForm.date).slice(0, 10)} onChange={(event) => setMovementForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
+        </ManagementField>
+        <ManagementField label="Descricao" optional helperText="Ex.: reforco da reserva, resgate para conta corrente ou ajuste manual.">
+          <input value={movementForm.description} onChange={(event) => setMovementForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descreva a movimentacao, se necessario" />
+        </ManagementField>
+        {movementError ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{movementError}</p> : null}
       </ManagementModal>
 
-      <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir caixinha ${deleteTarget?.name ?? ""}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />
+      <ConfirmDelete
+        isOpen={deleteTarget !== null}
+        title="Excluir caixinha?"
+        description="Voce esta prestes a remover esta caixinha e o historico associado a ela."
+        details={[
+          deleteTarget?.name ?? "Caixinha sem nome",
+          deleteTarget?.type ?? "Tipo nao informado",
+          deleteTarget ? formatCurrency(deleteTarget.currentBalance) : "-"
+        ]}
+        confirmLabel="Excluir caixinha"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

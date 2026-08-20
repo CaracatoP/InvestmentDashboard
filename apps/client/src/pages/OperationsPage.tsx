@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
+import { ConfirmDelete, ManagementField, fieldClass, areaClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { MoneyValue } from "../components/ui/ValueDisplay";
@@ -8,16 +8,37 @@ import { assetRecordsApi, operationRecordsApi } from "../services/api";
 import type { AssetRecord, OperationRecord, OperationType } from "../types/management";
 import { formatCurrency } from "../utils/formatters";
 
-const emptyOperation: OperationRecord = {
+type OperationFormState = {
+  assetTicker: string;
+  type: OperationType;
+  quantity: string;
+  price: string;
+  fees: string;
+  date: string;
+  notes: string;
+};
+
+const emptyOperationForm: OperationFormState = {
   assetTicker: "",
   type: "COMPRA",
-  quantity: 0,
-  price: 0,
-  fees: 0,
-  totalValue: 0,
+  quantity: "",
+  price: "",
+  fees: "",
   date: new Date().toISOString().slice(0, 10),
   notes: ""
 };
+
+function formatOperationNumber(value?: number | null, decimals = 6) {
+  if (!Number.isFinite(value)) return "";
+  const formatted = Number(value).toFixed(decimals);
+  return decimals > 2 ? formatted.replace(/\.?0+$/, "") : formatted;
+}
+
+function parsePositiveNumberInput(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function operationIdentity(operation: OperationRecord) {
   return operation.id ?? `${operation.type}-${operation.date}-${operation.assetTicker}`;
@@ -37,9 +58,10 @@ export function OperationsPage() {
   const [search, setSearch] = useState("");
   const [type, setType] = useState("Todos");
   const [editing, setEditing] = useState<OperationRecord | null>(null);
-  const [form, setForm] = useState<OperationRecord>(emptyOperation);
+  const [form, setForm] = useState<OperationFormState>(emptyOperationForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OperationRecord | null>(null);
+  const [formError, setFormError] = useState("");
 
   async function loadData() {
     const [operationData, assetData] = await Promise.all([operationRecordsApi.list(), assetRecordsApi.list()]);
@@ -65,24 +87,62 @@ export function OperationsPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm(emptyOperation);
+    setForm(emptyOperationForm);
+    setFormError("");
     setIsModalOpen(true);
   }
 
   function openEdit(operation: OperationRecord) {
     setEditing(operation);
-    setForm({ ...operation, date: String(operation.date).slice(0, 10) });
+    setForm({
+      assetTicker: operation.assetTicker ?? "",
+      type: operation.type,
+      quantity: formatOperationNumber(operation.quantity, 6),
+      price: formatOperationNumber(operation.price, 2),
+      fees: formatOperationNumber(operation.fees, 2),
+      date: String(operation.date).slice(0, 10),
+      notes: operation.notes ?? ""
+    });
+    setFormError("");
     setIsModalOpen(true);
   }
 
-  useEffect(() => {
-    setForm((current) => ({ ...current, totalValue: current.quantity * current.price }));
-  }, [form.quantity, form.price]);
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const quantity = parsePositiveNumberInput(form.quantity);
+    const price = parsePositiveNumberInput(form.price);
+    const fees = parsePositiveNumberInput(form.fees) ?? 0;
+    const assetTicker = form.assetTicker.trim().toUpperCase();
+
+    if (!form.date) {
+      setFormError("Selecione a data da operacao.");
+      return;
+    }
+    if (!assetTicker) {
+      setFormError("Selecione o ativo da operacao.");
+      return;
+    }
+    if (!quantity || quantity <= 0) {
+      setFormError("Informe uma quantidade maior que zero.");
+      return;
+    }
+    if (!price || price <= 0) {
+      setFormError("Informe o preco unitario da operacao.");
+      return;
+    }
+
     const asset = assets.find((item) => item.ticker === form.assetTicker);
-    const payload = { ...form, assetId: asset?.id, assetTicker: form.assetTicker?.toUpperCase(), totalValue: form.quantity * form.price };
+    const payload: OperationRecord = {
+      assetId: asset?.id,
+      assetTicker,
+      type: form.type,
+      quantity,
+      price,
+      fees: Math.max(fees, 0),
+      totalValue: quantity * price,
+      date: form.date,
+      notes: form.notes.trim()
+    };
     const saved = editing?.id
       ? await operationRecordsApi.update(editing.id, payload)
       : await operationRecordsApi.create(payload);
@@ -90,7 +150,8 @@ export function OperationsPage() {
     setOperations((current) => sortOperations([...current.filter((operation) => operationIdentity(operation) !== operationIdentity(saved)), saved]));
     setIsModalOpen(false);
     setEditing(null);
-    setForm(emptyOperation);
+    setForm(emptyOperationForm);
+    setFormError("");
   }
 
   async function confirmDelete() {
@@ -103,7 +164,18 @@ export function OperationsPage() {
   return (
     <div>
       <PageHeader eyebrow="Operacoes" title="Gerenciar operacoes" description="Compras, vendas, eventos e movimentacoes que alimentam os calculos." />
-      <ManagementToolbar search={search} onSearchChange={setSearch} filter={type} onFilterChange={setType} filterOptions={types} onCreate={openCreate} />
+      <ManagementToolbar
+        search={search}
+        onSearchChange={setSearch}
+        filter={type}
+        onFilterChange={setType}
+        filterOptions={types}
+        onCreate={openCreate}
+        searchPlaceholder="Pesquise por ativo, tipo de operacao ou observacao"
+        searchLabel="Pesquisar operacoes"
+        filterLabel="Filtrar operacoes por tipo"
+        createLabel="Nova operacao"
+      />
       <ManagementTable
         columns={["Data", "Tipo", "Ativo", "Quantidade", "Preco", "Taxas", "Total"]}
         rows={filtered}
@@ -162,22 +234,65 @@ export function OperationsPage() {
           </>
         )}
       />
-      <ManagementModal title={editing ? "Editar operacao" : "Nova operacao"} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSubmit={handleSubmit}>
-        <input type="date" value={String(form.date).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
-        <select value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value as OperationType }))} className={fieldClass}>
-          {["COMPRA", "VENDA", "BONIFICACAO", "DESDOBRAMENTO", "GRUPAMENTO"].map((item) => <option key={item}>{item}</option>)}
-        </select>
-        <select value={form.assetTicker ?? ""} onChange={(event) => setForm((current) => ({ ...current, assetTicker: event.target.value }))} className={fieldClass}>
-          <option value="">Ativo</option>
-          {assets.map((asset) => <option key={asset.ticker} value={asset.ticker}>{asset.ticker}</option>)}
-        </select>
-        <input type="number" min="0" step="0.000001" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: Number(event.target.value) }))} className={fieldClass} placeholder="Quantidade" />
-        <input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: Number(event.target.value) }))} className={fieldClass} placeholder="Preco" />
-        <input type="number" min="0" step="0.01" value={form.fees} onChange={(event) => setForm((current) => ({ ...current, fees: Number(event.target.value) }))} className={fieldClass} placeholder="Taxas" />
-        <input type="number" min="0" step="0.01" value={form.totalValue} readOnly className={fieldClass} placeholder="Valor total" />
-        <textarea value={form.notes ?? ""} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-24 w-full rounded-lg border border-line bg-elevated px-3 py-2 text-base text-ink outline-none focus:border-accent sm:text-sm" placeholder="Observacao" />
+      <ManagementModal
+        title={editing ? "Editar operacao" : "Nova operacao"}
+        description="Informe os dados reais da movimentacao. O valor total continua sendo calculado automaticamente pela regra atual do formulario."
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleSubmit}
+      >
+        <ManagementField label="Data da operacao" required>
+          <input autoFocus type="date" value={String(form.date).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
+        </ManagementField>
+        <ManagementField label="Tipo de operacao" required>
+          <select value={form.type} onChange={(event) => setForm((current) => ({ ...current, type: event.target.value as OperationType }))} className={fieldClass}>
+            <option value="COMPRA">Compra</option>
+            <option value="VENDA">Venda</option>
+            <option value="BONIFICACAO">Bonificacao</option>
+            <option value="DESDOBRAMENTO">Desdobramento</option>
+            <option value="GRUPAMENTO">Grupamento</option>
+          </select>
+        </ManagementField>
+        <ManagementField label="Ativo" required helperText="Selecione o ticker cadastrado para registrar esta operacao.">
+          <select value={form.assetTicker} onChange={(event) => setForm((current) => ({ ...current, assetTicker: event.target.value }))} className={fieldClass}>
+            <option value="">Selecione o ativo</option>
+            {assets.map((asset) => <option key={asset.ticker} value={asset.ticker}>{asset.ticker}</option>)}
+          </select>
+        </ManagementField>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ManagementField label="Quantidade" required helperText="Use casas decimais quando a operacao permitir fracoes.">
+            <input type="number" min="0" step="0.000001" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 10" />
+          </ManagementField>
+          <ManagementField label="Preco unitario" required helperText="Informe o preco pago ou recebido por unidade.">
+            <input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} className={fieldClass} placeholder="Ex.: 12,50" />
+          </ManagementField>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ManagementField label="Taxas" optional helperText="Corretagem, emolumentos ou custos adicionais da operacao.">
+            <input type="number" min="0" step="0.01" value={form.fees} onChange={(event) => setForm((current) => ({ ...current, fees: event.target.value }))} className={fieldClass} placeholder="Informe as taxas, se houver" />
+          </ManagementField>
+          <ManagementField label="Valor total" helperText="Calculado automaticamente por quantidade x preco unitario, mantendo a regra atual do formulario.">
+            <input type="text" value={formatCurrency((parsePositiveNumberInput(form.quantity) ?? 0) * (parsePositiveNumberInput(form.price) ?? 0))} readOnly className={fieldClass} />
+          </ManagementField>
+        </div>
+        <ManagementField label="Observacoes" optional helperText="Adicione alguma informacao sobre esta operacao, se necessario.">
+          <textarea value={form.notes ?? ""} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} className={areaClass} placeholder="Ex.: compra manual para reforco da posicao" />
+        </ManagementField>
+        {formError ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{formError}</p> : null}
       </ManagementModal>
-      <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir operacao ${deleteTarget?.type ?? ""}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />
+      <ConfirmDelete
+        isOpen={deleteTarget !== null}
+        title="Excluir operacao?"
+        description="Voce esta prestes a remover esta operacao do historico financeiro."
+        details={[
+          `${deleteTarget?.type ?? "Operacao"} de ${deleteTarget?.assetTicker ?? "ativo"}`,
+          `${deleteTarget ? formatCurrency(deleteTarget.totalValue) : "-"}`,
+          deleteTarget ? new Date(deleteTarget.date).toLocaleDateString("pt-BR") : "-"
+        ]}
+        confirmLabel="Excluir operacao"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

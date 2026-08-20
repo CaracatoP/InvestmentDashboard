@@ -34,7 +34,7 @@ export function ForgotPasswordPage() {
         <form onSubmit={(event) => void handleSubmit(event)} className="mt-6 space-y-4">
           <label className="block text-sm">
             <span className="text-muted">E-mail</span>
-            <input className={`${inputClass} mt-1`} type="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+            <input className={`${inputClass} mt-1`} type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="seu@email.com" />
           </label>
           {message ? <p className="rounded-lg bg-accent/10 px-3 py-2 text-sm text-accent">{message}</p> : null}
           <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">

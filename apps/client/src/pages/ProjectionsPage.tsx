@@ -26,6 +26,21 @@ const initialProjection: ProjectionInput = {
 
 const decimalFields = new Set<keyof ProjectionInput>(["wealth", "monthlyContribution", "expectedReturn", "inflation", "annualDividendYield"]);
 
+const projectionFieldMetadata: Array<{
+  field: keyof ProjectionInput;
+  label: string;
+  placeholder: string;
+  helperText?: string;
+}> = [
+  { field: "wealth", label: "Patrimonio atual", placeholder: "Informe o patrimonio atual" },
+  { field: "monthlyContribution", label: "Aporte mensal", placeholder: "Informe o aporte medio mensal" },
+  { field: "expectedReturn", label: "Rentabilidade esperada (%)", placeholder: "Ex.: 10,00", helperText: "Use a taxa anual esperada para o crescimento da carteira." },
+  { field: "inflation", label: "Inflacao (%)", placeholder: "Ex.: 4,50", helperText: "Usada para projetar o valor real do patrimonio futuro." },
+  { field: "annualDividendYield", label: "Dividend yield anual (%)", placeholder: "Ex.: 6,00", helperText: "Informe o yield anual esperado da carteira." },
+  { field: "currentAge", label: "Idade atual", placeholder: "Informe sua idade atual" },
+  { field: "targetAge", label: "Idade objetivo", placeholder: "Informe a idade alvo" }
+];
+
 function roundProjectionNumber(field: keyof ProjectionInput, value: number) {
   if (!Number.isFinite(value)) return 0;
   const decimals = decimalFields.has(field) ? 2 : 0;
@@ -156,25 +171,19 @@ export function ProjectionsPage() {
         <form onSubmit={(event) => event.preventDefault()} className="min-w-0 rounded-lg border border-line bg-panel p-4 shadow-soft">
           <h2 className="text-base font-semibold text-ink">Parametros</h2>
           <div className="mt-4 grid gap-3">
-            {[
-              ["wealth", "Patrimonio"],
-              ["monthlyContribution", "Aporte mensal"],
-              ["expectedReturn", "Rentabilidade esperada (%)"],
-              ["inflation", "Inflacao (%)"],
-              ["annualDividendYield", "Dividend yield anual (%)"],
-              ["currentAge", "Idade atual"],
-              ["targetAge", "Idade objetivo"]
-            ].map(([field, label]) => (
+            {projectionFieldMetadata.map(({ field, label, placeholder, helperText }) => (
               <label key={field} className="grid gap-1 text-sm text-muted">
                 {label}
                 <input
                   type="number"
-                  value={form[field as keyof ProjectionInput] as number}
-                  onChange={(event) => updateField(field as keyof ProjectionInput, Number(event.target.value))}
+                  value={form[field] as number}
+                  onChange={(event) => updateField(field, Number(event.target.value))}
                   min={field === "targetAge" ? form.currentAge + 1 : 0}
                   step={field === "currentAge" || field === "targetAge" ? "1" : "0.01"}
                   className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none focus:border-accent sm:text-sm"
+                  placeholder={placeholder}
                 />
+                {helperText ? <span className="text-xs text-muted">{helperText}</span> : null}
               </label>
             ))}
             <label className="flex items-center justify-between gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">

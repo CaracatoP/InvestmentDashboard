@@ -78,7 +78,14 @@ function extractTextMessages(payload: MetaWebhookPayload) {
 
 async function safeSendText(to: string, text: string) {
   try {
-    await getMessagingProvider().sendText({ to, text });
+    const result = await getMessagingProvider().sendText({ to, text });
+    console.info(JSON.stringify({
+      operation: "whatsapp-send",
+      sent: result.sent,
+      providerMessageIdPresent: Boolean(result.providerMessageId),
+      textLength: text.length
+    }));
+    return result;
   } catch (error) {
     console.warn(
       JSON.stringify({
@@ -87,6 +94,7 @@ async function safeSendText(to: string, text: string) {
         message: error instanceof Error ? error.message : "Falha ao enviar resposta WhatsApp"
       })
     );
+    return { sent: false };
   }
 }
 
@@ -98,13 +106,13 @@ async function processConnectionCode(message: { id: string; from: string; text: 
       externalMessageId: message.id
     });
     if (!result.duplicated) {
-      await safeSendText(message.from, "✅ WhatsApp conectado ao Invest Hub. Agora voce pode enviar comandos financeiros por aqui.");
+      await safeSendText(message.from, "✅ *WhatsApp conectado ao Invest Hub*\n\nAgora voce pode enviar comandos financeiros por aqui.");
     }
     return { processed: result.duplicated ? 0 : 1, ignored: result.duplicated ? 1 : 0 };
   } catch (error) {
     if (error instanceof HttpError) {
       await completeWhatsAppWebhookEvent({ externalMessageId: message.id, status: "failed" });
-      await safeSendText(message.from, "Nao consegui vincular esse codigo. Abra Configuracoes → WhatsApp e gere um novo codigo.");
+      await safeSendText(message.from, "⚠️ *Nao consegui validar esse codigo*\n\nAbra Configuracoes -> WhatsApp no Invest Hub e gere um novo codigo.");
       return { processed: 0, ignored: 1 };
     }
     throw error;
@@ -113,12 +121,16 @@ async function processConnectionCode(message: { id: string; from: string; text: 
 
 async function processAssistantMessage(message: { id: string; from: string; text: string }) {
   const event = await beginWhatsAppWebhookEvent({ externalMessageId: message.id });
-  if (event.duplicate) return { processed: 0, ignored: 1 };
+  if (event.duplicate) {
+    console.info(JSON.stringify({ operation: "whatsapp-message-duplicate", externalMessageId: message.id }));
+    return { processed: 0, ignored: 1 };
+  }
 
   const user = await findVerifiedWhatsAppUserByPhoneNumber(message.from);
   if (!user) {
     await completeWhatsAppWebhookEvent({ externalMessageId: message.id, status: "ignored" });
-    await safeSendText(message.from, "Seu WhatsApp ainda nao esta conectado ao Invest Hub. Abra Configuracoes → WhatsApp e faca a vinculacao.");
+    await safeSendText(message.from, "⚠️ *WhatsApp ainda nao conectado*\n\nAbra Configuracoes -> WhatsApp no Invest Hub e conclua a vinculacao.");
+    console.info(JSON.stringify({ operation: "whatsapp-message-ignored", externalMessageId: message.id, userResolved: false }));
     return { processed: 0, ignored: 1 };
   }
 
@@ -133,11 +145,33 @@ async function processAssistantMessage(message: { id: string; from: string; text
       message: message.text
     });
     await completeWhatsAppWebhookEvent({ externalMessageId: message.id, status: "processed", userId: user.id });
-    if (result.status !== "duplicate") await safeSendText(message.from, formatWhatsAppAssistantResponse(result.assistantMessage));
+    if (result.status !== "duplicate") {
+      const rendered = formatWhatsAppAssistantResponse(result.assistantMessage);
+      const providerResult = await safeSendText(message.from, rendered);
+      console.info(JSON.stringify({
+        operation: "whatsapp-message-processed",
+        externalMessageId: message.id,
+        userResolved: true,
+        userId: user.id,
+        pendingAction: Boolean(result.assistantMessage?.structuredResponse?.pendingAction),
+        responseType: result.assistantMessage?.structuredResponse?.responseType ?? null,
+        intent: result.intent ?? null,
+        responseRendered: Boolean(rendered),
+        providerSent: providerResult.sent
+      }));
+    }
     return { processed: result.status === "duplicate" ? 0 : 1, ignored: result.status === "duplicate" ? 1 : 0 };
   } catch (error) {
     await completeWhatsAppWebhookEvent({ externalMessageId: message.id, status: "failed", userId: user.id });
-    await safeSendText(message.from, "Nao consegui processar sua mensagem com seguranca. Tente novamente com mais detalhes.");
+    await safeSendText(message.from, "⚠️ *Nao consegui processar sua mensagem com seguranca*\n\nTente novamente com mais detalhes.");
+    console.warn(JSON.stringify({
+      operation: "whatsapp-message-failed",
+      externalMessageId: message.id,
+      userResolved: true,
+      userId: user.id,
+      statusCode: error instanceof HttpError ? error.statusCode : undefined,
+      message: error instanceof Error ? error.message : "Falha ao processar webhook do WhatsApp"
+    }));
     return { processed: 0, ignored: 1 };
   }
 }

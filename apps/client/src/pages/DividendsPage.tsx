@@ -3,7 +3,7 @@ import { type FormEvent, useState } from "react";
 import { LazyBarChart, LazyPieChart } from "../components/charts/LazyCharts";
 import { DividendCard } from "../components/cards/DividendCard";
 import { ChartCard } from "../components/ui/ChartCard";
-import { fieldClass, ManagementModal } from "../components/ui/Management";
+import { ManagementField, fieldClass, areaClass, ManagementModal } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { StatCard } from "../components/ui/StatCard";
@@ -120,11 +120,11 @@ export function DividendsPage() {
     const assetTicker = form.assetTicker.trim().toUpperCase();
 
     if (!assetTicker) {
-      setFeedback({ type: "error", message: "Informe o ativo." });
+      setFeedback({ type: "error", message: "Selecione o ativo do dividendo." });
       return;
     }
     if (!amountInCents || amountInCents <= 0) {
-      setFeedback({ type: "error", message: "Informe um valor valido." });
+      setFeedback({ type: "error", message: "Informe um valor de dividendo maior que zero." });
       return;
     }
 
@@ -303,29 +303,28 @@ export function DividendsPage() {
 
       <ManagementModal
         title={receiveTarget ? "Marcar dividendo como recebido" : "Registrar dividendo"}
+        description={receiveTarget ? "Confirme o recebimento e a data real de entrada desse provento." : "Cadastre um provento manual com ativo, tipo, valor e data correta."}
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSubmit={submitDividend}
         submitDisabled={isSaving}
         submitLabel={isSaving ? "Salvando..." : "Salvar"}
       >
-        <label className="grid gap-1 text-sm text-muted">
-          Ativo
+        <ManagementField label="Ativo" required helperText="Digite ou selecione o ticker do ativo que gerou o provento.">
           <input
             className={fieldClass}
             value={form.assetTicker}
             list="dividend-asset-options"
             onChange={(event) => setForm((current) => ({ ...current, assetTicker: event.target.value.toUpperCase() }))}
             disabled={Boolean(receiveTarget)}
-            placeholder="PETR4"
+            placeholder="Selecione o ativo"
           />
           <datalist id="dividend-asset-options">
             {assetOptions.map((ticker) => <option key={ticker} value={ticker} />)}
           </datalist>
-        </label>
+        </ManagementField>
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="grid gap-1 text-sm text-muted">
-            Tipo
+          <ManagementField label="Tipo de provento" required>
             <select
               className={fieldClass}
               value={form.type}
@@ -338,9 +337,8 @@ export function DividendsPage() {
               <option value="amortizacao">Amortizacao</option>
               <option value="outro">Outro</option>
             </select>
-          </label>
-          <label className="grid gap-1 text-sm text-muted">
-            Status
+          </ManagementField>
+          <ManagementField label="Status" required helperText="Use previsto para agenda futura e recebido quando o valor ja entrou na conta.">
             <select
               className={fieldClass}
               value={form.status}
@@ -351,38 +349,39 @@ export function DividendsPage() {
               <option value="expected">Previsto</option>
               <option value="cancelled">Cancelado</option>
             </select>
-          </label>
+          </ManagementField>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="grid gap-1 text-sm text-muted">
-            Valor
+          <ManagementField label="Valor do provento" required helperText="Informe o valor total recebido ou previsto para este pagamento.">
             <input
               className={fieldClass}
               value={form.amount}
               onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))}
-              placeholder="85,40"
+              placeholder="Ex.: 85,40"
               inputMode="decimal"
             />
-          </label>
-          <label className="grid gap-1 text-sm text-muted">
-            Data
+          </ManagementField>
+          <ManagementField
+            label={receiveTarget ? "Data de recebimento" : form.status === "received" ? "Data de recebimento" : "Data prevista"}
+            required
+            helperText={receiveTarget || form.status === "received" ? "Selecione quando o valor foi efetivamente recebido." : "Selecione a data prevista para este pagamento."}
+          >
             <input
               className={fieldClass}
               type="date"
               value={form.paymentDate}
               onChange={(event) => setForm((current) => ({ ...current, paymentDate: event.target.value }))}
             />
-          </label>
+          </ManagementField>
         </div>
-        <label className="grid gap-1 text-sm text-muted">
-          Observacao
+        <ManagementField label="Observacoes" optional helperText="Adicione detalhes sobre a origem ou o contexto do provento, se necessario.">
           <textarea
-            className={`${fieldClass} min-h-24 py-2`}
+            className={areaClass}
             value={form.notes}
             onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
-            placeholder="Opcional"
+            placeholder="Ex.: recebimento manual, ajuste de corretora ou observacao importante"
           />
-        </label>
+        </ManagementField>
       </ManagementModal>
     </div>
   );

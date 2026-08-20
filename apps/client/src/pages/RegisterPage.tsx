@@ -52,19 +52,19 @@ export function RegisterPage() {
       <form onSubmit={(event) => void handleSubmit(event)} className="mt-6 space-y-4">
         <label className="block text-sm">
           <span className="text-muted">Nome</span>
-          <input className={`${inputClass} mt-1`} required minLength={2} maxLength={80} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
+          <input className={`${inputClass} mt-1`} required minLength={2} maxLength={80} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder="Seu nome" />
         </label>
         <label className="block text-sm">
           <span className="text-muted">E-mail</span>
-          <input className={`${inputClass} mt-1`} type="email" required value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
+          <input className={`${inputClass} mt-1`} type="email" required value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} placeholder="seu@email.com" />
         </label>
         <label className="block text-sm">
           <span className="text-muted">Senha</span>
-          <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+          <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Crie uma senha" />
         </label>
         <label className="block text-sm">
           <span className="text-muted">Confirmar senha</span>
-          <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+          <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} placeholder="Digite novamente a senha" />
         </label>
         {feedback ? <p className={`rounded-lg px-3 py-2 text-sm ${feedback.type === "success" ? "bg-accent/10 text-accent" : "bg-rose/10 text-rose"}`}>{feedback.message}</p> : null}
         <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">

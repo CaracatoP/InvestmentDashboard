@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, test } from "node:test";
 import { DisabledAiProvider } from "../ai/providers/disabled.provider";
 import { buildConversationContext, detectConversationIntent } from "../ai/builders/conversation-context.builder";
+import { runWithAuthContext } from "../auth/auth-context";
 import { env } from "../config/env";
 import { buildContextHash } from "../ai/utils/ai-context-hash";
 import { estimateAiTokens, stringifyContextForAi } from "../ai/utils/ai-context-budget";
@@ -15,12 +16,31 @@ import { listDividends, listOperations } from "../repositories/investment.reposi
 import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
 import { handleAssistantCommand } from "../services/assistant-command.service";
+import { createDividendRecord } from "../services/dividend.service";
 import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { getSettings } from "../services/portfolio.service";
 
 beforeEach(async () => {
   await resetSettingsRecord();
 });
+
+function asUser<T>(userId: string, callback: () => Promise<T>) {
+  return runWithAuthContext({ userId, role: "user", channel: "web" }, callback);
+}
+
+function monthlyPlanCategories() {
+  return [
+    { id: "moradia", name: "Moradia", icon: "home", color: "#34d399", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "alimentacao", name: "Alimentacao", icon: "utensils", color: "#f97316", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "transporte", name: "Transporte", icon: "car", color: "#38bdf8", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "lazer", name: "Lazer", icon: "gamepad-2", color: "#a78bfa", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "investimentos", name: "Investimentos", icon: "trending-up", color: "#22c55e", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "saude", name: "Saude", icon: "heart-pulse", color: "#fb7185", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "assinaturas", name: "Assinaturas", icon: "repeat", color: "#facc15", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "educacao", name: "Educacao", icon: "book-open", color: "#60a5fa", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 50000 },
+    { id: "outros", name: "Outros", icon: "circle", color: "#94a3b8", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 }
+  ];
+}
 
 test("disabled AI provider reports safe disabled health", async () => {
   const provider = new DisabledAiProvider("off");
@@ -365,6 +385,191 @@ test("paying a planned matching expense asks to mark it paid instead of duplicat
   assert.equal((await listAllMonthlyExpenses()).filter((expense) => expense.description === "Faculdade" && expense.amountInCents === 25000).length, 1);
 });
 
+test("paying spotify before its due date prefers the current month recurring expense", async () => {
+  const userId = `assistant-spotify-future-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const julyPlan = await saveMonthlyPlan({ year: 2026, month: 7, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    const septemberPlan = await saveMonthlyPlan({ year: 2026, month: 9, incomeInCents: 500000, categories: monthlyPlanCategories() });
+
+    assert.ok(julyPlan.id);
+    assert.ok(augustPlan.id);
+    assert.ok(septemberPlan.id);
+
+    await addMonthlyExpense(julyPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-07-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    const augustSpotify = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    await addMonthlyExpense(septemberPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-09-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const sessionId = `ai-action-spotify-future-${randomUUID()}`;
+    const result = await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura do spotify ja" });
+    const action = await findActiveAiPendingAction(sessionId);
+
+    assert.equal(result.handled, true);
+    assert.equal(result.response.responseType, "confirmation");
+    assert.equal(action?.toolName, "markExpenseAsCompleted");
+    assert.equal(action?.extractedFields.expenseId, augustSpotify.id);
+    assert.equal((await listAllMonthlyExpenses()).filter((expense) => expense.description === "Spotify" && expense.amountInCents === 1290).length, 3);
+  });
+});
+
+test("whatsapp clarification persists pending action and resolves the correct subscription", async () => {
+  const userId = `assistant-spotify-clarification-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    const spotify = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    const netflix = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Netflix",
+      amountInCents: 2190,
+      date: "2026-08-25",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const externalConversationId = `wa-clarify-${randomUUID()}`;
+    const first = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "paguei a assinatura"
+    });
+    const firstAction = await findActiveAiPendingAction(first.sessionId);
+
+    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
+    assert.equal(firstAction?.status, "collecting");
+    assert.ok(firstAction?.missingFields.some((field) => field.name === "expenseId"));
+    assert.ok((firstAction?.missingFields[0]?.options?.length ?? 0) >= 2);
+
+    const second = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "o spotify desse mes"
+    });
+    const secondAction = await findActiveAiPendingAction(second.sessionId);
+
+    assert.equal(second.sessionId, first.sessionId);
+    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(secondAction?.status, "awaiting_confirmation");
+    assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
+
+    const confirmed = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "confirmo"
+    });
+    const expenses = await listAllMonthlyExpenses();
+
+    assert.equal(confirmed.assistantMessage?.structuredResponse?.responseType, "success");
+    assert.equal(expenses.find((expense) => expense.id === spotify.id)?.status, "completed");
+    assert.equal(expenses.find((expense) => expense.id === netflix.id)?.status, "planned");
+  });
+});
+
+test("whatsapp expense resolution keeps user isolation for equal spotify expenses", async () => {
+  const userA = `assistant-spotify-owner-a-${randomUUID()}`;
+  const userB = `assistant-spotify-owner-b-${randomUUID()}`;
+  let spotifyAId = "";
+  let spotifyBId = "";
+
+  await asUser(userA, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+    const spotify = await addMonthlyExpense(plan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    spotifyAId = spotify.id ?? "";
+  });
+
+  await asUser(userB, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+    const spotify = await addMonthlyExpense(plan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    spotifyBId = spotify.id ?? "";
+  });
+
+  const first = await handleAssistantCommand({
+    userId: userA,
+    channel: "whatsapp",
+    externalConversationId: `wa-owner-a-${randomUUID()}`,
+    externalMessageId: `wamid.${randomUUID()}`,
+    message: "paguei a assinatura do spotify ja"
+  });
+
+  await asUser(userA, async () => {
+    const expenses = await listAllMonthlyExpenses();
+    const action = await findActiveAiPendingAction(first.sessionId);
+    assert.equal(expenses.find((expense) => expense.id === spotifyAId)?.status, "planned");
+    assert.equal(action?.extractedFields.expenseId, spotifyAId);
+  });
+
+  await asUser(userB, async () => {
+    const expenses = await listAllMonthlyExpenses();
+    assert.equal(expenses.find((expense) => expense.id === spotifyBId)?.status, "planned");
+  });
+});
+
 test("monthly income does not invent description fields", async () => {
   const sessionId = "ai-action-income-no-description";
   const result = await handleOperationalChatMessage({ sessionId, message: "Minha renda de agosto sera R$ 4.500,00." });
@@ -564,6 +769,31 @@ test("chat confirmation executes dividend registration", async () => {
   const dividends = await listDividends();
   const dividend = dividends.find((item) => item.assetTicker === "VGIR11" && item.totalValue === 52.3);
   assert.equal(dividend?.type, "dividendo");
+});
+
+test("assistant reuses an expected dividend from the same month even without an explicit date", async () => {
+  const userId = `assistant-dividend-same-month-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const created = await createDividendRecord({
+      assetTicker: "PETR4",
+      type: "dividendo",
+      totalValue: 85.4,
+      valuePerShare: 0,
+      amountPerShare: 0,
+      paymentDate: "2026-08-22",
+      status: "expected",
+      source: "manual"
+    });
+    const sessionId = `ai-action-dividend-expected-${randomUUID()}`;
+    const result = await handleOperationalChatMessage({ sessionId, message: "recebi 85,40 de dividendos da PETR4" });
+    const action = await findActiveAiPendingAction(sessionId);
+
+    assert.equal(result.handled, true);
+    assert.equal(result.response.responseType, "confirmation");
+    assert.equal(action?.toolName, "markDividendReceived");
+    assert.equal(action?.extractedFields.dividendId, created.id);
+  });
 });
 
 test("investment read questions remain non-operational", async () => {

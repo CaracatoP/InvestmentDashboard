@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { LazyBarChart, LazyLineChart } from "../charts/LazyCharts";
 import { LazyAiAnalysisPanel } from "../ai/LazyAiAnalysisPanel";
-import { ConfirmDelete, areaClass, fieldClass, ManagementModal } from "../ui/Management";
+import { ConfirmDelete, ManagementField, areaClass, fieldClass, ManagementModal } from "../ui/Management";
 import { PageHeader } from "../ui/PageHeader";
 import { ProgressBar } from "../ui/ProgressBar";
 import { StatCard } from "../ui/StatCard";
@@ -52,7 +52,7 @@ type CategoryForm = {
   icon: string;
   color: string;
   budgetType: MonthlyBudgetType;
-  percentage: number;
+  percentage: string;
   fixedAmount: string;
 };
 
@@ -311,6 +311,10 @@ function formatMoneyInput(valueInCents: number) {
   return (valueInCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatOptionalMoneyInput(valueInCents?: number | null) {
+  return valueInCents && valueInCents > 0 ? formatMoneyInput(valueInCents) : "";
+}
+
 function createExpenseIdempotencyKey() {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `expense-${Date.now()}`;
 }
@@ -358,8 +362,8 @@ function categoryFormFromRecord(category?: MonthlyPlanCategoryRecord): CategoryF
     icon: category?.icon ?? "tag",
     color: category?.color ?? "#22c55e",
     budgetType: category?.budgetType ?? "percentage",
-    percentage: category?.percentage ?? 0,
-    fixedAmount: formatMoneyInput(category?.fixedAmountInCents ?? 0)
+    percentage: category?.percentage ? String(category.percentage) : "",
+    fixedAmount: formatOptionalMoneyInput(category?.fixedAmountInCents)
   };
 }
 
@@ -369,7 +373,7 @@ function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""):
   const integration = expense?.integration;
   return {
     description: expense?.description ?? "",
-    amount: formatMoneyInput(expense?.amountInCents ?? 0),
+    amount: expense ? formatMoneyInput(expense.amountInCents ?? 0) : "",
     categoryId: expense?.categoryId ?? categoryId,
     date: expense?.date ?? now.date,
     time: expense?.time ?? now.time,
@@ -390,7 +394,7 @@ function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""):
     assetSearch: integration?.assetTicker ?? "",
     quantity: formatNumberInput(integration?.quantity, 6),
     price: formatNumberInput(integration?.price, 2),
-    fees: formatNumberInput(integration?.fees ?? 0, 2),
+    fees: expense ? formatNumberInput(integration?.fees ?? 0, 2) : "",
     cashBoxId: integration?.cashBoxId ?? "",
     idempotencyKey: integration?.idempotencyKey ?? createExpenseIdempotencyKey()
   };
@@ -401,7 +405,7 @@ function incomeEntryFormFromRecord(entry?: MonthlyIncomeEntryRecord): IncomeEntr
   const dayOfMonth = entry?.recurrenceDayOfMonth ?? Number((entry?.date ?? now.date).slice(8, 10));
   return {
     description: entry?.description ?? "",
-    amount: formatMoneyInput(entry?.amountInCents ?? 0),
+    amount: entry ? formatMoneyInput(entry.amountInCents ?? 0) : "",
     category: entry?.category ?? incomeCategoryOptions[0],
     date: entry?.date ?? now.date,
     time: entry?.time ?? now.time,
@@ -424,9 +428,9 @@ function goalFormFromRecord(goal?: MonthlyFinancialGoalRecord): GoalForm {
   return {
     id: goal?.id,
     name: goal?.name ?? "",
-    target: formatMoneyInput(goal?.targetInCents ?? 0),
-    saved: formatMoneyInput(goal?.savedInCents ?? 0),
-    monthlyContribution: formatMoneyInput(goal?.monthlyContributionInCents ?? 0),
+    target: formatOptionalMoneyInput(goal?.targetInCents),
+    saved: formatOptionalMoneyInput(goal?.savedInCents),
+    monthlyContribution: formatOptionalMoneyInput(goal?.monthlyContributionInCents),
     linkedSource: goal?.linkedSource ?? "manual",
     linkedSourceId: goal?.linkedSourceId ?? "",
     active: goal?.active ?? true
@@ -799,9 +803,9 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     return { year: now.getFullYear(), month: now.getMonth() + 1 };
   });
   const [overview, setOverview] = useState<MonthlyPlanningOverview | null>(null);
-  const [incomeInput, setIncomeInput] = useState("0,00");
-  const [monthlyContributionGoalInput, setMonthlyContributionGoalInput] = useState("0,00");
-  const [investmentSimulationInput, setInvestmentSimulationInput] = useState("0,00");
+  const [incomeInput, setIncomeInput] = useState("");
+  const [monthlyContributionGoalInput, setMonthlyContributionGoalInput] = useState("");
+  const [investmentSimulationInput, setInvestmentSimulationInput] = useState("");
   const [includeDividendsAsIncome, setIncludeDividendsAsIncome] = useState(false);
   const [comparisonRange, setComparisonRange] = useState(1);
   const [search, setSearch] = useState("");
@@ -847,9 +851,9 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
   function applyOverview(data: MonthlyPlanningOverview, year: number, month: number) {
     setOverview(data);
-    setIncomeInput(formatMoneyInput(data.plan.incomeInCents));
-    setMonthlyContributionGoalInput(formatMoneyInput(data.plan.monthlyContributionGoalInCents ?? 0));
-    setInvestmentSimulationInput(formatMoneyInput(data.plan.investmentSimulationAmountInCents ?? 0));
+    setIncomeInput(formatOptionalMoneyInput(data.plan.incomeInCents));
+    setMonthlyContributionGoalInput(formatOptionalMoneyInput(data.plan.monthlyContributionGoalInCents));
+    setInvestmentSimulationInput(formatOptionalMoneyInput(data.plan.investmentSimulationAmountInCents));
     setIncludeDividendsAsIncome(data.plan.includeDividendsAsIncome ?? false);
     setSelectedCalendarDate((current) => current?.startsWith(`${year}-${pad(month)}`) ? current : data.calendarDays[0]?.date ?? `${year}-${pad(month)}-01`);
   }
@@ -1070,12 +1074,17 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
     if (!overview || isSaving) return;
 
     const fixedAmountInCents = categoryForm.budgetType === "fixed" ? parseBrazilianMoneyToCents(categoryForm.fixedAmount) : null;
+    const percentage = Number(categoryForm.percentage.replace(",", "."));
     if (!categoryForm.name.trim()) {
       setError("Informe o nome do setor.");
       return;
     }
     if (categoryForm.budgetType === "fixed" && fixedAmountInCents === null) {
       setError("Informe um valor fixo valido.");
+      return;
+    }
+    if (categoryForm.budgetType === "percentage" && (!(percentage >= 0) || !Number.isFinite(percentage))) {
+      setError("Informe a porcentagem planejada para o setor.");
       return;
     }
 
@@ -1086,7 +1095,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
       icon: categoryForm.icon,
       color: categoryForm.color,
       budgetType: categoryForm.budgetType,
-      percentage: categoryForm.budgetType === "percentage" ? categoryForm.percentage : 0,
+      percentage: categoryForm.budgetType === "percentage" ? percentage : 0,
       fixedAmountInCents
     };
     const duplicate = overview.plan.categories.some((item) => item.id !== editingCategoryId && item.name.trim().toLowerCase() === category.name.toLowerCase());
@@ -2171,61 +2180,99 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         isOverview ? <PlanningOverviewSkeleton /> : <p className="rounded-lg border border-line bg-panel p-4 text-sm text-muted">Carregando planejamento mensal...</p>
       )}
 
-      <ManagementModal title={editingCategoryId ? "Editar setor" : "Novo setor"} isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} onSubmit={submitCategory} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
-        <input required value={categoryForm.name} onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome do setor" />
+      <ManagementModal
+        title={editingCategoryId ? "Editar setor" : "Novo setor"}
+        description="Organize o orcamento em setores com nome, icone e regra de distribuicao por porcentagem ou valor fixo."
+        isOpen={isCategoryModalOpen}
+        onClose={() => setIsCategoryModalOpen(false)}
+        onSubmit={submitCategory}
+        submitDisabled={isSaving}
+        submitLabel={isSaving ? "Salvando..." : "Salvar"}
+      >
+        <ManagementField label="Nome do setor" required helperText="Ex.: moradia, alimentacao, transporte ou investimentos.">
+          <input required autoFocus value={categoryForm.name} onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Ex.: Faculdade" />
+        </ManagementField>
         <div className="grid gap-3 sm:grid-cols-2">
-          <select value={categoryForm.icon} onChange={(event) => setCategoryForm((current) => ({ ...current, icon: event.target.value }))} className={fieldClass}>
-            {categoryIcons.map((icon) => <option key={icon.value} value={icon.value}>{icon.label}</option>)}
-          </select>
-          <select value={categoryForm.color} onChange={(event) => setCategoryForm((current) => ({ ...current, color: event.target.value }))} className={fieldClass}>
-            {categoryColors.map((color) => <option key={color} value={color}>{color}</option>)}
-          </select>
+          <ManagementField label="Icone" required>
+            <select value={categoryForm.icon} onChange={(event) => setCategoryForm((current) => ({ ...current, icon: event.target.value }))} className={fieldClass}>
+              {categoryIcons.map((icon) => <option key={icon.value} value={icon.value}>{icon.label}</option>)}
+            </select>
+          </ManagementField>
+          <ManagementField label="Cor" required>
+            <select value={categoryForm.color} onChange={(event) => setCategoryForm((current) => ({ ...current, color: event.target.value }))} className={fieldClass}>
+              {categoryColors.map((color) => <option key={color} value={color}>{color}</option>)}
+            </select>
+          </ManagementField>
         </div>
-        <select value={categoryForm.budgetType} onChange={(event) => setCategoryForm((current) => ({ ...current, budgetType: event.target.value as MonthlyBudgetType }))} className={fieldClass}>
-          <option value="percentage">Por porcentagem</option>
-          <option value="fixed">Por valor fixo</option>
-        </select>
+        <ManagementField label="Tipo de orcamento" required helperText="Escolha se este setor sera planejado por porcentagem da renda ou por valor fixo.">
+          <select value={categoryForm.budgetType} onChange={(event) => setCategoryForm((current) => ({ ...current, budgetType: event.target.value as MonthlyBudgetType }))} className={fieldClass}>
+            <option value="percentage">Por porcentagem</option>
+            <option value="fixed">Por valor fixo</option>
+          </select>
+        </ManagementField>
         {categoryForm.budgetType === "percentage" ? (
-          <input type="number" min="0" step="0.01" value={categoryForm.percentage} onChange={(event) => setCategoryForm((current) => ({ ...current, percentage: Number(event.target.value) }))} className={fieldClass} placeholder="Porcentagem planejada" />
+          <ManagementField label="Porcentagem planejada" required helperText="Informe quanto da renda mensal este setor deve consumir.">
+            <input type="number" min="0" step="0.01" value={categoryForm.percentage} onChange={(event) => setCategoryForm((current) => ({ ...current, percentage: event.target.value }))} className={fieldClass} placeholder="Ex.: 15" />
+          </ManagementField>
         ) : (
-          <input value={categoryForm.fixedAmount} onChange={(event) => setCategoryForm((current) => ({ ...current, fixedAmount: event.target.value }))} className={fieldClass} placeholder="Valor fixo em reais" inputMode="decimal" />
+          <ManagementField label="Valor fixo" required helperText="Informe o valor mensal planejado para este setor.">
+            <input value={categoryForm.fixedAmount} onChange={(event) => setCategoryForm((current) => ({ ...current, fixedAmount: event.target.value }))} className={fieldClass} placeholder="Ex.: 850,00" inputMode="decimal" />
+          </ManagementField>
         )}
       </ManagementModal>
 
-      <ManagementModal title={editingExpense ? "Editar gasto" : "Adicionar gasto"} isOpen={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} onSubmit={submitExpense} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
-        <input required value={expenseForm.description} onChange={(event) => setExpenseForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
-        <input
+      <ManagementModal
+        title={editingExpense ? "Editar gasto" : "Adicionar gasto"}
+        description="Cadastre gastos realizados, previstos ou recorrentes. Quando o setor for de investimentos, o formulario tambem controla o destino do valor."
+        isOpen={isExpenseModalOpen}
+        onClose={() => setIsExpenseModalOpen(false)}
+        onSubmit={submitExpense}
+        submitDisabled={isSaving}
+        submitLabel={isSaving ? "Salvando..." : "Salvar"}
+      >
+        <ManagementField label="Descricao do gasto" required helperText="Ex.: faculdade, aluguel, mercado ou aporte manual.">
+          <input required autoFocus value={expenseForm.description} onChange={(event) => setExpenseForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Ex.: Faculdade" />
+        </ManagementField>
+        <ManagementField
+          label="Valor do gasto"
           required
-          value={expenseTargetsInvestments && expenseForm.investmentDestination === "asset" ? formatMoneyInput(assetOperationTotalInCents) : expenseForm.amount}
-          onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))}
-          className={fieldClass}
-          placeholder="Valor"
-          inputMode="decimal"
-          readOnly={expenseTargetsInvestments && expenseForm.investmentDestination === "asset"}
-        />
-        <select
-          required
-          value={expenseForm.categoryId}
-          onChange={(event) => {
-            const nextCategory = overview?.categories.find((category) => category.id === event.target.value);
-            setExpenseForm((current) => ({
-              ...current,
-              categoryId: event.target.value,
-              investmentDestination: isInvestmentCategory(nextCategory) ? current.investmentDestination : "",
-              assetId: isInvestmentCategory(nextCategory) ? current.assetId : "",
-              assetSearch: isInvestmentCategory(nextCategory) ? current.assetSearch : "",
-              quantity: isInvestmentCategory(nextCategory) ? current.quantity : "",
-              price: isInvestmentCategory(nextCategory) ? current.price : "",
-              fees: isInvestmentCategory(nextCategory) ? current.fees : "",
-              cashBoxId: isInvestmentCategory(nextCategory) ? current.cashBoxId : "",
-              idempotencyKey: isInvestmentCategory(nextCategory) ? current.idempotencyKey : createExpenseIdempotencyKey()
-            }));
-          }}
-          className={fieldClass}
+          helperText={expenseTargetsInvestments && expenseForm.investmentDestination === "asset" ? "Calculado automaticamente por quantidade x preco + taxas." : "Informe o valor mensal ou pontual deste gasto."}
         >
-          <option value="">Selecione o setor</option>
-          {overview?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-        </select>
+          <input
+            required
+            value={expenseTargetsInvestments && expenseForm.investmentDestination === "asset" ? formatMoneyInput(assetOperationTotalInCents) : expenseForm.amount}
+            onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))}
+            className={fieldClass}
+            placeholder={expenseTargetsInvestments && expenseForm.investmentDestination === "asset" ? "Calculado automaticamente" : "Informe o valor do gasto"}
+            inputMode="decimal"
+            readOnly={expenseTargetsInvestments && expenseForm.investmentDestination === "asset"}
+          />
+        </ManagementField>
+        <ManagementField label="Setor" required helperText="Selecione a categoria do planejamento que este gasto pertence.">
+          <select
+            required
+            value={expenseForm.categoryId}
+            onChange={(event) => {
+              const nextCategory = overview?.categories.find((category) => category.id === event.target.value);
+              setExpenseForm((current) => ({
+                ...current,
+                categoryId: event.target.value,
+                investmentDestination: isInvestmentCategory(nextCategory) ? current.investmentDestination : "",
+                assetId: isInvestmentCategory(nextCategory) ? current.assetId : "",
+                assetSearch: isInvestmentCategory(nextCategory) ? current.assetSearch : "",
+                quantity: isInvestmentCategory(nextCategory) ? current.quantity : "",
+                price: isInvestmentCategory(nextCategory) ? current.price : "",
+                fees: isInvestmentCategory(nextCategory) ? current.fees : "",
+                cashBoxId: isInvestmentCategory(nextCategory) ? current.cashBoxId : "",
+                idempotencyKey: isInvestmentCategory(nextCategory) ? current.idempotencyKey : createExpenseIdempotencyKey()
+              }));
+            }}
+            className={fieldClass}
+          >
+            <option value="">Selecione o setor</option>
+            {overview?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select>
+        </ManagementField>
         {expenseTargetsInvestments ? (
           <fieldset className="grid gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
             <legend className="px-1 text-xs uppercase tracking-[0.14em]">Destino do investimento</legend>
@@ -2254,38 +2301,52 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               assets.length > 0 ? (
                 <>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <input
-                      value={expenseForm.assetSearch}
-                      onChange={(event) => setExpenseForm((current) => ({ ...current, assetSearch: event.target.value }))}
-                      className={fieldClass}
-                      placeholder="Pesquisar por ticker ou nome"
-                    />
-                    <select
-                      value={expenseForm.assetId}
-                      onChange={(event) => {
-                        const asset = assets.find((item) => item.id === event.target.value);
-                        setExpenseForm((current) => ({
-                          ...current,
-                          assetId: event.target.value,
-                          assetSearch: asset?.ticker ?? current.assetSearch
-                        }));
-                      }}
-                      className={fieldClass}
-                    >
-                      <option value="">Selecionar ativo</option>
-                      {filteredAssets.map((asset) => <option key={asset.id ?? asset.ticker} value={asset.id}>{asset.ticker} · {asset.name}</option>)}
-                    </select>
+                    <ManagementField label="Buscar ativo" required helperText="Procure pelo nome ou ticker do ativo que recebera este aporte.">
+                      <input
+                        value={expenseForm.assetSearch}
+                        onChange={(event) => setExpenseForm((current) => ({ ...current, assetSearch: event.target.value }))}
+                        className={fieldClass}
+                        placeholder="Ex.: Bitcoin ou BTC"
+                      />
+                    </ManagementField>
+                    <ManagementField label="Ativo" required>
+                      <select
+                        value={expenseForm.assetId}
+                        onChange={(event) => {
+                          const asset = assets.find((item) => item.id === event.target.value);
+                          setExpenseForm((current) => ({
+                            ...current,
+                            assetId: event.target.value,
+                            assetSearch: asset?.ticker ?? current.assetSearch
+                          }));
+                        }}
+                        className={fieldClass}
+                      >
+                        <option value="">Selecione o ativo</option>
+                        {filteredAssets.map((asset) => <option key={asset.id ?? asset.ticker} value={asset.id}>{asset.ticker} · {asset.name}</option>)}
+                      </select>
+                    </ManagementField>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-3">
-                    <select value="COMPRA" disabled className={fieldClass}>
-                      <option value="COMPRA">Compra</option>
-                    </select>
-                    <input value={expenseForm.quantity} onChange={(event) => setExpenseForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Quantidade" inputMode="decimal" />
-                    <input value={expenseForm.price} onChange={(event) => setExpenseForm((current) => ({ ...current, price: event.target.value }))} className={fieldClass} placeholder="Preco unitario" inputMode="decimal" />
+                    <ManagementField label="Tipo de operacao" required>
+                      <select value="COMPRA" disabled className={fieldClass}>
+                        <option value="COMPRA">Compra</option>
+                      </select>
+                    </ManagementField>
+                    <ManagementField label="Quantidade" required helperText="Use casas decimais quando o ativo permitir fracao.">
+                      <input value={expenseForm.quantity} onChange={(event) => setExpenseForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 10" inputMode="decimal" />
+                    </ManagementField>
+                    <ManagementField label="Preco unitario" required helperText="Informe o preco pago por unidade.">
+                      <input value={expenseForm.price} onChange={(event) => setExpenseForm((current) => ({ ...current, price: event.target.value }))} className={fieldClass} placeholder="Ex.: 12,50" inputMode="decimal" />
+                    </ManagementField>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <input value={expenseForm.fees} onChange={(event) => setExpenseForm((current) => ({ ...current, fees: event.target.value }))} className={fieldClass} placeholder="Taxas" inputMode="decimal" />
-                    <p className="rounded-lg border border-line bg-panel px-3 py-3 text-sm text-ink">Total da operacao: {formatCents(assetOperationTotalInCents)}</p>
+                    <ManagementField label="Taxas" optional helperText="Inclua corretagem, emolumentos ou custos extras, se houver.">
+                      <input value={expenseForm.fees} onChange={(event) => setExpenseForm((current) => ({ ...current, fees: event.target.value }))} className={fieldClass} placeholder="Informe as taxas da operacao, se houver" inputMode="decimal" />
+                    </ManagementField>
+                    <ManagementField label="Valor total da operacao" helperText="Resumo calculado automaticamente para manter a operacao consistente com a carteira.">
+                      <p className="rounded-lg border border-line bg-panel px-3 py-3 text-sm text-ink">Total da operacao: {formatCents(assetOperationTotalInCents)}</p>
+                    </ManagementField>
                   </div>
                   <p className="text-xs text-muted">O valor do gasto passa a ser calculado automaticamente por quantidade x preco + taxas para manter a operacao consistente com a carteira.</p>
                 </>
@@ -2301,10 +2362,12 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
 
             {expenseForm.investmentDestination === "cashbox" ? (
               cashBoxes.length > 0 ? (
-                <select value={expenseForm.cashBoxId} onChange={(event) => setExpenseForm((current) => ({ ...current, cashBoxId: event.target.value }))} className={fieldClass}>
-                  <option value="">Selecionar caixinha</option>
-                  {cashBoxes.map((cashBox) => <option key={cashBox.id ?? cashBox.name} value={cashBox.id}>{cashBox.name}</option>)}
-                </select>
+                <ManagementField label="Caixinha de destino" required helperText="Escolha a reserva que recebera esta transferencia.">
+                  <select value={expenseForm.cashBoxId} onChange={(event) => setExpenseForm((current) => ({ ...current, cashBoxId: event.target.value }))} className={fieldClass}>
+                    <option value="">Selecione a caixinha</option>
+                    {cashBoxes.map((cashBox) => <option key={cashBox.id ?? cashBox.name} value={cashBox.id}>{cashBox.name}</option>)}
+                  </select>
+                </ManagementField>
               ) : (
                 <div className="rounded-lg border border-dashed border-line bg-panel px-3 py-4">
                   <p className="text-sm text-ink">Voce ainda nao possui caixinhas cadastradas.</p>
@@ -2333,23 +2396,33 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         </fieldset>
         {!expenseForm.useCurrentMoment ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <input type="date" required value={expenseForm.date} onChange={(event) => setExpenseForm((current) => ({ ...current, date: event.target.value, status: isFutureExpense(event.target.value, current.time) ? "planned" : current.status }))} className={fieldClass} />
-            <input type="time" required value={expenseForm.time} onChange={(event) => setExpenseForm((current) => ({ ...current, time: event.target.value, status: isFutureExpense(current.date, event.target.value) ? "planned" : current.status }))} className={fieldClass} />
+            <ManagementField label="Data do gasto" required>
+              <input type="date" required value={expenseForm.date} onChange={(event) => setExpenseForm((current) => ({ ...current, date: event.target.value, status: isFutureExpense(event.target.value, current.time) ? "planned" : current.status }))} className={fieldClass} />
+            </ManagementField>
+            <ManagementField label="Horario do gasto" required>
+              <input type="time" required value={expenseForm.time} onChange={(event) => setExpenseForm((current) => ({ ...current, time: event.target.value, status: isFutureExpense(current.date, event.target.value) ? "planned" : current.status }))} className={fieldClass} />
+            </ManagementField>
           </div>
         ) : (
           <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">Sera registrado com a data e horario atuais: {formatLocalDate(today.date)} as {today.time}.</p>
         )}
-        <select value={expenseForm.status} onChange={(event) => setExpenseForm((current) => ({ ...current, status: event.target.value as MonthlyExpenseStatus }))} className={fieldClass}>
-          <option value="completed">Realizado</option>
-          <option value="planned">Previsto</option>
-        </select>
+        <ManagementField label="Status do gasto" required>
+          <select value={expenseForm.status} onChange={(event) => setExpenseForm((current) => ({ ...current, status: event.target.value as MonthlyExpenseStatus }))} className={fieldClass}>
+            <option value="completed">Realizado</option>
+            <option value="planned">Previsto</option>
+          </select>
+        </ManagementField>
         {isFutureExpense(expenseForm.date, expenseForm.time) ? <p className="rounded-lg bg-amber/10 px-3 py-2 text-sm text-amber">Datas futuras serao salvas automaticamente como gasto previsto.</p> : null}
         <div className="grid gap-3 sm:grid-cols-2">
-          <input value={expenseForm.paymentMethod} onChange={(event) => setExpenseForm((current) => ({ ...current, paymentMethod: event.target.value }))} className={fieldClass} placeholder="Forma de pagamento opcional" />
-          <select value={expenseForm.expenseType} onChange={(event) => setExpenseForm((current) => ({ ...current, expenseType: event.target.value as "single" | "recurring", recurring: event.target.value === "recurring" }))} className={fieldClass}>
-            <option value="single">Unico</option>
-            <option value="recurring">Recorrente</option>
-          </select>
+          <ManagementField label="Forma de pagamento" optional helperText="Ex.: Pix, debito, credito, dinheiro ou conta bancaria.">
+            <input value={expenseForm.paymentMethod} onChange={(event) => setExpenseForm((current) => ({ ...current, paymentMethod: event.target.value }))} className={fieldClass} placeholder="Informe a forma de pagamento, se desejar" />
+          </ManagementField>
+          <ManagementField label="Tipo de lancamento" required>
+            <select value={expenseForm.expenseType} onChange={(event) => setExpenseForm((current) => ({ ...current, expenseType: event.target.value as "single" | "recurring", recurring: event.target.value === "recurring" }))} className={fieldClass}>
+              <option value="single">Unico</option>
+              <option value="recurring">Recorrente</option>
+            </select>
+          </ManagementField>
         </div>
         <label className="flex items-center gap-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
           <input type="checkbox" checked={expenseForm.recurring} onChange={(event) => setExpenseForm((current) => ({ ...current, recurring: event.target.checked, expenseType: event.target.checked ? "recurring" : "single" }))} className="h-4 w-4 accent-accent" />
@@ -2359,35 +2432,63 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
           <fieldset className="grid gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
             <legend className="px-1 text-xs uppercase tracking-[0.14em]">Recorrencia</legend>
             {editingExpense?.recurrenceId ? (
-              <select value={expenseForm.editScope} onChange={(event) => setExpenseForm((current) => ({ ...current, editScope: event.target.value as "single" | "series" }))} className={fieldClass}>
-                <option value="single">Editar somente este lancamento</option>
-                <option value="series">Editar toda recorrencia</option>
-              </select>
+              <ManagementField label="Escopo da edicao" required helperText="Escolha se a alteracao vale apenas para este gasto ou para toda a recorrencia.">
+                <select value={expenseForm.editScope} onChange={(event) => setExpenseForm((current) => ({ ...current, editScope: event.target.value as "single" | "series" }))} className={fieldClass}>
+                  <option value="single">Editar somente este lancamento</option>
+                  <option value="series">Editar toda recorrencia</option>
+                </select>
+              </ManagementField>
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
-              <select value={expenseForm.recurrenceFrequency} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceFrequency: event.target.value as MonthlyRecurrenceFrequency }))} className={fieldClass}>
-                {Object.entries(recurrenceFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <input type="number" min="1" max="60" value={expenseForm.recurrenceInterval} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceInterval: Number(event.target.value) }))} className={fieldClass} placeholder="Intervalo" />
+              <ManagementField label="Periodicidade" required>
+                <select value={expenseForm.recurrenceFrequency} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceFrequency: event.target.value as MonthlyRecurrenceFrequency }))} className={fieldClass}>
+                  {Object.entries(recurrenceFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </ManagementField>
+              <ManagementField label="Intervalo" required helperText="Ex.: a cada 1 mes, 2 meses ou conforme a periodicidade escolhida.">
+                <input type="number" min="1" max="60" value={expenseForm.recurrenceInterval} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceInterval: Number(event.target.value) }))} className={fieldClass} placeholder="Ex.: 1" />
+              </ManagementField>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <input type="number" min="1" max="31" value={expenseForm.recurrenceDayOfMonth} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceDayOfMonth: Number(event.target.value) }))} className={fieldClass} placeholder="Dia do mes" />
-              <input type="date" value={expenseForm.recurrenceStartDate} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceStartDate: event.target.value }))} className={fieldClass} aria-label="Data inicial da recorrencia" />
-              <input type="date" value={expenseForm.recurrenceEndDate} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceEndDate: event.target.value }))} className={fieldClass} aria-label="Data final da recorrencia" />
+              <ManagementField label="Dia do mes" required helperText="Use o dia desejado para gerar os proximos lancamentos.">
+                <input type="number" min="1" max="31" value={expenseForm.recurrenceDayOfMonth} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceDayOfMonth: Number(event.target.value) }))} className={fieldClass} placeholder="Ex.: 5" />
+              </ManagementField>
+              <ManagementField label="Data inicial da recorrencia" required>
+                <input type="date" value={expenseForm.recurrenceStartDate} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceStartDate: event.target.value }))} className={fieldClass} aria-label="Data inicial da recorrencia" />
+              </ManagementField>
+              <ManagementField label="Data final da recorrencia" optional>
+                <input type="date" value={expenseForm.recurrenceEndDate} onChange={(event) => setExpenseForm((current) => ({ ...current, recurrenceEndDate: event.target.value }))} className={fieldClass} aria-label="Data final da recorrencia" />
+              </ManagementField>
             </div>
             <p className="text-xs text-muted">Lancamentos futuros serao gerados como previstos, sem duplicar a recorrencia original.</p>
           </fieldset>
         ) : null}
-        <textarea value={expenseForm.note} onChange={(event) => setExpenseForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Observacao" />
+        <ManagementField label="Observacoes" optional helperText="Adicione contexto extra sobre este gasto, se necessario.">
+          <textarea value={expenseForm.note} onChange={(event) => setExpenseForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Ex.: mensalidade do semestre, compra manual ou observacao importante" />
+        </ManagementField>
       </ManagementModal>
 
-      <ManagementModal title={editingIncomeEntry ? "Editar entrada" : "Nova entrada"} isOpen={isIncomeEntryModalOpen} onClose={() => setIsIncomeEntryModalOpen(false)} onSubmit={submitIncomeEntry} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
-        <input required value={incomeEntryForm.description} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
-        <input required value={incomeEntryForm.amount} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, amount: event.target.value }))} className={fieldClass} placeholder="Valor" inputMode="decimal" />
-        <input required list="monthly-income-categories" value={incomeEntryForm.category} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, category: event.target.value }))} className={fieldClass} placeholder="Categoria da entrada" />
-        <datalist id="monthly-income-categories">
-          {incomeCategoryFilterOptions.map((category) => <option key={category} value={category} />)}
-        </datalist>
+      <ManagementModal
+        title={editingIncomeEntry ? "Editar entrada" : "Nova entrada"}
+        description="Cadastre entradas recebidas, previstas ou recorrentes com categoria, data e valor corretos."
+        isOpen={isIncomeEntryModalOpen}
+        onClose={() => setIsIncomeEntryModalOpen(false)}
+        onSubmit={submitIncomeEntry}
+        submitDisabled={isSaving}
+        submitLabel={isSaving ? "Salvando..." : "Salvar"}
+      >
+        <ManagementField label="Descricao da entrada" required helperText="Ex.: salario, freelance, dividendo manual ou reembolso.">
+          <input required autoFocus value={incomeEntryForm.description} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Ex.: Salario" />
+        </ManagementField>
+        <ManagementField label="Valor recebido" required helperText="Informe o valor total desta entrada.">
+          <input required value={incomeEntryForm.amount} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, amount: event.target.value }))} className={fieldClass} placeholder="Informe o valor recebido" inputMode="decimal" />
+        </ManagementField>
+        <ManagementField label="Categoria da entrada" required helperText="Use uma categoria clara para facilitar filtros e historico.">
+          <input required list="monthly-income-categories" value={incomeEntryForm.category} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, category: event.target.value }))} className={fieldClass} placeholder="Ex.: Salario, Freelance, Dividendos" />
+          <datalist id="monthly-income-categories">
+            {incomeCategoryFilterOptions.map((category) => <option key={category} value={category} />)}
+          </datalist>
+        </ManagementField>
         <fieldset className="rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
           <legend className="px-1 text-xs uppercase tracking-[0.14em]">Momento da entrada</legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -2403,22 +2504,30 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         </fieldset>
         {!incomeEntryForm.useCurrentMoment ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <input type="date" required value={incomeEntryForm.date} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, date: event.target.value, status: isFutureExpense(event.target.value, current.time) ? "planned" : current.status }))} className={fieldClass} />
-            <input type="time" required value={incomeEntryForm.time} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, time: event.target.value, status: isFutureExpense(current.date, event.target.value) ? "planned" : current.status }))} className={fieldClass} />
+            <ManagementField label="Data da entrada" required>
+              <input type="date" required value={incomeEntryForm.date} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, date: event.target.value, status: isFutureExpense(event.target.value, current.time) ? "planned" : current.status }))} className={fieldClass} />
+            </ManagementField>
+            <ManagementField label="Horario da entrada" required>
+              <input type="time" required value={incomeEntryForm.time} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, time: event.target.value, status: isFutureExpense(current.date, event.target.value) ? "planned" : current.status }))} className={fieldClass} />
+            </ManagementField>
           </div>
         ) : (
           <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">Sera registrada com a data e horario atuais: {formatLocalDate(today.date)} as {today.time}.</p>
         )}
-        <select value={incomeEntryForm.status} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, status: event.target.value as MonthlyIncomeEntryStatus }))} className={fieldClass}>
-          <option value="received">Recebida</option>
-          <option value="planned">Prevista</option>
-        </select>
+        <ManagementField label="Status da entrada" required>
+          <select value={incomeEntryForm.status} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, status: event.target.value as MonthlyIncomeEntryStatus }))} className={fieldClass}>
+            <option value="received">Recebida</option>
+            <option value="planned">Prevista</option>
+          </select>
+        </ManagementField>
         {isFutureExpense(incomeEntryForm.date, incomeEntryForm.time) ? <p className="rounded-lg bg-amber/10 px-3 py-2 text-sm text-amber">Datas futuras serao salvas automaticamente como entrada prevista.</p> : null}
         <div className="grid gap-3 sm:grid-cols-2">
-          <select value={incomeEntryForm.incomeType} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, incomeType: event.target.value as "single" | "recurring", recurring: event.target.value === "recurring" }))} className={fieldClass}>
-            <option value="single">Unica</option>
-            <option value="recurring">Recorrente</option>
-          </select>
+          <ManagementField label="Tipo de entrada" required>
+            <select value={incomeEntryForm.incomeType} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, incomeType: event.target.value as "single" | "recurring", recurring: event.target.value === "recurring" }))} className={fieldClass}>
+              <option value="single">Unica</option>
+              <option value="recurring">Recorrente</option>
+            </select>
+          </ManagementField>
           <label className="flex items-center gap-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
             <input type="checkbox" checked={incomeEntryForm.recurring} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurring: event.target.checked, incomeType: event.target.checked ? "recurring" : "single" }))} className="h-4 w-4 accent-accent" />
             Recorrente
@@ -2428,26 +2537,40 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
           <fieldset className="grid gap-3 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
             <legend className="px-1 text-xs uppercase tracking-[0.14em]">Recorrencia</legend>
             {editingIncomeEntry?.recurrenceId ? (
-              <select value={incomeEntryForm.editScope} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, editScope: event.target.value as "single" | "series" }))} className={fieldClass}>
-                <option value="single">Editar somente este lancamento</option>
-                <option value="series">Editar toda recorrencia</option>
-              </select>
+              <ManagementField label="Escopo da edicao" required helperText="Escolha se a alteracao vale apenas para esta entrada ou para toda a recorrencia.">
+                <select value={incomeEntryForm.editScope} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, editScope: event.target.value as "single" | "series" }))} className={fieldClass}>
+                  <option value="single">Editar somente este lancamento</option>
+                  <option value="series">Editar toda recorrencia</option>
+                </select>
+              </ManagementField>
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
-              <select value={incomeEntryForm.recurrenceFrequency} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceFrequency: event.target.value as MonthlyRecurrenceFrequency }))} className={fieldClass}>
-                {Object.entries(recurrenceFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <input type="number" min="1" max="60" value={incomeEntryForm.recurrenceInterval} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceInterval: Number(event.target.value) }))} className={fieldClass} placeholder="Intervalo" />
+              <ManagementField label="Periodicidade" required>
+                <select value={incomeEntryForm.recurrenceFrequency} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceFrequency: event.target.value as MonthlyRecurrenceFrequency }))} className={fieldClass}>
+                  {Object.entries(recurrenceFrequencyLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </ManagementField>
+              <ManagementField label="Intervalo" required helperText="Ex.: a cada 1 mes, 2 meses ou conforme a periodicidade escolhida.">
+                <input type="number" min="1" max="60" value={incomeEntryForm.recurrenceInterval} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceInterval: Number(event.target.value) }))} className={fieldClass} placeholder="Ex.: 1" />
+              </ManagementField>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <input type="number" min="1" max="31" value={incomeEntryForm.recurrenceDayOfMonth} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceDayOfMonth: Number(event.target.value) }))} className={fieldClass} placeholder="Dia do mes" />
-              <input type="date" value={incomeEntryForm.recurrenceStartDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceStartDate: event.target.value }))} className={fieldClass} aria-label="Data inicial da recorrencia" />
-              <input type="date" value={incomeEntryForm.recurrenceEndDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceEndDate: event.target.value }))} className={fieldClass} aria-label="Data final da recorrencia" />
+              <ManagementField label="Dia do mes" required helperText="Defina o dia usado para gerar os proximos recebimentos.">
+                <input type="number" min="1" max="31" value={incomeEntryForm.recurrenceDayOfMonth} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceDayOfMonth: Number(event.target.value) }))} className={fieldClass} placeholder="Ex.: 5" />
+              </ManagementField>
+              <ManagementField label="Data inicial da recorrencia" required>
+                <input type="date" value={incomeEntryForm.recurrenceStartDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceStartDate: event.target.value }))} className={fieldClass} aria-label="Data inicial da recorrencia" />
+              </ManagementField>
+              <ManagementField label="Data final da recorrencia" optional>
+                <input type="date" value={incomeEntryForm.recurrenceEndDate} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, recurrenceEndDate: event.target.value }))} className={fieldClass} aria-label="Data final da recorrencia" />
+              </ManagementField>
             </div>
             <p className="text-xs text-muted">Entradas futuras serao geradas como previstas, sem duplicar a recorrencia original.</p>
           </fieldset>
         ) : null}
-        <textarea value={incomeEntryForm.note} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Observacao" />
+        <ManagementField label="Observacoes" optional helperText="Adicione algum detalhe sobre a origem desta entrada, se necessario.">
+          <textarea value={incomeEntryForm.note} onChange={(event) => setIncomeEntryForm((current) => ({ ...current, note: event.target.value }))} className={areaClass} placeholder="Ex.: pagamento recorrente, bonus, ajuste ou observacao importante" />
+        </ManagementField>
       </ManagementModal>
 
       <ManagementModal
@@ -2533,20 +2656,40 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         ) : null}
       </ManagementModal>
 
-      <ManagementModal title={editingGoalId ? "Editar objetivo" : "Novo objetivo"} isOpen={isGoalModalOpen} onClose={() => setIsGoalModalOpen(false)} onSubmit={submitGoal} submitDisabled={isSaving} submitLabel={isSaving ? "Salvando..." : "Salvar"}>
-        <input required value={goalForm.name} onChange={(event) => setGoalForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome do objetivo" />
+      <ManagementModal
+        title={editingGoalId ? "Editar objetivo" : "Novo objetivo"}
+        description="Defina quanto deseja acumular, quanto ja foi reservado e qual fonte pode ser vinculada a esse objetivo."
+        isOpen={isGoalModalOpen}
+        onClose={() => setIsGoalModalOpen(false)}
+        onSubmit={submitGoal}
+        submitDisabled={isSaving}
+        submitLabel={isSaving ? "Salvando..." : "Salvar"}
+      >
+        <ManagementField label="Nome do objetivo" required helperText="Ex.: viagem, carro, reserva de emergencia ou liberdade financeira.">
+          <input required autoFocus value={goalForm.name} onChange={(event) => setGoalForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Ex.: Comprar carro" />
+        </ManagementField>
         <div className="grid gap-3 sm:grid-cols-3">
-          <input required value={goalForm.target} onChange={(event) => setGoalForm((current) => ({ ...current, target: event.target.value }))} className={fieldClass} placeholder="Meta" inputMode="decimal" />
-          <input value={goalForm.saved} onChange={(event) => setGoalForm((current) => ({ ...current, saved: event.target.value }))} className={fieldClass} placeholder="Guardado" inputMode="decimal" />
-          <input value={goalForm.monthlyContribution} onChange={(event) => setGoalForm((current) => ({ ...current, monthlyContribution: event.target.value }))} className={fieldClass} placeholder="Aporte mensal" inputMode="decimal" />
+          <ManagementField label="Valor objetivo" required helperText="Informe quanto deseja acumular para atingir esta meta.">
+            <input required value={goalForm.target} onChange={(event) => setGoalForm((current) => ({ ...current, target: event.target.value }))} className={fieldClass} placeholder="Informe o valor objetivo" inputMode="decimal" />
+          </ManagementField>
+          <ManagementField label="Valor ja guardado" optional helperText="Preencha quanto ja foi separado para esta meta.">
+            <input value={goalForm.saved} onChange={(event) => setGoalForm((current) => ({ ...current, saved: event.target.value }))} className={fieldClass} placeholder="Informe quanto ja possui guardado" inputMode="decimal" />
+          </ManagementField>
+          <ManagementField label="Aporte mensal" optional helperText="Use este campo para acompanhar o ritmo mensal de acumulacao.">
+            <input value={goalForm.monthlyContribution} onChange={(event) => setGoalForm((current) => ({ ...current, monthlyContribution: event.target.value }))} className={fieldClass} placeholder="Informe o aporte mensal desejado" inputMode="decimal" />
+          </ManagementField>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <select value={goalForm.linkedSource} onChange={(event) => setGoalForm((current) => ({ ...current, linkedSource: event.target.value as MonthlyFinancialGoalRecord["linkedSource"] }))} className={fieldClass}>
-            <option value="manual">Manual</option>
-            <option value="portfolio">Carteira</option>
-            <option value="cashbox">Caixinha</option>
-          </select>
-          <input value={goalForm.linkedSourceId} onChange={(event) => setGoalForm((current) => ({ ...current, linkedSourceId: event.target.value }))} className={fieldClass} placeholder="ID ou nome vinculado opcional" />
+          <ManagementField label="Origem vinculada" required helperText="Escolha se a meta acompanha valores manuais, carteira ou caixinha.">
+            <select value={goalForm.linkedSource} onChange={(event) => setGoalForm((current) => ({ ...current, linkedSource: event.target.value as MonthlyFinancialGoalRecord["linkedSource"] }))} className={fieldClass}>
+              <option value="manual">Manual</option>
+              <option value="portfolio">Carteira</option>
+              <option value="cashbox">Caixinha</option>
+            </select>
+          </ManagementField>
+          <ManagementField label="Identificador vinculado" optional helperText="Informe o nome ou ID da carteira/caixinha somente se quiser vincular esta meta a uma origem especifica.">
+            <input value={goalForm.linkedSourceId} onChange={(event) => setGoalForm((current) => ({ ...current, linkedSourceId: event.target.value }))} className={fieldClass} placeholder="Ex.: reserva-emergencia" />
+          </ManagementField>
         </div>
         <label className="flex items-center gap-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
           <input type="checkbox" checked={goalForm.active} onChange={(event) => setGoalForm((current) => ({ ...current, active: event.target.checked }))} className="h-4 w-4 accent-accent" />
@@ -2623,23 +2766,91 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
         ) : null}
       </ManagementModal>
 
-      <ConfirmDelete isOpen={deleteCategory !== null} title={`Excluir o setor ${deleteCategory?.name}? Os gastos ja lancados permanecerao no historico como setor removido.`} onCancel={() => setDeleteCategory(null)} onConfirm={() => void confirmDeleteCategory()} />
+      <ConfirmDelete
+        isOpen={deleteCategory !== null}
+        title="Excluir setor?"
+        description="Voce esta prestes a remover este setor do planejamento mensal."
+        details={[
+          deleteCategory?.name ?? "Setor sem nome",
+          "Os gastos ja lancados permanecerao no historico como setor removido."
+        ]}
+        confirmLabel="Excluir setor"
+        onCancel={() => setDeleteCategory(null)}
+        onConfirm={() => void confirmDeleteCategory()}
+      />
       <ConfirmDelete
         isOpen={deleteExpense !== null}
-        title={
+        title="Excluir gasto?"
+        description={
           deleteExpense?.allocationKind === "investment_contribution"
-            ? `Este lancamento esta vinculado a uma compra em ${deleteExpense.integration?.assetTicker ?? "ativo"}. Excluir o gasto tambem removera a movimentacao vinculada.${deleteExpense.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
+            ? `Este gasto esta vinculado a uma compra em ${deleteExpense.integration?.assetTicker ?? "ativo"} e a exclusao tambem removera a movimentacao vinculada.`
             : deleteExpense?.allocationKind === "cash_box_contribution"
-              ? `Este lancamento esta vinculado a uma movimentacao de caixinha. Excluir o gasto tambem removera a movimentacao vinculada.${deleteExpense.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
-              : `Excluir o gasto ${deleteExpense?.description}?${deleteExpense?.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`
+              ? "Este gasto esta vinculado a uma movimentacao de caixinha e a exclusao tambem removera a movimentacao vinculada."
+              : "Voce esta prestes a remover este gasto do planejamento mensal."
         }
+        details={[
+          deleteExpense?.description ?? "Gasto sem descricao",
+          deleteExpense ? formatCents(deleteExpense.amountInCents) : "-",
+          deleteExpense ? `${formatLocalDate(deleteExpense.date)} as ${deleteExpense.time}` : "-",
+          deleteExpense?.recurring ? "A exclusao cancela apenas este lancamento da recorrencia." : "Lancamento avulso."
+        ]}
+        confirmLabel="Excluir gasto"
         onCancel={() => setDeleteExpense(null)}
         onConfirm={() => void confirmDeleteExpense()}
       />
-      <ConfirmDelete isOpen={deleteExpenseSeries !== null} title={`Excluir toda recorrencia de ${deleteExpenseSeries?.description}?`} onCancel={() => setDeleteExpenseSeries(null)} onConfirm={() => void confirmDeleteExpenseSeries()} />
-      <ConfirmDelete isOpen={deleteIncomeEntry !== null} title={`Excluir a entrada ${deleteIncomeEntry?.description}?${deleteIncomeEntry?.recurring ? " Isso cancela apenas este lancamento da recorrencia." : ""}`} onCancel={() => setDeleteIncomeEntry(null)} onConfirm={() => void confirmDeleteIncomeEntry()} />
-      <ConfirmDelete isOpen={deleteIncomeEntrySeries !== null} title={`Excluir toda recorrencia de entrada ${deleteIncomeEntrySeries?.description}?`} onCancel={() => setDeleteIncomeEntrySeries(null)} onConfirm={() => void confirmDeleteIncomeEntrySeries()} />
-      <ConfirmDelete isOpen={deleteGoal !== null} title={`Excluir o objetivo ${deleteGoal?.name}?`} onCancel={() => setDeleteGoal(null)} onConfirm={() => void confirmDeleteGoal()} />
+      <ConfirmDelete
+        isOpen={deleteExpenseSeries !== null}
+        title="Excluir recorrencia de gasto?"
+        description="Voce esta prestes a cancelar esta recorrencia e os proximos lancamentos gerados por ela."
+        details={[
+          deleteExpenseSeries?.description ?? "Gasto recorrente",
+          deleteExpenseSeries ? formatCents(deleteExpenseSeries.amountInCents) : "-",
+          deleteExpenseSeries ? `Inicio em ${formatLocalDate(deleteExpenseSeries.date)}` : "-"
+        ]}
+        confirmLabel="Excluir recorrencia"
+        onCancel={() => setDeleteExpenseSeries(null)}
+        onConfirm={() => void confirmDeleteExpenseSeries()}
+      />
+      <ConfirmDelete
+        isOpen={deleteIncomeEntry !== null}
+        title="Excluir entrada?"
+        description="Voce esta prestes a remover esta entrada do planejamento mensal."
+        details={[
+          deleteIncomeEntry?.description ?? "Entrada sem descricao",
+          deleteIncomeEntry ? formatCents(deleteIncomeEntry.amountInCents) : "-",
+          deleteIncomeEntry ? `${formatLocalDate(deleteIncomeEntry.date)} as ${deleteIncomeEntry.time}` : "-",
+          deleteIncomeEntry?.recurring ? "A exclusao cancela apenas este lancamento da recorrencia." : "Lancamento avulso."
+        ]}
+        confirmLabel="Excluir entrada"
+        onCancel={() => setDeleteIncomeEntry(null)}
+        onConfirm={() => void confirmDeleteIncomeEntry()}
+      />
+      <ConfirmDelete
+        isOpen={deleteIncomeEntrySeries !== null}
+        title="Excluir recorrencia de entrada?"
+        description="Voce esta prestes a cancelar esta recorrencia e os proximos recebimentos gerados por ela."
+        details={[
+          deleteIncomeEntrySeries?.description ?? "Entrada recorrente",
+          deleteIncomeEntrySeries ? formatCents(deleteIncomeEntrySeries.amountInCents) : "-",
+          deleteIncomeEntrySeries ? `Inicio em ${formatLocalDate(deleteIncomeEntrySeries.date)}` : "-"
+        ]}
+        confirmLabel="Excluir recorrencia"
+        onCancel={() => setDeleteIncomeEntrySeries(null)}
+        onConfirm={() => void confirmDeleteIncomeEntrySeries()}
+      />
+      <ConfirmDelete
+        isOpen={deleteGoal !== null}
+        title="Excluir objetivo?"
+        description="Voce esta prestes a remover este objetivo do planejamento mensal."
+        details={[
+          deleteGoal?.name ?? "Objetivo sem nome",
+          deleteGoal ? formatCents(deleteGoal.targetInCents) : "-",
+          deleteGoal?.linkedSource ? `Origem: ${deleteGoal.linkedSource}` : "Origem manual"
+        ]}
+        confirmLabel="Excluir objetivo"
+        onCancel={() => setDeleteGoal(null)}
+        onConfirm={() => void confirmDeleteGoal()}
+      />
     </div>
   );
 }

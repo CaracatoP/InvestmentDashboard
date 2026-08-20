@@ -6,6 +6,7 @@ import { app } from "../app";
 import { env } from "../config/env";
 import { runWithAuthContext } from "../auth/auth-context";
 import { listDividends } from "../repositories/investment.repository";
+import { listAllMonthlyExpenses } from "../repositories/monthly-planning.repository";
 import { createBootstrapAdmin, getUserForAuthContext } from "../services/auth.service";
 import { createWhatsAppConnectionCode, disconnectWhatsAppIntegration } from "../services/whatsapp-link.service";
 
@@ -183,7 +184,7 @@ test("whatsapp webhook links code, processes a dividend command once and blocks 
     assert.equal(blockedResponse.status, 200);
     assert.equal(dividends.filter((dividend) => dividend.assetTicker === "PETR4" && dividend.totalValue === 85.4).length, 1);
     assert.equal(sentMessages.some((message) => JSON.stringify(message.payload).includes("WhatsApp conectado")), true);
-    assert.equal(sentMessages.some((message) => JSON.stringify(message.payload).includes("ainda nao esta conectado")), true);
+    assert.equal(sentMessages.some((message) => JSON.stringify(message.payload).includes("ainda nao conectado")), true);
   } finally {
     restore();
     await closeServer(server);
@@ -228,6 +229,50 @@ test("whatsapp provider send failure does not repeat a financial mutation", asyn
     assert.equal(firstConfirm.status, 200);
     assert.equal(duplicateConfirm.status, 200);
     assert.equal(dividends.filter((dividend) => dividend.assetTicker === "BBSE3" && dividend.totalValue === 40).length, 1);
+  } finally {
+    restore();
+    await closeServer(server);
+  }
+});
+
+test("whatsapp webhook keeps expense creation idempotent and sends rendered text instead of raw json", async () => {
+  const restore = configureWhatsApp();
+  const sentMessages: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    sentMessages.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ messages: [{ id: `sent-${randomUUID()}` }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const user = (await createBootstrapAdmin({
+      email: `whatsapp-expense-${randomUUID()}@example.com`,
+      password: "SenhaForte123!"
+    })).user;
+    const phone = uniqueBrazilianPhone();
+    const link = await asUser(user.id, () => createWhatsAppConnectionCode());
+    await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, link.code));
+
+    const expenseMessageId = `wamid.${randomUUID()}`;
+    const expensePayload = buildMessagePayload(expenseMessageId, phone, "gastei 20 reais com gasolina");
+    const first = await postWebhook(baseUrl, expensePayload);
+    const duplicate = await postWebhook(baseUrl, expensePayload);
+    const confirmed = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "confirmo"));
+    const expenses = await asUser(user.id, () => listAllMonthlyExpenses());
+    const lunchExpenses = expenses.filter((expense) => expense.description === "Gasolina" && expense.amountInCents === 2000);
+    const payloadBodies = sentMessages.map((message) => JSON.stringify(message));
+
+    assert.equal(first.status, 200);
+    assert.equal(duplicate.status, 200);
+    assert.equal(confirmed.status, 200);
+    assert.equal(lunchExpenses.length, 1);
+    assert.equal(payloadBodies.some((body) => /"message"|responseType|pendingAction|metadata/.test(body)), false);
+    assert.equal(payloadBodies.some((body) => body.includes("Responda com *confirmo* ou *cancelar*.")), true);
   } finally {
     restore();
     await closeServer(server);

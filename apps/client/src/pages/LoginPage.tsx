@@ -55,11 +55,11 @@ export function LoginPage() {
       <form onSubmit={(event) => void handleSubmit(event)} className="mt-6 space-y-4">
         <label className="block text-sm">
           <span className="text-muted">E-mail</span>
-          <input className={`${inputClass} mt-1`} type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+          <input className={`${inputClass} mt-1`} type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="seu@email.com" />
         </label>
         <label className="block text-sm">
           <span className="text-muted">Senha</span>
-          <input className={`${inputClass} mt-1`} type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+          <input className={`${inputClass} mt-1`} type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Digite sua senha" />
         </label>
         {error ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{error}</p> : null}
         <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">

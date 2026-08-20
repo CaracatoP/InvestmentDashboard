@@ -10,7 +10,7 @@ import {
 } from "../../services/monthly-planning.service";
 import { registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
 import { findMatchingExpectedDividend, markDividendReceived, registerReceivedDividend } from "../../services/dividend.service";
-import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../../repositories/monthly-planning.repository";
+import { findMonthlyPlanById, listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../../repositories/monthly-planning.repository";
 import {
   createOperation,
   listAssets,
@@ -163,6 +163,30 @@ const monthNames: Record<string, number> = {
   dezembro: 12
 };
 
+const selectionSearchStopWords = new Set([
+  "a", "ao", "aos", "as", "com", "da", "de", "do", "dos", "das", "e", "em", "na", "nas", "no", "nos", "o", "os", "para", "por", "um", "uma",
+  "ja", "já", "desse", "deste", "esse", "esta", "este", "mes", "mês", "meses", "qual", "quais", "dele", "dela", "deles", "delas",
+  "marque", "marcar", "paga", "pago", "paguei", "pagar", "recebi", "recebido", "recebida", "entrada", "gasto", "despesa", "prevista", "previsto",
+  "agora", "hoje", "ontem"
+]);
+
+type RankedExpenseCandidate = {
+  expense: Awaited<ReturnType<typeof listAllMonthlyExpenses>>[number];
+  score: number;
+  samePeriod: boolean;
+  directMatch: boolean;
+  matchedTokens: number;
+  categoryName: string;
+};
+
+type RankedIncomeEntryCandidate = {
+  entry: Awaited<ReturnType<typeof listAllMonthlyIncomeEntries>>[number];
+  score: number;
+  samePeriod: boolean;
+  directMatch: boolean;
+  matchedTokens: number;
+};
+
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
@@ -254,12 +278,76 @@ function formatDateBr(date: string) {
 function parseTargetMonth(message: string) {
   const normalized = normalizeText(message);
   const now = nowFields();
+  if (/\b(esse|este|desse|deste)\s+mes\b/.test(normalized)) {
+    return { year: now.year, month: now.month };
+  }
+  if (/\b(mes|mês)\s+passado\b|\bultimo\s+mes\b|\búltimo\s+m[eê]s\b/.test(normalized)) {
+    const reference = new Date(now.year, now.month - 2, 1);
+    return { year: reference.getFullYear(), month: reference.getMonth() + 1 };
+  }
+  if (/\bproximo\s+mes\b|\bpr[oó]ximo\s+m[eê]s\b|\bmes\s+que\s+vem\b|\bm[eê]s\s+seguinte\b/.test(normalized)) {
+    const reference = new Date(now.year, now.month, 1);
+    return { year: reference.getFullYear(), month: reference.getMonth() + 1 };
+  }
   for (const [name, month] of Object.entries(monthNames)) {
     if (normalized.includes(normalizeText(name))) {
       return { year: now.year, month };
     }
   }
   return { year: now.year, month: now.month };
+}
+
+function monthKey(year: number, month: number) {
+  return `${year}-${pad(month)}`;
+}
+
+function dateMonthKey(value?: string | null) {
+  if (!value || value.length < 7) return "";
+  return value.slice(0, 7);
+}
+
+function monthDistance(value: string, targetYear: number, targetMonth: number) {
+  const [year, month] = value.slice(0, 7).split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month)) return Number.MAX_SAFE_INTEGER;
+  return Math.abs((year - targetYear) * 12 + (month - targetMonth));
+}
+
+function absoluteDayDistance(left: string, right: string) {
+  const leftDate = new Date(`${left}T00:00:00`);
+  const rightDate = new Date(`${right}T00:00:00`);
+  if (Number.isNaN(leftDate.getTime()) || Number.isNaN(rightDate.getTime())) return Number.MAX_SAFE_INTEGER;
+  return Math.abs(leftDate.getTime() - rightDate.getTime()) / (24 * 60 * 60 * 1000);
+}
+
+function tokenizeSelectionSearch(value: string) {
+  const tokens = normalizeText(value)
+    .split(/[^a-z0-9]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !selectionSearchStopWords.has(token));
+  return [...new Set(tokens)];
+}
+
+function pickResolvedCandidate<T extends { score: number; samePeriod: boolean; directMatch: boolean; matchedTokens: number }>(candidates: T[]) {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  const [first, second] = candidates;
+  if (!second) return first;
+  if (first.score >= second.score + 80) return first;
+  if (first.samePeriod && !second.samePeriod && first.score >= second.score + 35) return first;
+  if (first.directMatch && !second.directMatch && first.score >= second.score + 30) return first;
+  if (first.matchedTokens > second.matchedTokens && first.score >= second.score + 25) return first;
+  return null;
+}
+
+function formatShortDateBr(date: string) {
+  const [year, month, day] = date.split("-");
+  if (!year || !month || !day) return date;
+  return `${day}/${month}`;
+}
+
+function buildSelectionOptionLabel(parts: Array<string | null | undefined>) {
+  return parts.filter((part) => typeof part === "string" && part.trim().length > 0).join(" - ");
 }
 
 function titleCaseDescription(value: string) {
@@ -394,14 +482,256 @@ function inferCategoryName(message: string) {
 }
 
 function buildPendingExpenseSearchText(message: string) {
-  return normalizeText(message)
-    .replace(/(?:r\$\s*)?\d[\d.,]*/gi, " ")
-    .replace(
-      /\b(?:marque|como|paga|pago|paguei|pagar|despesa|gasto|aquela|aquele|prevista|previsto|de|da|do|dos|das|o|a|os|as|real|reais)\b/g,
-      " "
-    )
-    .replace(/\s+/g, " ")
-    .trim();
+  return tokenizeSelectionSearch(
+    normalizeText(message)
+      .replace(/(?:r\$\s*)?\d[\d.,]*/gi, " ")
+      .replace(/\b(?:real|reais)\b/g, " ")
+  ).join(" ");
+}
+
+async function buildExpenseCategoryNameMap(expenses: Awaited<ReturnType<typeof listAllMonthlyExpenses>>) {
+  const planIds = [...new Set(expenses.map((expense) => expense.planId).filter(Boolean))];
+  const plans = await Promise.all(planIds.map(async (planId) => [planId, await findMonthlyPlanById(planId)] as const));
+  const categoryNamesByPlanId = new Map(
+    plans.map(([planId, plan]) => [
+      planId,
+      new Map((plan?.categories ?? []).map((category) => [category.id, category.name]))
+    ])
+  );
+
+  const categoryNames = new Map<string, string>();
+  for (const expense of expenses) {
+    if (!expense.id) continue;
+    const categoryName = categoryNamesByPlanId.get(expense.planId)?.get(expense.categoryId ?? "") ?? expense.categoryId ?? "";
+    categoryNames.set(expense.id, categoryName);
+  }
+
+  return categoryNames;
+}
+
+async function rankExpenseCompletionCandidates(message: string, expenses: Awaited<ReturnType<typeof listAllMonthlyExpenses>>) {
+  const normalized = normalizeText(message);
+  const candidateText = buildPendingExpenseSearchText(message);
+  const tokens = tokenizeSelectionSearch(candidateText);
+  const amountInCents = parseMoneyToCents(message);
+  const period = parseTargetMonth(message);
+  const targetPeriodKey = monthKey(period.year, period.month);
+  const now = nowFields();
+  const categoryNames = await buildExpenseCategoryNameMap(expenses);
+
+  return expenses
+    .filter((expense) => expense.status !== "completed" && !expense.recurrenceCancelled)
+    .map((expense) => {
+      const categoryName = categoryNames.get(expense.id ?? "") ?? "";
+      const searchable = normalizeText([expense.description, expense.note ?? "", categoryName].filter(Boolean).join(" "));
+      const description = normalizeText(expense.description);
+      const directMatch = !candidateText || normalized.includes(description) || description.includes(candidateText) || candidateText.includes(description);
+      const matchedTokens = tokens.filter((token) => searchable.includes(token)).length;
+      const hasTextMatch = !candidateText || directMatch || matchedTokens > 0;
+      const matchesAmount = !amountInCents || expense.amountInCents === amountInCents;
+      if (!matchesAmount || !hasTextMatch) return null;
+
+      const samePeriod = dateMonthKey(expense.date) === targetPeriodKey;
+      let score = 0;
+      if (amountInCents) score += 80;
+      if (directMatch) score += 75;
+      score += matchedTokens * 28;
+      if (tokens.length > 0 && matchedTokens === tokens.length) score += 30;
+      if (samePeriod) score += 140;
+      else score += Math.max(0, 55 - monthDistance(expense.date, period.year, period.month) * 20);
+      score += Math.max(0, 24 - absoluteDayDistance(expense.date, now.date));
+      if (expense.recurring) score += 8;
+
+      return { expense, score, samePeriod, directMatch, matchedTokens, categoryName } satisfies RankedExpenseCandidate;
+    })
+    .filter((candidate): candidate is RankedExpenseCandidate => candidate !== null)
+    .sort((left, right) => right.score - left.score || left.expense.date.localeCompare(right.expense.date) || left.expense.description.localeCompare(right.expense.description));
+}
+
+function buildExpenseSelectionMissingField(candidates: RankedExpenseCandidate[]): MissingField {
+  return {
+    ...fieldDefinition("expenseId"),
+    options: candidates.slice(0, 8).map((candidate) => ({
+      value: candidate.expense.id ?? "",
+      label: buildSelectionOptionLabel([
+        candidate.expense.description,
+        formatCurrencyFromCents(candidate.expense.amountInCents),
+        formatShortDateBr(candidate.expense.date),
+        candidate.categoryName || null
+      ])
+    }))
+  };
+}
+
+function buildExpenseCompletionPreviewFields(expense: RankedExpenseCandidate["expense"], completedAt?: string | null, categoryName?: string) {
+  return [
+    { label: "Descricao", value: expense.description },
+    { label: "Valor", value: formatCurrencyFromCents(expense.amountInCents) },
+    { label: "Vencimento", value: formatDateBr(expense.date) },
+    ...(categoryName ? [{ label: "Categoria", value: categoryName }] : []),
+    ...(completedAt ? [{ label: "Pago em", value: formatDateBr(String(completedAt).slice(0, 10)) }] : [])
+  ];
+}
+
+async function updateExpenseSelectionAction(
+  action: AiPendingActionRecord,
+  candidates: RankedExpenseCandidate[],
+  completedAt?: string | null,
+  message = "Encontrei mais de um gasto. Qual deles voce pagou?"
+) {
+  const missingFields = [buildExpenseSelectionMissingField(candidates)];
+  const extractedFields: ExtractedFields = {
+    ...(action.extractedFields as Record<string, unknown>),
+    expenseId: null,
+    candidateExpenseIds: candidates.map((candidate) => candidate.expense.id).filter(Boolean),
+    ...(completedAt ? { completedAt } : {})
+  };
+  const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status: "collecting" });
+  if (!updated) return createErrorResponse("Nao consegui atualizar a selecao pendente.");
+  const preview = buildPreview(
+    updated,
+    completedAt ? [{ label: "Pago em", value: formatDateBr(String(completedAt).slice(0, 10)) }] : [],
+    "Escolher gasto para marcar como pago"
+  );
+  const withPreview = await updateAiPendingAction(action.id ?? "", { preview });
+  return actionResponse(withPreview ?? { ...updated, preview }, message);
+}
+
+async function finalizeExpenseCompletionSelection(action: AiPendingActionRecord, candidate: RankedExpenseCandidate, completedAt?: string | null) {
+  const extractedFields: ExtractedFields = {
+    ...(action.extractedFields as Record<string, unknown>),
+    expenseId: candidate.expense.id,
+    description: candidate.expense.description,
+    amountInCents: candidate.expense.amountInCents,
+    expenseDate: candidate.expense.date,
+    categoryName: candidate.categoryName,
+    candidateExpenseIds: [candidate.expense.id].filter(Boolean),
+    ...(completedAt ? { completedAt } : {})
+  };
+  const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
+  const status = missingFields.length ? "collecting" : "awaiting_confirmation";
+  const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status });
+  if (!updated) return createErrorResponse("Nao consegui atualizar a acao pendente.");
+  const preview = buildPreview(updated, buildExpenseCompletionPreviewFields(candidate.expense, completedAt, candidate.categoryName), "Marcar gasto como pago");
+  const withPreview = await updateAiPendingAction(action.id ?? "", { preview });
+  return actionResponse(withPreview ?? { ...updated, preview }, "Confirme para marcar este gasto como pago.");
+}
+
+function buildPendingIncomeSearchText(message: string) {
+  return tokenizeSelectionSearch(
+    normalizeText(message)
+      .replace(/(?:r\$\s*)?\d[\d.,]*/gi, " ")
+      .replace(/\b(?:entrada|receita|recebimento|real|reais)\b/g, " ")
+  ).join(" ");
+}
+
+function rankIncomeEntryCandidates(message: string, entries: Awaited<ReturnType<typeof listAllMonthlyIncomeEntries>>) {
+  const normalized = normalizeText(message);
+  const candidateText = buildPendingIncomeSearchText(message);
+  const tokens = tokenizeSelectionSearch(candidateText);
+  const amountInCents = parseMoneyToCents(message);
+  const category = inferIncomeCategory(message);
+  const period = parseTargetMonth(message);
+  const targetPeriodKey = monthKey(period.year, period.month);
+  const now = nowFields();
+
+  return entries
+    .filter((entry) => entry.status === "planned" && !entry.recurrenceCancelled)
+    .map((entry) => {
+      const searchable = normalizeText([entry.description, entry.category, entry.note ?? ""].filter(Boolean).join(" "));
+      const description = normalizeText(entry.description);
+      const categoryText = normalizeText(entry.category);
+      const directMatch = !candidateText || description.includes(candidateText) || candidateText.includes(description) || categoryText.includes(candidateText);
+      const matchedTokens = tokens.filter((token) => searchable.includes(token)).length;
+      const hasTextMatch = !candidateText || directMatch || matchedTokens > 0;
+      const matchesAmount = !amountInCents || entry.amountInCents === amountInCents;
+      const matchesCategory = category === "Outros" || categoryText.includes(normalizeText(category));
+      if (!matchesAmount || (!hasTextMatch && !matchesCategory)) return null;
+
+      const samePeriod = dateMonthKey(entry.date) === targetPeriodKey;
+      let score = 0;
+      if (amountInCents) score += 80;
+      if (directMatch) score += 70;
+      if (matchesCategory) score += 28;
+      score += matchedTokens * 24;
+      if (tokens.length > 0 && matchedTokens === tokens.length) score += 24;
+      if (samePeriod) score += 120;
+      else score += Math.max(0, 48 - monthDistance(entry.date, period.year, period.month) * 18);
+      score += Math.max(0, 20 - absoluteDayDistance(entry.date, now.date));
+
+      return { entry, score, samePeriod, directMatch, matchedTokens } satisfies RankedIncomeEntryCandidate;
+    })
+    .filter((candidate): candidate is RankedIncomeEntryCandidate => candidate !== null)
+    .sort((left, right) => right.score - left.score || left.entry.date.localeCompare(right.entry.date) || left.entry.description.localeCompare(right.entry.description));
+}
+
+function buildIncomeEntrySelectionMissingField(candidates: RankedIncomeEntryCandidate[]): MissingField {
+  return {
+    ...fieldDefinition("incomeEntryId"),
+    options: candidates.slice(0, 8).map((candidate) => ({
+      value: candidate.entry.id ?? "",
+      label: buildSelectionOptionLabel([
+        candidate.entry.description,
+        formatCurrencyFromCents(candidate.entry.amountInCents),
+        formatShortDateBr(candidate.entry.date),
+        candidate.entry.category
+      ])
+    }))
+  };
+}
+
+function buildIncomeEntryReceiptPreviewFields(entry: RankedIncomeEntryCandidate["entry"], receivedAt?: string | null) {
+  return [
+    { label: "Descricao", value: entry.description },
+    { label: "Valor", value: formatCurrencyFromCents(entry.amountInCents) },
+    { label: "Categoria", value: entry.category },
+    { label: "Data prevista", value: formatDateBr(entry.date) },
+    ...(receivedAt ? [{ label: "Recebido em", value: formatDateBr(String(receivedAt).slice(0, 10)) }] : [])
+  ];
+}
+
+async function updateIncomeEntrySelectionAction(
+  action: AiPendingActionRecord,
+  candidates: RankedIncomeEntryCandidate[],
+  receivedAt?: string | null,
+  message = "Encontrei mais de uma entrada prevista. Qual delas voce recebeu?"
+) {
+  const missingFields = [buildIncomeEntrySelectionMissingField(candidates)];
+  const extractedFields: ExtractedFields = {
+    ...(action.extractedFields as Record<string, unknown>),
+    incomeEntryId: null,
+    candidateIncomeEntryIds: candidates.map((candidate) => candidate.entry.id).filter(Boolean),
+    ...(receivedAt ? { receivedAt } : {})
+  };
+  const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status: "collecting" });
+  if (!updated) return createErrorResponse("Nao consegui atualizar a selecao pendente.");
+  const preview = buildPreview(
+    updated,
+    receivedAt ? [{ label: "Recebido em", value: formatDateBr(String(receivedAt).slice(0, 10)) }] : [],
+    "Escolher entrada prevista"
+  );
+  const withPreview = await updateAiPendingAction(action.id ?? "", { preview });
+  return actionResponse(withPreview ?? { ...updated, preview }, message);
+}
+
+async function finalizeIncomeEntrySelection(action: AiPendingActionRecord, candidate: RankedIncomeEntryCandidate, receivedAt?: string | null) {
+  const extractedFields: ExtractedFields = {
+    ...(action.extractedFields as Record<string, unknown>),
+    incomeEntryId: candidate.entry.id,
+    description: candidate.entry.description,
+    category: candidate.entry.category,
+    amountInCents: candidate.entry.amountInCents,
+    incomeDate: candidate.entry.date,
+    candidateIncomeEntryIds: [candidate.entry.id].filter(Boolean),
+    ...(receivedAt ? { receivedAt } : {})
+  };
+  const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
+  const status = missingFields.length ? "collecting" : "awaiting_confirmation";
+  const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status });
+  if (!updated) return createErrorResponse("Nao consegui atualizar a acao pendente.");
+  const preview = buildPreview(updated, buildIncomeEntryReceiptPreviewFields(candidate.entry, receivedAt), "Marcar entrada como recebida");
+  const withPreview = await updateAiPendingAction(action.id ?? "", { preview });
+  return actionResponse(withPreview ?? { ...updated, preview }, "Confirme para marcar esta entrada como recebida.");
 }
 
 async function resolveBudgetCategory(year: number, month: number, message: string) {
@@ -694,12 +1024,25 @@ async function createPendingAction(input: {
 
 function actionResponse(action: AiPendingActionRecord, message: string): AiChatStructuredResponse {
   if (action.status === "collecting") {
+    const selectField = action.missingFields.find((field) => field.type === "select" && (field.options?.length ?? 0) > 0);
     return createStructuredResponse({
       responseType: "form",
-      title: "Preciso de mais uma informacao",
+      title: action.preview?.title ?? (selectField ? "Escolha uma opcao" : "Preciso de mais uma informacao"),
       message,
       pendingAction: action.preview,
-      sections: [{ type: "alert", items: [{ title: "Campo pendente", description: message, severity: "info" }] }]
+      sections: [
+        { type: "alert", items: [{ title: "Campo pendente", description: message, severity: "info" }] },
+        ...(selectField
+          ? [
+              {
+                type: "list" as const,
+                title: selectField.label,
+                items: (selectField.options ?? []).slice(0, 8).map((option) => ({ title: option.label, severity: "info" as const }))
+              }
+            ]
+          : [])
+      ],
+      suggestions: selectField ? ["Responda com o numero ou com o nome", "cancelar"] : []
     });
   }
 
@@ -1157,58 +1500,53 @@ async function prepareSettingsUpdate(sessionId: string, message: string) {
 async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|paga|pago|paguei)/.test(normalized)) return null;
-  const amountInCents = parseMoneyToCents(message);
-  const candidateText = buildPendingExpenseSearchText(message);
-  const expenses = (await listAllMonthlyExpenses()).filter((expense) => expense.status !== "completed");
-  const candidates = expenses.filter((expense) => {
-    const description = normalizeText(expense.description);
-    const matchesText = !candidateText || normalized.includes(description) || description.includes(candidateText) || candidateText.includes(description);
-    const matchesAmount = !amountInCents || expense.amountInCents === amountInCents;
-    return matchesText && matchesAmount;
-  });
+  const completedAt = parseCompletedAtInput(message);
+  const rankedCandidates = await rankExpenseCompletionCandidates(message, await listAllMonthlyExpenses());
+  const resolved = pickResolvedCandidate(rankedCandidates);
 
-  if (candidates.length !== 1) {
+  if (!resolved && rankedCandidates.length === 0) {
     return createStructuredResponse({
       responseType: "form",
       title: "Escolha o gasto",
-      message: candidates.length === 0 ? "Nao encontrei um gasto pendente correspondente." : "Encontrei mais de um gasto. Qual deseja marcar como pago?",
-      pendingAction: null,
-      sections: [
-        {
-          type: "table",
-          table: {
-            columns: [
-              { key: "description", label: "Descricao", format: "text" },
-              { key: "amountInCents", label: "Valor", format: "currency" },
-              { key: "date", label: "Data", format: "date" }
-            ],
-            rows: candidates.slice(0, 8).map((expense) => ({
-              id: expense.id ?? "",
-              description: expense.description,
-              amountInCents: expense.amountInCents,
-              date: expense.date
-            }))
-          }
-        }
-      ]
+      message: "Nao encontrei um gasto pendente correspondente.",
+      pendingAction: null
     });
   }
 
-  const expense = candidates[0];
-  const completedAt = parseCompletedAtInput(message);
+  if (!resolved) {
+    const action = await createPendingAction({
+      sessionId,
+      actionType: "mark_expense_completed",
+      toolName: "markExpenseAsCompleted",
+      extractedFields: {
+        expenseId: null,
+        candidateExpenseIds: rankedCandidates.map((candidate) => candidate.expense.id).filter(Boolean),
+        completedAt
+      },
+      missingFields: [buildExpenseSelectionMissingField(rankedCandidates)],
+      riskLevel: "medium",
+      title: "Escolher gasto para marcar como pago",
+      previewFields: completedAt ? [{ label: "Pago em", value: formatDateBr(String(completedAt).slice(0, 10)) }] : []
+    });
+    return actionResponse(action, "Encontrei mais de um gasto. Qual deles voce pagou?");
+  }
+
+  const expense = resolved.expense;
   const action = await createPendingAction({
     sessionId,
     actionType: "mark_expense_completed",
     toolName: "markExpenseAsCompleted",
-    extractedFields: { expenseId: expense.id, description: expense.description, amountInCents: expense.amountInCents, completedAt },
+    extractedFields: {
+      expenseId: expense.id,
+      description: expense.description,
+      amountInCents: expense.amountInCents,
+      expenseDate: expense.date,
+      categoryName: resolved.categoryName,
+      completedAt
+    },
     riskLevel: "medium",
     title: "Marcar gasto como pago",
-    previewFields: [
-      { label: "Descricao", value: expense.description },
-      { label: "Valor", value: formatCurrencyFromCents(expense.amountInCents) },
-      { label: "Data", value: formatDateBr(expense.date) },
-      ...(completedAt ? [{ label: "Pagamento", value: formatDateBr(String(completedAt).slice(0, 10)) }] : [])
-    ]
+    previewFields: buildExpenseCompletionPreviewFields(expense, completedAt, resolved.categoryName)
   });
   return actionResponse(action, "Confirme para marcar este gasto como pago.");
 }
@@ -1216,64 +1554,53 @@ async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
 async function prepareMarkIncomeEntryReceived(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|recebi|recebida|recebido|entrada)/.test(normalized)) return null;
-  const entries = (await listAllMonthlyIncomeEntries()).filter((entry) => entry.status === "planned" && !entry.recurrenceCancelled);
-  const amountInCents = parseMoneyToCents(message);
-  const category = inferIncomeCategory(message);
-  const candidateText = normalized.replace(/marque|como|recebi|recebida|recebido|entrada|aquela|aquele|prevista|previsto/g, "").trim();
-  const candidates = entries.filter((entry) => {
-    const entryDescription = normalizeText(entry.description);
-    const entryCategory = normalizeText(entry.category);
-    const matchesAmount = !amountInCents || entry.amountInCents === amountInCents;
-    const matchesCategory = category === "Outros" || entryCategory.includes(normalizeText(category));
-    const matchesText = !candidateText || entryDescription.includes(candidateText) || candidateText.includes(entryDescription) || entryCategory.includes(candidateText);
-    return matchesAmount && (matchesCategory || matchesText);
-  });
+  const receivedAt = parseCompletedAtInput(message);
+  const rankedCandidates = rankIncomeEntryCandidates(message, await listAllMonthlyIncomeEntries());
+  const resolved = pickResolvedCandidate(rankedCandidates);
 
-  if (candidates.length !== 1) {
+  if (!resolved && rankedCandidates.length === 0) {
     return createStructuredResponse({
       responseType: "form",
       title: "Escolha a entrada",
-      message: candidates.length === 0 ? "Nao encontrei uma entrada prevista correspondente." : "Encontrei mais de uma entrada prevista. Qual deseja marcar como recebida?",
-      pendingAction: null,
-      sections: [
-        {
-          type: "table",
-          table: {
-            columns: [
-              { key: "description", label: "Descricao", format: "text" },
-              { key: "category", label: "Categoria", format: "text" },
-              { key: "amountInCents", label: "Valor", format: "currency" },
-              { key: "date", label: "Data", format: "date" }
-            ],
-            rows: candidates.slice(0, 8).map((entry) => ({
-              id: entry.id ?? "",
-              description: entry.description,
-              category: entry.category,
-              amountInCents: entry.amountInCents,
-              date: entry.date
-            }))
-          }
-        }
-      ]
+      message: "Nao encontrei uma entrada prevista correspondente.",
+      pendingAction: null
     });
   }
 
-  const entry = candidates[0];
-  const receivedAt = parseCompletedAtInput(message);
+  if (!resolved) {
+    const action = await createPendingAction({
+      sessionId,
+      actionType: "mark_income_entry_received",
+      toolName: "markIncomeEntryAsReceived",
+      extractedFields: {
+        incomeEntryId: null,
+        candidateIncomeEntryIds: rankedCandidates.map((candidate) => candidate.entry.id).filter(Boolean),
+        receivedAt
+      },
+      missingFields: [buildIncomeEntrySelectionMissingField(rankedCandidates)],
+      riskLevel: "low",
+      title: "Escolher entrada prevista",
+      previewFields: receivedAt ? [{ label: "Recebido em", value: formatDateBr(String(receivedAt).slice(0, 10)) }] : []
+    });
+    return actionResponse(action, "Encontrei mais de uma entrada prevista. Qual delas voce recebeu?");
+  }
+
+  const entry = resolved.entry;
   const action = await createPendingAction({
     sessionId,
     actionType: "mark_income_entry_received",
     toolName: "markIncomeEntryAsReceived",
-    extractedFields: { incomeEntryId: entry.id, description: entry.description, category: entry.category, amountInCents: entry.amountInCents, receivedAt },
+    extractedFields: {
+      incomeEntryId: entry.id,
+      description: entry.description,
+      category: entry.category,
+      amountInCents: entry.amountInCents,
+      incomeDate: entry.date,
+      receivedAt
+    },
     riskLevel: "low",
     title: "Marcar entrada como recebida",
-    previewFields: [
-      { label: "Descricao", value: entry.description },
-      { label: "Valor", value: formatCurrencyFromCents(entry.amountInCents) },
-      { label: "Categoria", value: entry.category },
-      { label: "Data prevista", value: formatDateBr(entry.date) },
-      ...(receivedAt ? [{ label: "Recebimento", value: formatDateBr(String(receivedAt).slice(0, 10)) }] : [])
-    ]
+    previewFields: buildIncomeEntryReceiptPreviewFields(entry, receivedAt)
   });
   return actionResponse(action, "Confirme para marcar esta entrada como recebida.");
 }
@@ -1381,13 +1708,15 @@ async function prepareInvestmentOperation(sessionId: string, message: string, op
 
 async function prepareDividendIncome(sessionId: string, message: string, type: "dividendo" | "jcp") {
   const now = nowFields();
-  const paymentDate = parseDateInput(message) ?? now.date;
+  const explicitPaymentDate = parseDateInput(message);
+  const paymentDate = explicitPaymentDate ?? now.date;
   const ticker = extractTicker(message);
   const amountInCents = parseMoneyToCents(message);
   const matchingDividend = await findMatchingExpectedDividend({
     assetTicker: ticker,
     amountInCents,
-    paymentDate,
+    paymentDate: explicitPaymentDate,
+    referenceMonth: paymentDate.slice(0, 7),
     type
   });
   const extractedFields: ExtractedFields = {
@@ -1743,6 +2072,60 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
 
   if (isInvestmentTool(action.toolName)) {
     return updateInvestmentCollectingAction(action, message);
+  }
+
+  if (action.toolName === "markExpenseAsCompleted" && action.missingFields.some((field) => field.name === "expenseId")) {
+    const candidateIds = Array.isArray(action.extractedFields.candidateExpenseIds)
+      ? action.extractedFields.candidateExpenseIds.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+    const allCandidates = await rankExpenseCompletionCandidates(
+      message,
+      (await listAllMonthlyExpenses()).filter((expense) => expense.id && candidateIds.includes(expense.id) && expense.status !== "completed" && !expense.recurrenceCancelled)
+    );
+    if (allCandidates.length === 0) {
+      return createErrorResponse("Nao encontrei mais esse gasto pendente. Envie o pedido novamente.");
+    }
+
+    const selectionIndex = message.match(/\b([1-8])\b/)?.[1];
+    const completedAt = parseCompletedAtInput(message) ?? (typeof action.extractedFields.completedAt === "string" ? action.extractedFields.completedAt : undefined);
+    const selectedByIndex = selectionIndex ? allCandidates[Number(selectionIndex) - 1] : null;
+    if (selectedByIndex) {
+      return finalizeExpenseCompletionSelection(action, selectedByIndex, completedAt);
+    }
+
+    const resolved = pickResolvedCandidate(allCandidates);
+    if (resolved) {
+      return finalizeExpenseCompletionSelection(action, resolved, completedAt);
+    }
+
+    return updateExpenseSelectionAction(action, allCandidates, completedAt, "Ainda encontrei mais de um gasto compatível. Qual deles voce pagou?");
+  }
+
+  if (action.toolName === "markIncomeEntryAsReceived" && action.missingFields.some((field) => field.name === "incomeEntryId")) {
+    const candidateIds = Array.isArray(action.extractedFields.candidateIncomeEntryIds)
+      ? action.extractedFields.candidateIncomeEntryIds.filter((value): value is string => typeof value === "string" && value.length > 0)
+      : [];
+    const allCandidates = rankIncomeEntryCandidates(
+      message,
+      (await listAllMonthlyIncomeEntries()).filter((entry) => entry.id && candidateIds.includes(entry.id) && entry.status === "planned" && !entry.recurrenceCancelled)
+    );
+    if (allCandidates.length === 0) {
+      return createErrorResponse("Nao encontrei mais essa entrada prevista. Envie o pedido novamente.");
+    }
+
+    const selectionIndex = message.match(/\b([1-8])\b/)?.[1];
+    const receivedAt = parseCompletedAtInput(message) ?? (typeof action.extractedFields.receivedAt === "string" ? action.extractedFields.receivedAt : undefined);
+    const selectedByIndex = selectionIndex ? allCandidates[Number(selectionIndex) - 1] : null;
+    if (selectedByIndex) {
+      return finalizeIncomeEntrySelection(action, selectedByIndex, receivedAt);
+    }
+
+    const resolved = pickResolvedCandidate(allCandidates);
+    if (resolved) {
+      return finalizeIncomeEntrySelection(action, resolved, receivedAt);
+    }
+
+    return updateIncomeEntrySelectionAction(action, allCandidates, receivedAt, "Ainda encontrei mais de uma entrada prevista compatível. Qual delas voce recebeu?");
   }
 
   if (action.toolName === "createMonthlyExpense" && action.missingFields.some((field) => field.name === "categoryId")) {

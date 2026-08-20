@@ -8,9 +8,24 @@ interface ToolbarProps {
   onFilterChange?: (value: string) => void;
   filterOptions?: string[];
   onCreate: () => void;
+  searchPlaceholder?: string;
+  searchLabel?: string;
+  filterLabel?: string;
+  createLabel?: string;
 }
 
-export function ManagementToolbar({ search, onSearchChange, filter = "Todos", onFilterChange, filterOptions = [], onCreate }: ToolbarProps) {
+export function ManagementToolbar({
+  search,
+  onSearchChange,
+  filter = "Todos",
+  onFilterChange,
+  filterOptions = [],
+  onCreate,
+  searchPlaceholder = "Pesquise pelo nome, descricao ou identificador",
+  searchLabel = "Pesquisar registros",
+  filterLabel = "Filtrar registros",
+  createLabel = "Novo"
+}: ToolbarProps) {
   return (
     <div className="mb-4 flex flex-col gap-3 md:flex-row md:flex-wrap">
       <label className="relative flex-1">
@@ -19,7 +34,8 @@ export function ManagementToolbar({ search, onSearchChange, filter = "Todos", on
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
           className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm"
-          placeholder="Pesquisar"
+          placeholder={searchPlaceholder}
+          aria-label={searchLabel}
         />
       </label>
       {filterOptions.length > 0 ? (
@@ -27,6 +43,7 @@ export function ManagementToolbar({ search, onSearchChange, filter = "Todos", on
           value={filter}
           onChange={(event) => onFilterChange?.(event.target.value)}
           className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm md:w-auto"
+          aria-label={filterLabel}
         >
           {filterOptions.map((option) => (
             <option key={option}>{option}</option>
@@ -39,7 +56,7 @@ export function ManagementToolbar({ search, onSearchChange, filter = "Todos", on
         className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 sm:w-auto"
       >
         <Plus size={16} />
-        Novo
+        {createLabel}
       </button>
     </div>
   );
@@ -168,16 +185,26 @@ interface ModalProps {
   children: ReactNode;
   submitLabel?: string;
   submitDisabled?: boolean;
+  description?: string;
 }
 
-export function ManagementModal({ title, isOpen, onClose, onSubmit, children, submitLabel = "Salvar", submitDisabled = false }: ModalProps) {
+export function ManagementModal({ title, isOpen, onClose, onSubmit, children, submitLabel = "Salvar", submitDisabled = false, description }: ModalProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4">
-      <form onSubmit={onSubmit} className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col rounded-lg border border-line bg-panel shadow-soft">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
+      <form
+        onSubmit={onSubmit}
+        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col rounded-lg border border-line bg-panel shadow-soft"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="flex items-center justify-between gap-3 px-4 pt-4">
-          <h2 className="min-w-0 break-words text-base font-semibold text-ink">{title}</h2>
+          <div className="min-w-0">
+            <h2 className="min-w-0 break-words text-base font-semibold text-ink">{title}</h2>
+            {description ? <p className="mt-1 text-sm text-muted">{description}</p> : null}
+          </div>
           <button type="button" onClick={onClose} className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-elevated text-muted hover:text-ink" aria-label="Fechar modal">
             <X size={16} />
           </button>
@@ -196,30 +223,70 @@ export function ManagementModal({ title, isOpen, onClose, onSubmit, children, su
   );
 }
 
+export function ManagementField({
+  label,
+  children,
+  helperText,
+  required = false,
+  optional = false
+}: {
+  label: string;
+  children: ReactNode;
+  helperText?: ReactNode;
+  required?: boolean;
+  optional?: boolean;
+}) {
+  return (
+    <label className="grid gap-1 text-sm text-muted">
+      <span className="font-medium text-ink">
+        {label}
+        {required ? " *" : optional ? " (opcional)" : ""}
+      </span>
+      {children}
+      {helperText ? <span className="text-xs text-muted">{helperText}</span> : null}
+    </label>
+  );
+}
+
 export function ConfirmDelete({
   isOpen,
   title,
+  description,
+  details,
+  confirmLabel = "Excluir",
+  cancelLabel = "Cancelar",
   onCancel,
   onConfirm
 }: {
   isOpen: boolean;
   title: string;
+  description?: ReactNode;
+  details?: Array<ReactNode>;
+  confirmLabel?: string;
+  cancelLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4">
-      <div className="w-full max-w-md rounded-lg border border-line bg-panel p-4 shadow-soft">
-        <h2 className="break-words text-base font-semibold text-ink">Confirmar exclusao</h2>
-        <p className="mt-2 text-sm text-muted">{title}</p>
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
+      <div className="w-full max-w-md rounded-lg border border-line bg-panel p-4 shadow-soft" role="dialog" aria-modal="true" aria-label={title}>
+        <h2 className="break-words text-base font-semibold text-ink">{title}</h2>
+        {description ? <div className="mt-2 text-sm text-muted">{description}</div> : null}
+        {details && details.length > 0 ? (
+          <div className="mt-4 space-y-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
+            {details.map((detail, index) => (
+              <p key={index} className="break-words">{detail}</p>
+            ))}
+          </div>
+        ) : null}
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:text-ink">
-            Cancelar
+            {cancelLabel}
           </button>
           <button type="button" onClick={onConfirm} className="h-11 rounded-lg bg-rose px-4 text-sm font-medium text-black transition hover:bg-rose/90">
-            Excluir
+            {confirmLabel}
           </button>
         </div>
       </div>
@@ -227,5 +294,5 @@ export function ConfirmDelete({
   );
 }
 
-export const fieldClass = "min-h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none focus:border-accent sm:text-sm";
-export const areaClass = "min-h-24 w-full rounded-lg border border-line bg-elevated px-3 py-2 text-base text-ink outline-none focus:border-accent sm:text-sm";
+export const fieldClass = "min-h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition placeholder:text-muted/60 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";
+export const areaClass = "min-h-24 w-full rounded-lg border border-line bg-elevated px-3 py-2 text-base text-ink outline-none transition placeholder:text-muted/60 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";

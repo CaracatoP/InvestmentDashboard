@@ -1,7 +1,7 @@
 import { FormEvent, KeyboardEvent, MouseEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye } from "lucide-react";
-import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
+import { ConfirmDelete, ManagementField, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
@@ -201,7 +201,18 @@ export function AssetsPage() {
   return (
     <div>
       <PageHeader eyebrow="Ativos" title="Gerenciar ativos" description="Cadastre e mantenha os ativos usados nos calculos da carteira." />
-      <ManagementToolbar search={search} onSearchChange={setSearch} filter={category} onFilterChange={setCategory} filterOptions={categories} onCreate={openCreate} />
+      <ManagementToolbar
+        search={search}
+        onSearchChange={setSearch}
+        filter={category}
+        onFilterChange={setCategory}
+        filterOptions={categories}
+        onCreate={openCreate}
+        searchPlaceholder="Pesquise por nome, ticker, setor ou CoinGecko ID"
+        searchLabel="Pesquisar ativos"
+        filterLabel="Filtrar ativos por categoria"
+        createLabel="Novo ativo"
+      />
       <ManagementTable
         columns={["Nome", "Ticker", "Categoria", "Subcategoria", "Setor", "Moeda"]}
         rows={filteredAssets}
@@ -312,6 +323,7 @@ export function AssetsPage() {
 
       <ManagementModal
         title={editing ? "Editar ativo" : "Novo ativo"}
+        description="Cadastre os dados basicos do ativo e, para cripto, vincule o identificador oficial retornado pela CoinGecko."
         isOpen={isModalOpen}
         onClose={() => {
           setEditing(null);
@@ -321,26 +333,28 @@ export function AssetsPage() {
         }}
         onSubmit={handleSubmit}
       >
-        <select
-          value={form.category}
-          onChange={(event) => {
-            const nextCategory = event.target.value as AssetCategory;
-            setForm((current) => ({
-              ...current,
-              category: nextCategory,
-              currency: nextCategory === "CRIPTO" ? "BRL" : current.currency,
-              coingeckoId: nextCategory === "CRIPTO" ? current.coingeckoId ?? "" : ""
-            }));
-            if (nextCategory !== "CRIPTO") resetCryptoSearch();
-          }}
-          className={fieldClass}
-        >
-          <option value="FII">FII</option>
-          <option value="ACAO">ACAO</option>
-          <option value="ETF">ETF</option>
-          <option value="CRIPTO">CRIPTO</option>
-          <option value="RENDA_FIXA">RENDA_FIXA</option>
-        </select>
+        <ManagementField label="Categoria do ativo" required>
+          <select
+            value={form.category}
+            onChange={(event) => {
+              const nextCategory = event.target.value as AssetCategory;
+              setForm((current) => ({
+                ...current,
+                category: nextCategory,
+                currency: nextCategory === "CRIPTO" ? "BRL" : current.currency,
+                coingeckoId: nextCategory === "CRIPTO" ? current.coingeckoId ?? "" : ""
+              }));
+              if (nextCategory !== "CRIPTO") resetCryptoSearch();
+            }}
+            className={fieldClass}
+          >
+            <option value="FII">FII</option>
+            <option value="ACAO">ACAO</option>
+            <option value="ETF">ETF</option>
+            <option value="CRIPTO">CRIPTO</option>
+            <option value="RENDA_FIXA">RENDA_FIXA</option>
+          </select>
+        </ManagementField>
 
         {isCryptoCategory ? (
           <>
@@ -350,7 +364,7 @@ export function AssetsPage() {
                 value={cryptoSearch}
                 onChange={(event) => setCryptoSearch(event.target.value)}
                 className={`${fieldClass} mt-3`}
-                placeholder="Bitcoin, BTC, Ethereum..."
+                placeholder="Ex.: Bitcoin ou BTC"
               />
               <p className="mt-2 text-xs text-muted">Pesquise por nome, simbolo ou CoinGecko ID. O ativo sera salvo usando o identificador oficial da CoinGecko.</p>
 
@@ -385,24 +399,56 @@ export function AssetsPage() {
               ) : null}
             </div>
 
-            <input readOnly value={form.name} className={fieldClass} placeholder="Nome" />
-            <input readOnly value={form.ticker} className={fieldClass} placeholder="Ticker" />
-            <input readOnly value={form.coingeckoId ?? ""} className={fieldClass} placeholder="CoinGecko ID" />
-            <input readOnly value="BRL" className={fieldClass} placeholder="Moeda" />
+            <ManagementField label="Nome" required helperText="Preenchido automaticamente com base no resultado selecionado da CoinGecko.">
+              <input readOnly value={form.name} className={fieldClass} placeholder="Nome retornado pela CoinGecko" />
+            </ManagementField>
+            <ManagementField label="Ticker" required>
+              <input readOnly value={form.ticker} className={fieldClass} placeholder="Ticker retornado pela CoinGecko" />
+            </ManagementField>
+            <ManagementField label="CoinGecko ID" required>
+              <input readOnly value={form.coingeckoId ?? ""} className={fieldClass} placeholder="Identificador oficial da CoinGecko" />
+            </ManagementField>
+            <ManagementField label="Moeda" required>
+              <input readOnly value="BRL" className={fieldClass} placeholder="Moeda de exibicao do ativo" />
+            </ManagementField>
           </>
         ) : (
           <>
-            <input required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome" />
-            <input required value={form.ticker} onChange={(event) => setForm((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ticker" />
-            <input value={form.currency} onChange={(event) => setForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Moeda" />
+            <ManagementField label="Nome" required helperText="Ex.: Vale, Tesouro Selic ou ETF internacional.">
+              <input required autoFocus value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Ex.: Vale" />
+            </ManagementField>
+            <ManagementField label="Ticker" required helperText="Use o ticker principal que sera referenciado nas demais telas.">
+              <input required value={form.ticker} onChange={(event) => setForm((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ex.: VALE3" />
+            </ManagementField>
+            <ManagementField label="Moeda" required>
+              <input value={form.currency} onChange={(event) => setForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ex.: BRL" />
+            </ManagementField>
           </>
         )}
 
-        <input value={form.subcategory ?? ""} onChange={(event) => setForm((current) => ({ ...current, subcategory: event.target.value }))} className={fieldClass} placeholder="Subcategoria" />
-        <input value={form.sector ?? ""} onChange={(event) => setForm((current) => ({ ...current, sector: event.target.value }))} className={fieldClass} placeholder="Setor" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <ManagementField label="Subcategoria" optional>
+            <input value={form.subcategory ?? ""} onChange={(event) => setForm((current) => ({ ...current, subcategory: event.target.value }))} className={fieldClass} placeholder="Ex.: tijolo, logistica, large caps" />
+          </ManagementField>
+          <ManagementField label="Setor" optional>
+            <input value={form.sector ?? ""} onChange={(event) => setForm((current) => ({ ...current, sector: event.target.value }))} className={fieldClass} placeholder="Ex.: mineracao, bancos, tecnologia" />
+          </ManagementField>
+        </div>
       </ManagementModal>
 
-      <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir ${deleteTarget?.ticker ?? "ativo"}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />
+      <ConfirmDelete
+        isOpen={deleteTarget !== null}
+        title="Excluir ativo?"
+        description="Voce esta prestes a remover este ativo do cadastro base usado nas demais telas do Invest Hub."
+        details={[
+          deleteTarget?.ticker ?? "Ticker nao informado",
+          deleteTarget?.name ?? "Nome nao informado",
+          deleteTarget?.category ?? "Categoria nao informada"
+        ]}
+        confirmLabel="Excluir ativo"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

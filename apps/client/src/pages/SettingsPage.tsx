@@ -2,6 +2,7 @@ import { Bot, Check, Download, FileDown, Lock, LogOut, RefreshCw, Save, SlidersH
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
+import { ConfirmDelete } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
@@ -74,6 +75,7 @@ export function SettingsPage() {
   const [whatsAppLink, setWhatsAppLink] = useState<WhatsAppLinkCreated | null>(null);
   const [isLoadingWhatsApp, setIsLoadingWhatsApp] = useState(false);
   const [whatsAppFeedback, setWhatsAppFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [isDisconnectWhatsAppConfirmOpen, setIsDisconnectWhatsAppConfirmOpen] = useState(false);
 
   useEffect(() => {
     setAllocations(settings?.allocations ?? []);
@@ -436,9 +438,18 @@ export function SettingsPage() {
               </button>
             </div>
             <form onSubmit={(event) => void handleChangePassword(event)} className="mt-4 space-y-3 text-sm">
-              <input className={fieldClass} type="password" autoComplete="current-password" placeholder="Senha atual" required value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
-              <input className={fieldClass} type="password" autoComplete="new-password" placeholder="Nova senha" required minLength={8} value={passwordForm.password} onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))} />
-              <input className={fieldClass} type="password" autoComplete="new-password" placeholder="Confirmar nova senha" required minLength={8} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+              <label className="block">
+                <span className="text-muted">Senha atual</span>
+                <input className={`${fieldClass} mt-1`} type="password" autoComplete="current-password" placeholder="Digite sua senha atual" required value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
+              </label>
+              <label className="block">
+                <span className="text-muted">Nova senha</span>
+                <input className={`${fieldClass} mt-1`} type="password" autoComplete="new-password" placeholder="Digite sua nova senha" required minLength={8} value={passwordForm.password} onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))} />
+              </label>
+              <label className="block">
+                <span className="text-muted">Confirmar nova senha</span>
+                <input className={`${fieldClass} mt-1`} type="password" autoComplete="new-password" placeholder="Digite novamente a nova senha" required minLength={8} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+              </label>
               {passwordFeedback ? (
                 <p className={`rounded-lg px-3 py-2 text-sm ${passwordFeedback.type === "success" ? "bg-accent/10 text-accent" : "bg-rose/10 text-rose"}`}>{passwordFeedback.message}</p>
               ) : null}
@@ -518,7 +529,7 @@ export function SettingsPage() {
                     <p>Telefone conectado {whatsAppStatus?.link?.phoneNormalized ? `(${whatsAppStatus.link.phoneNormalized})` : ""}.</p>
                     <button
                       type="button"
-                      onClick={() => void handleDisconnectWhatsApp()}
+                      onClick={() => setIsDisconnectWhatsAppConfirmOpen(true)}
                       disabled={isLoadingWhatsApp}
                       className="mt-2 h-9 rounded-lg border border-accent/30 px-3 text-xs text-accent transition hover:border-rose/40 hover:text-rose disabled:opacity-60"
                     >
@@ -665,6 +676,22 @@ export function SettingsPage() {
           </div>
         </section>
       </section>
+
+      <ConfirmDelete
+        isOpen={isDisconnectWhatsAppConfirmOpen}
+        title="Desconectar WhatsApp?"
+        description="Voce esta prestes a remover o telefone vinculado ao Invest Hub neste usuario."
+        details={[
+          whatsAppStatus?.link?.phoneNormalized ? `Telefone conectado: ${whatsAppStatus.link.phoneNormalized}` : "Telefone conectado neste usuario",
+          "A integracao deixara de receber ou enviar mensagens ate um novo vinculo ser concluido."
+        ]}
+        confirmLabel="Desconectar WhatsApp"
+        onCancel={() => setIsDisconnectWhatsAppConfirmOpen(false)}
+        onConfirm={() => {
+          setIsDisconnectWhatsAppConfirmOpen(false);
+          void handleDisconnectWhatsApp();
+        }}
+      />
     </div>
   );
 }

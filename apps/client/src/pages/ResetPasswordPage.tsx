@@ -38,11 +38,11 @@ export function ResetPasswordPage() {
         <form onSubmit={(event) => void handleSubmit(event)} className="mt-6 space-y-4">
           <label className="block text-sm">
             <span className="text-muted">Nova senha</span>
-            <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} />
+            <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Digite sua nova senha" />
           </label>
           <label className="block text-sm">
             <span className="text-muted">Confirmar senha</span>
-            <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+            <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Digite novamente a nova senha" />
           </label>
           {feedback ? <p className={`rounded-lg px-3 py-2 text-sm ${feedback.type === "success" ? "bg-accent/10 text-accent" : "bg-rose/10 text-rose"}`}>{feedback.message}</p> : null}
           <button type="submit" disabled={isSubmitting || !token} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">

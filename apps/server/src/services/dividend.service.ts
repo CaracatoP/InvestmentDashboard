@@ -107,6 +107,7 @@ export async function findMatchingExpectedDividend(input: {
   assetTicker?: string | null;
   amountInCents?: number | null;
   paymentDate?: string | null;
+  referenceMonth?: string | null;
   type?: DividendType;
 }) {
   const ticker = normalizeOptionalTicker(input.assetTicker);
@@ -124,6 +125,14 @@ export async function findMatchingExpectedDividend(input: {
   });
 
   if (candidates.length === 1) return candidates[0];
+  if (!input.paymentDate && input.referenceMonth) {
+    const sameMonth = candidates.filter((dividend) => String(dividend.paymentDate ?? "").slice(0, 7) === input.referenceMonth);
+    if (sameMonth.length === 1) return sameMonth[0];
+    if (sameMonth.length > 1 && amountInCents) {
+      const exactSameMonthAmount = sameMonth.filter((dividend) => Math.abs(toCents(dividendAmount(dividend)) - amountInCents) <= 1);
+      if (exactSameMonthAmount.length === 1) return exactSameMonthAmount[0];
+    }
+  }
   if (candidates.length > 1 && amountInCents) {
     const exactAmount = candidates.filter((dividend) => Math.abs(toCents(dividendAmount(dividend)) - amountInCents) <= 1);
     if (exactAmount.length === 1) return exactAmount[0];

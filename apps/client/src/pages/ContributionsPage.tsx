@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { ConfirmDelete, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
+import { ConfirmDelete, ManagementField, fieldClass, ManagementModal, ManagementTable, ManagementToolbar, RowActions } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { MoneyValue } from "../components/ui/ValueDisplay";
@@ -8,11 +8,23 @@ import { contributionRecordsApi } from "../services/api";
 import type { ContributionRecord } from "../types/management";
 import { formatCurrency } from "../utils/formatters";
 
-const emptyContribution: ContributionRecord = {
+type ContributionFormState = {
+  date: string;
+  value: string;
+  description: string;
+};
+
+const emptyContributionForm: ContributionFormState = {
   date: new Date().toISOString().slice(0, 10),
-  value: 0,
+  value: "",
   description: ""
 };
+
+function parseContributionValue(value: string) {
+  if (!value.trim()) return null;
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function contributionIdentity(contribution: ContributionRecord) {
   return contribution.id ?? `${contribution.date}-${contribution.value}-${contribution.description ?? ""}`;
@@ -31,9 +43,10 @@ export function ContributionsPage() {
   const [search, setSearch] = useState("");
   const [period, setPeriod] = useState("Todos");
   const [editing, setEditing] = useState<ContributionRecord | null>(null);
-  const [form, setForm] = useState<ContributionRecord>(emptyContribution);
+  const [form, setForm] = useState<ContributionFormState>(emptyContributionForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ContributionRecord | null>(null);
+  const [formError, setFormError] = useState("");
 
   async function loadContributions() {
     setContributions(sortContributions(await contributionRecordsApi.list()));
@@ -57,26 +70,50 @@ export function ContributionsPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm(emptyContribution);
+    setForm(emptyContributionForm);
+    setFormError("");
     setIsModalOpen(true);
   }
 
   function openEdit(contribution: ContributionRecord) {
     setEditing(contribution);
-    setForm({ ...contribution, date: String(contribution.date).slice(0, 10) });
+    setForm({
+      date: String(contribution.date).slice(0, 10),
+      value: contribution.value ? String(contribution.value) : "",
+      description: contribution.description ?? ""
+    });
+    setFormError("");
     setIsModalOpen(true);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const parsedValue = parseContributionValue(form.value);
+    const description = form.description.trim();
+
+    if (!form.date) {
+      setFormError("Selecione a data do aporte.");
+      return;
+    }
+    if (!parsedValue || parsedValue <= 0) {
+      setFormError("Informe um valor de aporte maior que zero.");
+      return;
+    }
+
+    const payload: ContributionRecord = {
+      date: form.date,
+      value: parsedValue,
+      description
+    };
     const saved = editing?.id
-      ? await contributionRecordsApi.update(editing.id, form)
-      : await contributionRecordsApi.create(form);
+      ? await contributionRecordsApi.update(editing.id, payload)
+      : await contributionRecordsApi.create(payload);
 
     setContributions((current) => sortContributions([...current.filter((contribution) => contributionIdentity(contribution) !== contributionIdentity(saved)), saved]));
     setIsModalOpen(false);
     setEditing(null);
-    setForm(emptyContribution);
+    setForm(emptyContributionForm);
+    setFormError("");
   }
 
   async function confirmDelete() {
@@ -89,7 +126,18 @@ export function ContributionsPage() {
   return (
     <div>
       <PageHeader eyebrow="Aportes" title="Gerenciar aportes" description="Cadastre, edite e acompanhe cada aporte registrado." />
-      <ManagementToolbar search={search} onSearchChange={setSearch} filter={period} onFilterChange={setPeriod} filterOptions={periods} onCreate={openCreate} />
+      <ManagementToolbar
+        search={search}
+        onSearchChange={setSearch}
+        filter={period}
+        onFilterChange={setPeriod}
+        filterOptions={periods}
+        onCreate={openCreate}
+        searchPlaceholder="Pesquise por descricao ou data do aporte"
+        searchLabel="Pesquisar aportes"
+        filterLabel="Filtrar aportes por periodo"
+        createLabel="Novo aporte"
+      />
       <ManagementTable
         columns={["Data", "Valor", "Descricao"]}
         rows={filtered}
@@ -123,13 +171,38 @@ export function ContributionsPage() {
         )}
       />
 
-      <ManagementModal title={editing ? "Editar aporte" : "Novo aporte"} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSubmit={handleSubmit}>
-        <input type="date" required value={String(form.date).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
-        <input type="number" min="0" step="0.01" required value={form.value} onChange={(event) => setForm((current) => ({ ...current, value: Number(event.target.value) }))} className={fieldClass} placeholder="Valor" />
-        <input value={form.description ?? ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descricao" />
+      <ManagementModal
+        title={editing ? "Editar aporte" : "Novo aporte"}
+        description="Registre quando e quanto voce aportou para manter o historico da carteira consistente."
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleSubmit}
+      >
+        <ManagementField label="Data do aporte" required>
+          <input autoFocus type="date" required value={String(form.date).slice(0, 10)} onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))} className={fieldClass} />
+        </ManagementField>
+        <ManagementField label="Valor do aporte" required helperText="Informe o valor efetivamente investido neste aporte.">
+          <input type="number" min="0" step="0.01" required value={form.value} onChange={(event) => setForm((current) => ({ ...current, value: event.target.value }))} className={fieldClass} placeholder="Ex.: 1000,00" />
+        </ManagementField>
+        <ManagementField label="Descricao" optional helperText="Ex.: aporte mensal, reforco da reserva ou investimento extra.">
+          <input value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} className={fieldClass} placeholder="Descreva este aporte, se necessario" />
+        </ManagementField>
+        {formError ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{formError}</p> : null}
       </ManagementModal>
 
-      <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir aporte de ${formatCurrency(deleteTarget?.value ?? 0)}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />
+      <ConfirmDelete
+        isOpen={deleteTarget !== null}
+        title="Excluir aporte?"
+        description="Voce esta prestes a remover este aporte do historico da carteira."
+        details={[
+          deleteTarget ? formatCurrency(deleteTarget.value) : "-",
+          deleteTarget ? new Date(deleteTarget.date).toLocaleDateString("pt-BR") : "-",
+          deleteTarget?.description?.trim() || "Sem descricao"
+        ]}
+        confirmLabel="Excluir aporte"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }
