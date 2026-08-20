@@ -20,6 +20,7 @@ const monthlyExpenseIntegrationSchema = new Schema(
 
 const monthlyExpenseSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     planId: { type: String, required: true, index: true },
     categoryId: { type: String, required: true, index: true },
     description: { type: String, required: true, trim: true },
@@ -49,11 +50,23 @@ const monthlyExpenseSchema = new Schema(
   { versionKey: false }
 );
 
-monthlyExpenseSchema.index({ planId: 1, date: -1, time: -1 });
-monthlyExpenseSchema.index({ planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 });
-monthlyExpenseSchema.index({ "integration.idempotencyKey": 1 }, { sparse: true });
-monthlyExpenseSchema.index({ "integration.integrationId": 1 }, { sparse: true });
-monthlyExpenseSchema.index({ "integration.linkedEntityType": 1, "integration.linkedEntityId": 1 }, { sparse: true });
+monthlyExpenseSchema.index({ userId: 1, planId: 1, date: -1, time: -1 });
+monthlyExpenseSchema.index(
+  { userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 },
+  {
+    unique: true,
+    name: "user_plan_recurrence_occurrence_unique",
+    partialFilterExpression: {
+      recurrenceId: { $type: "string", $gt: "" },
+      recurrenceOriginalDate: { $type: "string", $gt: "" },
+      recurrenceSourceId: { $type: "string", $gt: "" }
+    }
+  }
+);
+monthlyExpenseSchema.index({ userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1, recurrenceSourceId: 1 }, { name: "user_plan_recurrence_lookup" });
+monthlyExpenseSchema.index({ userId: 1, "integration.idempotencyKey": 1 }, { sparse: true });
+monthlyExpenseSchema.index({ userId: 1, "integration.integrationId": 1 }, { sparse: true });
+monthlyExpenseSchema.index({ userId: 1, "integration.linkedEntityType": 1, "integration.linkedEntityId": 1 }, { sparse: true });
 
 export type MonthlyExpenseDocument = InferSchemaType<typeof monthlyExpenseSchema>;
 export const MonthlyExpenseModel = models.MonthlyExpense ?? model("MonthlyExpense", monthlyExpenseSchema);

@@ -9,9 +9,9 @@ import {
   saveMonthlyPlan
 } from "../../services/monthly-planning.service";
 import { registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
+import { findMatchingExpectedDividend, markDividendReceived, registerReceivedDividend } from "../../services/dividend.service";
 import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../../repositories/monthly-planning.repository";
 import {
-  createDividend,
   createOperation,
   listAssets,
   listCashBoxes
@@ -60,7 +60,7 @@ type AiAffectedEntity = NonNullable<AiChatStructuredResponse["metadata"]["affect
 const pendingActionTtlMs = 15 * 60 * 1000;
 const confirmationPattern = /^(confirmo|pode registrar|pode confirmar|confirmar|sim,?\s*pode|sim pode|ok pode|pode executar)(\s|$)/i;
 const cancelPattern = /^(cancelar|cancele|nao confirmar|não confirmar|desistir)(\s|$)/i;
-const writeIntentPattern = /(registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|alterar|altere|atualize|minha renda|gastei|gasto|despesa|aporte|meta|compre|comprei|compra|vendi|venda|dividendo|jcp|juros sobre capital|bonifica|desdobramento|split|grupamento|reverse split|transferir|transferencia|preco medio|quantidade|recebi|receber|entrada|freelance|comissao|bonus|cashback|reembolso|presente|hora extra)/i;
+const writeIntentPattern = /(registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|paga|pago|paguei|pagar|alterar|altere|atualize|minha renda|gastei|gasto|despesa|aporte|meta|compre|comprei|compra|vendi|venda|dividendo|jcp|juros sobre capital|bonifica|desdobramento|split|grupamento|reverse split|transferir|transferencia|preco medio|quantidade|recebi|receber|entrada|freelance|comissao|bonus|cashback|reembolso|presente|hora extra)/i;
 
 const settingsWriteIntentPattern = /(tema|moeda|configur|perfil|nome)/i;
 
@@ -97,6 +97,7 @@ const missingFieldDefinitions: Record<string, MissingField> = {
   targetInCents: { name: "targetInCents", label: "Valor alvo", type: "currency", required: true },
   expenseId: { name: "expenseId", label: "Gasto", type: "select", required: true },
   incomeEntryId: { name: "incomeEntryId", label: "Entrada", type: "select", required: true },
+  dividendId: { name: "dividendId", label: "Dividendo previsto", type: "select", required: true },
   assetTicker: { name: "assetTicker", label: "Ativo", type: "select", required: true },
   quantity: { name: "quantity", label: "Quantidade", type: "number", required: true },
   price: { name: "price", label: "Preco unitario", type: "currency", required: true },
@@ -371,6 +372,7 @@ function extractExpenseDescription(message: string) {
   if (normalized.includes("spotify")) return "Spotify";
   if (normalized.includes("mercado")) return "Mercado";
   if (normalized.includes("uber")) return "Uber";
+  if (/(mcdonald|mc donald|mcdonalds|mc donalds)/.test(normalized)) return "McDonald's";
   return null;
 }
 
@@ -386,15 +388,27 @@ function inferCategoryName(message: string) {
   const normalized = normalizeText(message);
   if (/(gasolina|uber|transporte|combustivel|combustivel)/.test(normalized)) return "Transporte";
   if (/(spotify|netflix|assinatura)/.test(normalized)) return "Assinaturas";
-  if (/(mercado|alimentacao|comida|restaurante)/.test(normalized)) return "Alimentacao";
+  if (/(mercado|alimentacao|comida|restaurante|mcdonald|mc donald)/.test(normalized)) return "Alimentacao";
   if (/(investimento|investir|aporte|aplicar|caixinha|carteira)/.test(normalized)) return "Investimentos";
   return "";
+}
+
+function buildPendingExpenseSearchText(message: string) {
+  return normalizeText(message)
+    .replace(/(?:r\$\s*)?\d[\d.,]*/gi, " ")
+    .replace(
+      /\b(?:marque|como|paga|pago|paguei|pagar|despesa|gasto|aquela|aquele|prevista|previsto|de|da|do|dos|das|o|a|os|as|real|reais)\b/g,
+      " "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function resolveBudgetCategory(year: number, month: number, message: string) {
   const plan = await getOrCreateMonthlyPlan(year, month);
   const preferredName = inferCategoryName(message);
-  const normalizedPreferred = normalizeText(preferredName);
+  const fallbackName = preferredName || "Outros";
+  const normalizedPreferred = normalizeText(fallbackName);
   const matches = plan.categories.filter((category) => normalizeText(category.name) === normalizedPreferred);
   const exact = matches.length === 1 ? matches[0] : null;
   if (exact) return { plan, categoryId: exact.id, missing: [] };
@@ -615,6 +629,11 @@ function validateToolFieldsForPreview(toolName: AiToolName, fields: ExtractedFie
     return;
   }
 
+  if (toolName === "markDividendReceived") {
+    if (!isPresent(fields.dividendId)) throw new Error("Dividend id is required");
+    return;
+  }
+
   if (toolName === "updateSettingsProfile") {
     const parsed = settingsUpdateSchema.parse(fields);
     if (Object.keys(parsed).length === 0) {
@@ -795,9 +814,9 @@ function inferAffectedEntities(action: AiPendingActionRecord, result: unknown): 
     ]);
   }
 
-  if (action.toolName === "registerDividend" || action.toolName === "registerJCP") {
+  if (action.toolName === "registerDividend" || action.toolName === "registerJCP" || action.toolName === "markDividendReceived") {
     return normalizeAffectedEntities([
-      { type: "dividend", id: inferEntityId(result) },
+      { type: "dividend", id: inferEntityId(result) ?? (typeof fields.dividendId === "string" ? fields.dividendId : undefined) },
       { type: "asset", id: typeof fields.assetTicker === "string" ? fields.assetTicker : undefined }
     ]);
   }
@@ -1138,8 +1157,15 @@ async function prepareSettingsUpdate(sessionId: string, message: string) {
 async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|paga|pago|paguei)/.test(normalized)) return null;
+  const amountInCents = parseMoneyToCents(message);
+  const candidateText = buildPendingExpenseSearchText(message);
   const expenses = (await listAllMonthlyExpenses()).filter((expense) => expense.status !== "completed");
-  const candidates = expenses.filter((expense) => normalized.includes(normalizeText(expense.description)) || normalizeText(expense.description).includes(normalized.replace(/marque|como|paga|pago|despesa|gasto/g, "").trim()));
+  const candidates = expenses.filter((expense) => {
+    const description = normalizeText(expense.description);
+    const matchesText = !candidateText || normalized.includes(description) || description.includes(candidateText) || candidateText.includes(description);
+    const matchesAmount = !amountInCents || expense.amountInCents === amountInCents;
+    return matchesText && matchesAmount;
+  });
 
   if (candidates.length !== 1) {
     return createStructuredResponse({
@@ -1358,20 +1384,29 @@ async function prepareDividendIncome(sessionId: string, message: string, type: "
   const paymentDate = parseDateInput(message) ?? now.date;
   const ticker = extractTicker(message);
   const amountInCents = parseMoneyToCents(message);
-  const extractedFields: ExtractedFields = {
+  const matchingDividend = await findMatchingExpectedDividend({
     assetTicker: ticker,
     amountInCents,
     paymentDate,
+    type
+  });
+  const extractedFields: ExtractedFields = {
+    ...(matchingDividend?.id ? { dividendId: matchingDividend.id } : {}),
+    assetTicker: ticker,
+    amountInCents,
+    paymentDate,
+    receivedAt: paymentDate,
     type,
     notes: sanitizeExtractedDescription(message.match(/\b(?:obs|observa[cç][aã]o|nota)\s*:?\s*(.+)$/i)?.[1] ?? null)
   };
   const customMissing: MissingField[] = [];
   if (!ticker) customMissing.push(await assetMissingField());
-  const title = type === "jcp" ? "Registrar JCP" : "Registrar dividendo";
+  const title = matchingDividend ? "Marcar dividendo como recebido" : type === "jcp" ? "Registrar JCP" : "Registrar dividendo";
+  const toolName: AiToolName = matchingDividend ? "markDividendReceived" : type === "jcp" ? "registerJCP" : "registerDividend";
   const action = await createPendingAction({
     sessionId,
-    actionType: type === "jcp" ? "register_jcp" : "register_dividend",
-    toolName: type === "jcp" ? "registerJCP" : "registerDividend",
+    actionType: matchingDividend ? "mark_dividend_received" : type === "jcp" ? "register_jcp" : "register_dividend",
+    toolName,
     extractedFields,
     missingFields: customMissing,
     title,
@@ -1379,7 +1414,8 @@ async function prepareDividendIncome(sessionId: string, message: string, type: "
       ...(ticker ? [{ label: "Ativo", value: ticker }] : []),
       ...(amountInCents ? [{ label: "Valor", value: formatCurrencyFromCents(amountInCents) }] : []),
       { label: "Data", value: formatDateBr(paymentDate) },
-      { label: "Tipo", value: type === "jcp" ? "JCP" : "Dividendo" }
+      { label: "Tipo", value: type === "jcp" ? "JCP" : "Dividendo" },
+      ...(matchingDividend ? [{ label: "Origem", value: "Previsto existente" }] : [])
     ]
   });
   const missingNames = new Set(action.missingFields.map((field) => field.name));
@@ -1489,7 +1525,8 @@ function isInvestmentTool(toolName: AiToolName) {
     "registerSplit",
     "registerReverseSplit",
     "registerDividend",
-    "registerJCP"
+    "registerJCP",
+    "markDividendReceived"
   ].includes(toolName);
 }
 
@@ -1653,11 +1690,29 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
       amountPerShare: isPresent(fields.amountPerShare) ? Number(fields.amountPerShare) : undefined,
       quantityEligible: isPresent(fields.quantityEligible) ? Number(fields.quantityEligible) : undefined,
       paymentDate: String(fields.paymentDate),
+      receivedAt: fields.receivedAt ? String(fields.receivedAt) : String(fields.paymentDate),
       status: "received",
       source: "manual",
       notes: typeof fields.notes === "string" ? fields.notes : undefined
     });
-    result = await createDividend(parsed);
+    result = await registerReceivedDividend({
+      assetTicker: String(parsed.assetTicker),
+      type: parsed.type,
+      totalValue: parsed.totalValue,
+      paymentDate: String(parsed.paymentDate),
+      amountPerShare: parsed.amountPerShare,
+      quantityEligible: parsed.quantityEligible,
+      notes: parsed.notes,
+      source: parsed.source
+    });
+    route = "/dividendos";
+  } else if (action.toolName === "markDividendReceived") {
+    result = await markDividendReceived(String(fields.dividendId), {
+      totalValue: isPresent(fields.amountInCents) ? Number(fields.amountInCents) / 100 : undefined,
+      paymentDate: fields.paymentDate ? String(fields.paymentDate) : undefined,
+      receivedAt: fields.receivedAt ? String(fields.receivedAt) : fields.paymentDate ? String(fields.paymentDate) : undefined,
+      notes: typeof fields.notes === "string" ? fields.notes : undefined
+    });
     route = "/dividendos";
   } else if (action.toolName === "updateSettingsProfile") {
     const parsed = settingsUpdateSchema.parse(fields);
@@ -1831,14 +1886,15 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   else if (/(desdobramento|split)/.test(normalized)) response = await prepareInvestmentOperation(input.sessionId, input.message, "DESDOBRAMENTO");
   else if (/(grupamento|reverse split)/.test(normalized)) response = await prepareInvestmentOperation(input.sessionId, input.message, "GRUPAMENTO");
   else if (/(jcp|juros sobre capital)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "jcp");
-  else if (/(dividendo|rendimento).*(registr|cadast|receb|lanc|lanç|adic)|(?:registr|cadast|receb|lanc|lanç|adic).*(dividendo|rendimento)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "dividendo");
+  else if (/(rendimento).*(registr|cadast|receb|lanc|lanç|adic)|(?:registr|cadast|receb|lanc|lanç|adic).*(rendimento)/.test(normalized)) response = await prepareDividendIncome(input.sessionId, input.message, "dividendo");
+  else if (/(dividendo).*(registr|cadast|receb|lanc|lanç|adic)|(?:registr|cadast|receb|lanc|lanç|adic).*(dividendo)|\brecebi\b.*\b(?:da|de|do)\s+[A-Z]{4}\d{1,2}\b/i.test(input.message)) response = await prepareDividendIncome(input.sessionId, input.message, "dividendo");
   else if (/(aporte|contribuicao|contribuicao|depositei|deposito)/.test(normalized)) response = await prepareContribution(input.sessionId, input.message);
+  else if (/(marque|paga|pago|paguei)/.test(normalized)) response = await prepareMarkExpenseCompleted(input.sessionId, input.message);
   else if (/(recebi aquela|recebi aquele|marque.*entrada|entrada.*recebid|recebida)/.test(normalized)) response = await prepareMarkIncomeEntryReceived(input.sessionId, input.message);
   else if (/(recebi|vou receber|receber|entrada|freelance|comissao|bonus|cashback|reembolso|presente|hora extra|renda extra)/.test(normalized)) response = await prepareIncomeEntry(input.sessionId, input.message);
   else if (/(renda mensal|minha renda|salario|salario base)/.test(normalized)) response = await prepareIncome(input.sessionId, input.message);
   else if (/(tema|moeda|configur|perfil|nome)/.test(normalized)) response = await prepareSettingsUpdate(input.sessionId, input.message);
   else if (/(meta|objetivo)/.test(normalized)) response = await prepareGoal(input.sessionId, input.message);
-  else if (/(marque|paga|pago|paguei)/.test(normalized)) response = await prepareMarkExpenseCompleted(input.sessionId, input.message);
   else if (/(gastei|gasto|despesa|assinatura|gasolina|spotify|mercado|uber)/.test(normalized)) response = await prepareExpense(input.sessionId, input.message);
 
   return response ? { handled: true, response } : { handled: false };

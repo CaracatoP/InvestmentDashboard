@@ -1,7 +1,7 @@
 import { asyncHandler } from "../utils/async-handler";
 import { getAssetDetails, getPortfolio } from "../services/portfolio.service";
 import { createAsset, deleteAsset, findAssetById, listAssets, updateAsset } from "../repositories/investment.repository";
-import { getAssetPriceHistory } from "../services/market-data.service";
+import { getAssetPriceHistory, searchCryptoAssets } from "../services/market-data.service";
 import { assetSchema, assetUpdateSchema } from "../validators/asset.validator";
 import { created, noContent, ok } from "../utils/api-response";
 import { badRequest, notFound } from "../utils/http-error";
@@ -45,6 +45,16 @@ export const showAssetPriceHistory = asyncHandler(async (request, response) => {
 
     throw error;
   }
+});
+
+export const searchCryptoAssetCatalog = asyncHandler(async (request, response) => {
+  const query = String(request.query.q ?? "").trim();
+  if (query.length < 2) {
+    ok(response, []);
+    return;
+  }
+
+  ok(response, await searchCryptoAssets(query, 10));
 });
 
 export const createAssetRecord = asyncHandler(async (request, response) => {

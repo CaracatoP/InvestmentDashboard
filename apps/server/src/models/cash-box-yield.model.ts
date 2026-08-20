@@ -2,6 +2,7 @@ import { Schema, model, models, InferSchemaType } from "mongoose";
 
 const cashBoxYieldSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     cashBoxId: { type: Schema.Types.ObjectId, ref: "CashBox", required: true },
     referenceDate: { type: String, required: true, trim: true },
     openingBalance: { type: Number, required: true, min: 0 },
@@ -16,7 +17,7 @@ const cashBoxYieldSchema = new Schema(
   { timestamps: true }
 );
 
-cashBoxYieldSchema.index({ cashBoxId: 1, referenceDate: 1 }, { unique: true });
+cashBoxYieldSchema.index({ userId: 1, cashBoxId: 1, referenceDate: 1 }, { unique: true });
 
 export type CashBoxYieldDocument = InferSchemaType<typeof cashBoxYieldSchema>;
 export const CashBoxYieldModel = models.CashBoxYield ?? model("CashBoxYield", cashBoxYieldSchema);

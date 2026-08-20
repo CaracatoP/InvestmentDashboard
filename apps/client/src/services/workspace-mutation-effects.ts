@@ -9,6 +9,7 @@ export type WorkspaceMutationEffectKey =
   | "operation.remove"
   | "dividend.create"
   | "dividend.update"
+  | "dividend.receive"
   | "dividend.remove"
   | "contribution.create"
   | "contribution.update"
@@ -107,6 +108,14 @@ export const workspaceMutationEffects: Record<WorkspaceMutationEffectKey, Worksp
   },
   "dividend.update": {
     operation: "updateDividend",
+    update: ["dividends.records"],
+    invalidate: ["dashboard", "portfolio", "dividends", "history", "monthlyPlanning"],
+    queries: ["dividends:list", "portfolio:overview", "dashboard:summary", "history:timeline", "planning:overview"],
+    relatedRoutes: ["/dividendos", "/investimentos/dividendos", "/historico", "/planejamento-mensal"],
+    optimistic: true
+  },
+  "dividend.receive": {
+    operation: "receiveDividend",
     update: ["dividends.records"],
     invalidate: ["dashboard", "portfolio", "dividends", "history", "monthlyPlanning"],
     queries: ["dividends:list", "portfolio:overview", "dashboard:summary", "history:timeline", "planning:overview"],

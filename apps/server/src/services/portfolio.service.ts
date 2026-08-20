@@ -15,6 +15,8 @@ import {
   replaceAllocations,
   updateSettingsRecord
 } from "../repositories/investment.repository";
+import { getAuthContext } from "../auth/auth-context";
+import { updateUserProfile } from "./auth.service";
 import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries, listMonthlyPlans } from "../repositories/monthly-planning.repository";
 import type {
   AssetRecord,
@@ -32,7 +34,7 @@ import type {
 import { buildAllocationSummary, type AllocationSummary } from "./allocation.service";
 import { calculateCashBoxTotals, getCashBoxMovementLabel, isCashBoxContribution, isCashBoxWithdrawal, isCashBoxYield, toCashBoxContributionType } from "./cash-box.service";
 import { calculateProjection } from "./projection.service";
-import { normalizeTicker } from "./ticker.service";
+import { buildAssetMarketKey, buildStoredMarketDataKey, normalizeTicker } from "./ticker.service";
 
 const monthLabels = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
@@ -40,7 +42,7 @@ const categoryLabels: Record<string, string> = {
   FII: "FIIs",
   ACAO: "Acoes Brasileiras",
   ETF: "ETFs",
-  CRIPTO: "Bitcoin",
+  CRIPTO: "Criptomoedas",
   RENDA_FIXA: "Renda Fixa",
   cash: "Caixinha"
 };
@@ -49,7 +51,7 @@ const categoryColors: Record<string, string> = {
   FIIs: "#22c55e",
   "Acoes Brasileiras": "#38bdf8",
   ETFs: "#a78bfa",
-  Bitcoin: "#f59e0b",
+  Criptomoedas: "#f59e0b",
   "Renda Fixa": "#fb7185",
   Caixinha: "#14b8a6"
 };
@@ -129,10 +131,14 @@ function normalizeDividend(dividend: DividendRecord) {
   const amount = dividend.netAmount ?? dividend.totalValue;
 
   return {
+    id: dividend.id,
+    assetId: dividend.assetId,
     assetTicker: dividend.assetTicker ?? "",
     category: dividend.category ?? "",
     type: dividend.type ?? "dividendo",
     date: dividend.paymentDate,
+    paymentDate: dividend.paymentDate,
+    receivedAt: dividend.receivedAt ?? null,
     amount,
     amountPerShare,
     shares: dividend.quantityEligible ?? (amountPerShare > 0 ? Math.round(amount / amountPerShare) : 0),
@@ -160,6 +166,10 @@ function assetMatchesDividend(asset: AssetRecord, dividend: DividendRecord) {
 
 function hasValidPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function marketDataKey(input: { assetKey?: string; ticker: string; market?: string; providerSymbol?: string }) {
+  return input.assetKey?.trim() || buildStoredMarketDataKey(input);
 }
 
 function quoteHasValidPrice(quote?: MarketQuoteRecord) {
@@ -256,6 +266,7 @@ function calculateAssetPosition(
     assetId: asset.id,
     name: asset.name,
     ticker: normalizeTicker(asset.ticker),
+    coingeckoId: asset.coingeckoId,
     categoryId: asset.category,
     categoryLabel: categoryLabels[asset.category] ?? asset.category,
     category: categoryLabels[asset.category] ?? asset.category,
@@ -303,11 +314,15 @@ async function loadPortfolioCalculationInputs(): Promise<PortfolioCalculationInp
 }
 
 function calculatePortfolioFromInputs(inputs: PortfolioCalculationInputs) {
-  const quoteByTicker = new Map(inputs.quotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
+  const quoteByTicker = new Map(inputs.quotes.map((quote) => [marketDataKey({ ...quote, ticker: quote.ticker }), quote]));
+  const quoteByLegacyTicker = new Map(inputs.quotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
   const historyByTicker = new Map<string, PriceHistoryRecord[]>();
+  const historyByLegacyTicker = new Map<string, PriceHistoryRecord[]>();
   for (const history of inputs.priceHistory) {
-    const ticker = normalizeTicker(history.ticker);
-    historyByTicker.set(ticker, [...(historyByTicker.get(ticker) ?? []), history]);
+    const key = marketDataKey({ ...history, ticker: history.ticker });
+    historyByTicker.set(key, [...(historyByTicker.get(key) ?? []), history]);
+    const legacyTicker = normalizeTicker(history.ticker);
+    historyByLegacyTicker.set(legacyTicker, [...(historyByLegacyTicker.get(legacyTicker) ?? []), history]);
   }
 
   const preliminary = inputs.assets.map((asset) =>
@@ -316,8 +331,8 @@ function calculatePortfolioFromInputs(inputs: PortfolioCalculationInputs) {
       inputs.operations,
       inputs.dividends,
       0,
-      quoteByTicker.get(normalizeTicker(asset.ticker)),
-      historyByTicker.get(normalizeTicker(asset.ticker)) ?? []
+      quoteByTicker.get(buildAssetMarketKey(asset)) ?? quoteByLegacyTicker.get(normalizeTicker(asset.ticker)),
+      historyByTicker.get(buildAssetMarketKey(asset)) ?? historyByLegacyTicker.get(normalizeTicker(asset.ticker)) ?? []
     )
   );
   const assetsValue = sum(preliminary.filter((asset) => asset.hasPosition).map((asset) => safeNumber(asset.currentValue)));
@@ -327,8 +342,8 @@ function calculatePortfolioFromInputs(inputs: PortfolioCalculationInputs) {
       inputs.operations,
       inputs.dividends,
       assetsValue,
-      quoteByTicker.get(normalizeTicker(asset.ticker)),
-      historyByTicker.get(normalizeTicker(asset.ticker)) ?? []
+      quoteByTicker.get(buildAssetMarketKey(asset)) ?? quoteByLegacyTicker.get(normalizeTicker(asset.ticker)),
+      historyByTicker.get(buildAssetMarketKey(asset)) ?? historyByLegacyTicker.get(normalizeTicker(asset.ticker)) ?? []
     )
   );
 }
@@ -1134,7 +1149,7 @@ export async function getAssetDetails(ticker: string) {
 
   return {
     ...enrichedAsset,
-    priceHistory: await listPriceHistory(asset.ticker).then((history) =>
+    priceHistory: await listPriceHistory(undefined, { assetKey: buildAssetMarketKey(asset) }).then((history) =>
       history.length > 0
         ? history.map((item) => ({ month: monthName(item.capturedAt), price: item.price }))
         : assetOperations
@@ -1326,7 +1341,12 @@ export async function updateAllocations(input: Array<{ category: string; targetP
 }
 
 export async function updateSettings(input: { expectedReturn?: number; inflation?: number; currentAge?: number; targetAge?: number; theme?: string; profileName?: string; currency?: string }) {
-  return updateSettingsRecord(input);
+  const settings = await updateSettingsRecord(input);
+  const authContext = getAuthContext();
+  if (authContext?.userId && input.profileName) {
+    await updateUserProfile(authContext.userId, { name: input.profileName });
+  }
+  return settings;
 }
 
 export { calculateProjection };

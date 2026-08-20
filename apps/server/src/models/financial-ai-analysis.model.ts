@@ -34,6 +34,7 @@ const aiAnalysisResponseSchema = new Schema(
 
 const financialAiAnalysisSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     year: { type: Number, required: true, min: 1970, max: 2200, index: true },
     month: { type: Number, required: true, min: 1, max: 12, index: true },
     analysisType: { type: String, required: true, index: true },
@@ -49,7 +50,7 @@ const financialAiAnalysisSchema = new Schema(
   { timestamps: true, versionKey: false }
 );
 
-financialAiAnalysisSchema.index({ year: 1, month: 1, analysisType: 1, categoryId: 1, contextHash: 1 });
+financialAiAnalysisSchema.index({ userId: 1, year: 1, month: 1, analysisType: 1, categoryId: 1, contextHash: 1 });
 
 export type FinancialAiAnalysisDocument = InferSchemaType<typeof financialAiAnalysisSchema>;
 export const FinancialAiAnalysisModel = models.FinancialAiAnalysis ?? model("FinancialAiAnalysis", financialAiAnalysisSchema);

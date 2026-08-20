@@ -11,6 +11,7 @@ const allocationSchema = new Schema(
 
 const settingsSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
     theme: { type: String, enum: ["dark", "light", "system"], default: "dark" },
     profileName: { type: String, default: "Investidor", trim: true },
     currency: { type: String, enum: ["BRL"], default: "BRL", trim: true },

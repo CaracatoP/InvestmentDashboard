@@ -24,6 +24,7 @@ const cashBoxMovementSchema = new Schema(
 
 const cashBoxSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     categoryId: { type: String, default: "cash", trim: true },
     name: { type: String, required: true, trim: true },
     type: { type: String, required: true, trim: true },
@@ -41,6 +42,8 @@ const cashBoxSchema = new Schema(
   },
   { timestamps: true }
 );
+
+cashBoxSchema.index({ userId: 1, active: 1, name: 1 });
 
 export type CashBoxDocument = InferSchemaType<typeof cashBoxSchema>;
 export const CashBoxModel = models.CashBox ?? model("CashBox", cashBoxSchema);

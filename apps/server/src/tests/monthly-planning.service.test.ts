@@ -673,6 +673,66 @@ test("recurring expenses stay idempotent with simultaneous overview loads", asyn
   assert.equal(secondGenerated[0].date, "2098-11-08");
 });
 
+test("switching July -> August -> September -> August keeps a single recurring occurrence for August 2026", async () => {
+  const buildPlan = (month: number) =>
+    saveMonthlyPlan({
+      year: 2026,
+      month,
+      incomeInCents: 380000,
+      categories: [
+        {
+          id: "moradia-agosto",
+          name: "Moradia agosto",
+          icon: "home",
+          color: "#38bdf8",
+          budgetType: "fixed",
+          percentage: 0,
+          fixedAmountInCents: 120000
+        }
+      ]
+    });
+
+  const julyPlan = await buildPlan(7);
+  await buildPlan(8);
+  await buildPlan(9);
+
+  assert.ok(julyPlan.id);
+  const template = await addMonthlyExpense(julyPlan.id, {
+    categoryId: "moradia-agosto",
+    description: "Aluguel navegacao agosto",
+    amountInCents: 98000,
+    date: "2026-07-08",
+    time: "08:00",
+    note: "",
+    paymentMethod: "Pix",
+    expenseType: "recurring",
+    recurring: true,
+    recurrenceFrequency: "monthly",
+    recurrenceInterval: 1,
+    recurrenceDayOfMonth: 8,
+    recurrenceStartDate: "2026-07-08",
+    recurrenceEndDate: null,
+    status: "planned"
+  });
+
+  assert.ok(template.recurrenceId);
+
+  const july = await getMonthlyPlanningOverview(2026, 7);
+  const augustFirst = await getMonthlyPlanningOverview(2026, 8);
+  const september = await getMonthlyPlanningOverview(2026, 9);
+  const augustSecond = await getMonthlyPlanningOverview(2026, 8);
+  const augustRecords = (await listAllMonthlyExpenses()).filter(
+    (expense) => expense.recurrenceId === template.recurrenceId && (expense.recurrenceOriginalDate ?? expense.date) === "2026-08-08"
+  );
+
+  assert.equal(july.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId).length, 1);
+  assert.equal(augustFirst.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId).length, 1);
+  assert.equal(september.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId).length, 1);
+  assert.equal(augustSecond.expenses.filter((expense) => expense.recurrenceId === template.recurrenceId).length, 1);
+  assert.equal(augustRecords.length, 1);
+  assert.equal(augustRecords[0].date, "2026-08-08");
+});
+
 test("deleting one recurring occurrence cancels it without recreating the duplicate", async () => {
   const plan = await saveMonthlyPlan({
     year: 2097,

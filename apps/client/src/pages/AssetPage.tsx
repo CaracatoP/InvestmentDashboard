@@ -26,7 +26,7 @@ function getHistoryStateMessage(history: AssetPriceHistoryResponse | null, error
   if (!history) return "";
   if (history.status === "unsupported") return "Historico de mercado nao suportado para este ativo.";
   if (history.status === "unavailable") return history.message || "Historico indisponivel para este periodo.";
-  if (history.status === "error") return history.message || "Erro ao consultar historico na BRAPI.";
+  if (history.status === "error") return history.message || "Erro ao consultar historico de mercado.";
   if (history.points.length === 0) return "Sem dados historicos para este periodo.";
   return "";
 }

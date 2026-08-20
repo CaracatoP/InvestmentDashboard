@@ -310,8 +310,8 @@ export async function explainProjectionWithAi(input: { input?: Record<string, un
   }
 }
 
-export async function createChatSession(title?: string) {
-  return createAiChatSession(title?.trim() || "Nova conversa");
+export async function createChatSession(title?: string, options: { externalConversationId?: string } = {}) {
+  return createAiChatSession(title?.trim() || "Nova conversa", options);
 }
 
 export async function listChatSessions() {
@@ -335,7 +335,7 @@ function buildSessionTitle(message: string) {
   return compact.length > 54 ? `${compact.slice(0, 54)}...` : compact || "Nova conversa";
 }
 
-export async function sendChatMessage(sessionId: string, content: string) {
+export async function sendChatMessage(sessionId: string, content: string, options: { externalMessageId?: string } = {}) {
   const session = await findAiChatSessionById(sessionId);
   if (!session) throw notFound("Conversa de IA nao encontrada.");
 
@@ -345,7 +345,7 @@ export async function sendChatMessage(sessionId: string, content: string) {
     throw badRequest(`Esta conversa atingiu o limite de ${env.aiChatMaxMessages} mensagens. Crie uma nova conversa.`);
   }
 
-  const userMessage = await addAiChatMessage({ sessionId, role: "user", content });
+  const userMessage = await addAiChatMessage({ sessionId, role: "user", content, externalMessageId: options.externalMessageId ?? "" });
   const operational = await handleOperationalChatMessage({ sessionId, message: content, messageId: userMessage.id });
   if (operational.handled) {
     const assistantMessage = await addAiChatMessage({

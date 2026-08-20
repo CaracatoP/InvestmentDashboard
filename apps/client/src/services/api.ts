@@ -44,6 +44,7 @@ import type {
   CashBoxMovementRecord,
   CashBoxRecord,
   ContributionRecord,
+  CryptoAssetSearchResult,
   DividendRecord,
   GoalRecord,
   MonthlyExpenseCompletionResult,
@@ -54,10 +55,39 @@ import type {
   MonthlyPlanRecord,
   OperationRecord
 } from "../types/management";
+import type {
+  AuthLoginInput,
+  AuthMeResponse,
+  AuthMessageResponse,
+  AuthRegisterInput,
+  AuthUser,
+  WhatsAppIntegrationStatus,
+  WhatsAppLinkCreated
+} from "../types/auth";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 12000
+  timeout: 12000,
+  withCredentials: true
+});
+
+function readCookie(name: string) {
+  if (typeof document === "undefined") return "";
+  const prefix = `${name}=`;
+  return document.cookie
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith(prefix))
+    ?.slice(prefix.length) ?? "";
+}
+
+api.interceptors.request.use((config) => {
+  const method = (config.method ?? "get").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    const csrfToken = readCookie("invest_hub_csrf");
+    if (csrfToken) config.headers.set("X-CSRF-Token", csrfToken);
+  }
+  return config;
 });
 
 function extractApiErrorMessage(payload: unknown) {
@@ -312,6 +342,78 @@ export function resetApiClientMetrics() {
   apiClientMetrics.mutationCounts = {};
 }
 
+export const authApi = {
+  register: async (input: AuthRegisterInput) => {
+    const { data } = await api.post<ApiEnvelope<AuthMessageResponse>>("/auth/register", input);
+    return unwrapData(data);
+  },
+  login: async (input: AuthLoginInput) => {
+    const { data } = await api.post<ApiEnvelope<{ user: AuthUser }>>("/auth/login", input);
+    return unwrapData(data);
+  },
+  logout: async () => {
+    await api.post("/auth/logout");
+  },
+  me: async () => {
+    const { data } = await api.get<ApiEnvelope<AuthMeResponse>>("/auth/me");
+    return unwrapData(data);
+  },
+  forgotPassword: async (email: string) => {
+    const { data } = await api.post<ApiEnvelope<AuthMessageResponse>>("/auth/forgot-password", { email });
+    return unwrapData(data);
+  },
+  resetPassword: async (input: { token: string; password: string; confirmPassword: string }) => {
+    const { data } = await api.post<ApiEnvelope<AuthMessageResponse>>("/auth/reset-password", input);
+    return unwrapData(data);
+  },
+  changePassword: async (input: { currentPassword: string; password: string; confirmPassword: string }) => {
+    const { data } = await api.post<ApiEnvelope<AuthMessageResponse>>("/auth/change-password", input);
+    return unwrapData(data);
+  }
+};
+
+export const adminUsersApi = {
+  list: async () => {
+    const { data } = await api.get<ApiEnvelope<AuthUser[]>>("/admin/users");
+    return unwrapData(data);
+  },
+  approve: async (userId: string) => {
+    const { data } = await api.post<ApiEnvelope<AuthUser>>(`/admin/users/${userId}/approve`);
+    return unwrapData(data);
+  },
+  reject: async (userId: string) => {
+    const { data } = await api.post<ApiEnvelope<AuthUser>>(`/admin/users/${userId}/reject`);
+    return unwrapData(data);
+  },
+  disable: async (userId: string) => {
+    const { data } = await api.post<ApiEnvelope<AuthUser>>(`/admin/users/${userId}/disable`);
+    return unwrapData(data);
+  },
+  reactivate: async (userId: string) => {
+    const { data } = await api.post<ApiEnvelope<AuthUser>>(`/admin/users/${userId}/reactivate`);
+    return unwrapData(data);
+  }
+};
+
+export const integrationsApi = {
+  whatsappStatus: async () => {
+    const { data } = await api.get<ApiEnvelope<WhatsAppIntegrationStatus>>("/integrations/whatsapp");
+    return unwrapData(data);
+  },
+  createWhatsAppLink: async () => {
+    const { data } = await api.post<ApiEnvelope<WhatsAppLinkCreated>>("/integrations/whatsapp/link");
+    return unwrapData(data);
+  },
+  cancelWhatsAppLink: async () => {
+    const { data } = await api.delete<ApiEnvelope<{ cancelled: number }>>("/integrations/whatsapp/link");
+    return unwrapData(data);
+  },
+  disconnectWhatsApp: async () => {
+    const { data } = await api.delete<ApiEnvelope<{ disconnected: number }>>("/integrations/whatsapp");
+    return unwrapData(data);
+  }
+};
+
 export async function fetchDashboard() {
   return cachedRequest(workspaceQueryKeys.dashboard(), ["dashboard"], "dashboard", () => api.get<ApiEnvelope<DashboardResponse>>("/dashboard"));
 }
@@ -518,6 +620,10 @@ async function getRecords<T>(path: string, domains: WorkspaceCacheDomain[]) {
 
 export const assetRecordsApi = {
   list: () => getRecords<AssetRecord>("/assets", ["assets", "portfolio"]),
+  searchCrypto: async (query: string) => {
+    const { data } = await api.get<ApiEnvelope<CryptoAssetSearchResult[]>>("/assets/crypto/search", { params: { q: query } });
+    return unwrapData(data);
+  },
   create: async (input: AssetRecord) => mutate(() => api.post<ApiEnvelope<AssetRecord>>("/assets", input), "asset.create"),
   update: async (id: string, input: Partial<AssetRecord>) => mutate(() => api.put<ApiEnvelope<AssetRecord>>(`/assets/${id}`, input), "asset.update"),
   remove: async (id: string) => mutate(() => api.delete(`/assets/${id}`), "asset.remove")
@@ -534,6 +640,7 @@ export const dividendRecordsApi = {
   list: () => getRecords<DividendRecord>("/dividends", ["dividends"]),
   create: async (input: DividendRecord) => mutate(() => api.post<ApiEnvelope<DividendRecord>>("/dividends", input), "dividend.create"),
   update: async (id: string, input: Partial<DividendRecord>) => mutate(() => api.put<ApiEnvelope<DividendRecord>>(`/dividends/${id}`, input), "dividend.update"),
+  receive: async (id: string, input: Partial<DividendRecord>) => mutate(() => api.post<ApiEnvelope<DividendRecord>>(`/dividends/${id}/receive`, input), "dividend.receive"),
   remove: async (id: string) => mutate(() => api.delete(`/dividends/${id}`), "dividend.remove")
 };
 

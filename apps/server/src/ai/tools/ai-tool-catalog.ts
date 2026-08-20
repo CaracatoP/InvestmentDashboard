@@ -232,6 +232,25 @@ export const aiToolCatalog: Record<AiToolName, AiToolCatalogEntry> = {
     successMessage: "JCP registrado com sucesso.",
     clientMutationKey: "dividend.create"
   },
+  markDividendReceived: {
+    name: "markDividendReceived",
+    description: "Marca um dividendo previsto como recebido.",
+    domain: "investments",
+    operation: "markDividendReceived",
+    risk: "medium",
+    required: ["dividendId"],
+    optional: ["amountInCents", "paymentDate", "receivedAt", "notes"],
+    service: "markDividendReceived",
+    affectedDomains: ["dashboard", "portfolio", "dividends", "history", "monthlyPlanning"],
+    relatedRoutes: ["/dividendos", "/investimentos/dividendos", "/historico", "/planejamento-mensal"],
+    confirmationRequired: true,
+    strongConfirmation: false,
+    idempotencyStrategy: "pending-action-idempotency-key",
+    enabled: true,
+    uiActionId: "view-dividends",
+    successMessage: "Dividendo marcado como recebido.",
+    clientMutationKey: "dividend.receive"
+  },
   registerBonus: {
     name: "registerBonus",
     description: "Registra uma bonificacao.",

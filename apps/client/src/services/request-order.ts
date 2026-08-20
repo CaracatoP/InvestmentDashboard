@@ -15,5 +15,9 @@ export function createLatestRequestTracker<T extends string>() {
     return versions.get(key) === version;
   }
 
-  return { start, isLatest };
+  function invalidateAll(keys: T[]) {
+    for (const key of keys) versions.set(key, (versions.get(key) ?? 0) + 1);
+  }
+
+  return { start, isLatest, invalidateAll };
 }

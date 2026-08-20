@@ -13,13 +13,13 @@ function hasIndex(model: { schema: { indexes: () => Array<[Record<string, unknow
 }
 
 test("performance-critical collection queries have compound indexes", () => {
-  assert.equal(hasIndex(OperationModel, { type: 1, date: -1 }), true);
-  assert.equal(hasIndex(OperationModel, { assetTicker: 1, date: -1 }), true);
-  assert.equal(hasIndex(DividendModel, { status: 1, paymentDate: -1 }), true);
-  assert.equal(hasIndex(DividendModel, { assetTicker: 1, paymentDate: -1 }), true);
-  assert.equal(hasIndex(ContributionModel, { createdAt: -1 }), true);
-  assert.equal(hasIndex(MonthlyExpenseModel, { planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 }), true);
-  assert.equal(hasIndex(MonthlyIncomeEntryModel, { planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 }), true);
-  assert.equal(hasIndex(AiChatMessageModel, { sessionId: 1, createdAt: 1 }), true);
-  assert.equal(hasIndex(AiPendingActionModel, { sessionId: 1, status: 1, expiresAt: 1 }), true);
+  assert.equal(hasIndex(OperationModel, { userId: 1, type: 1, date: -1 }), true);
+  assert.equal(hasIndex(OperationModel, { userId: 1, assetTicker: 1, date: -1 }), true);
+  assert.equal(hasIndex(DividendModel, { userId: 1, status: 1, paymentDate: -1 }), true);
+  assert.equal(hasIndex(DividendModel, { userId: 1, assetTicker: 1, paymentDate: -1 }), true);
+  assert.equal(hasIndex(ContributionModel, { userId: 1, createdAt: -1 }), true);
+  assert.equal(hasIndex(MonthlyExpenseModel, { userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 }), true);
+  assert.equal(hasIndex(MonthlyIncomeEntryModel, { userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 }), true);
+  assert.equal(hasIndex(AiChatMessageModel, { userId: 1, sessionId: 1, createdAt: 1 }), true);
+  assert.equal(hasIndex(AiPendingActionModel, { userId: 1, sessionId: 1, status: 1, expiresAt: 1 }), true);
 });

@@ -31,6 +31,7 @@ interface InvestmentStore {
   isLoading: boolean;
   error: string | null;
   setSettings: (settings: SettingsResponse) => void;
+  resetWorkspace: () => void;
   loadWorkspace: (domains?: WorkspaceCacheDomain[]) => Promise<void>;
 }
 
@@ -55,6 +56,20 @@ export const useInvestmentStore = create<InvestmentStore>((set) => ({
   isLoading: false,
   error: null,
   setSettings: (settings) => set({ settings }),
+  resetWorkspace: () => {
+    workspaceRequestTracker.invalidateAll([...workspaceDataDomains]);
+    set({
+      dashboard: null,
+      portfolio: null,
+      dividends: null,
+      contributions: null,
+      goals: [],
+      history: [],
+      settings: null,
+      isLoading: false,
+      error: null
+    });
+  },
   loadWorkspace: async (domains) => {
     const requestedDomains = normalizeRequestedDomains(domains);
     if (requestedDomains.length === 0) return;

@@ -6,3 +6,6 @@ apps/server/.env
 coverage
 *.log
 .DS_Store
+.agents
+.codex-artifacts
+.codex-runtime

@@ -9,7 +9,9 @@ import {
 } from "../../services/portfolio.service";
 import { env } from "../../config/env";
 import { getCashBoxesOverview } from "../../services/cash-box.service";
+import { getMarketQuoteSnapshot } from "../../services/market-data.service";
 import { getMonthlyPlanningOverview } from "../../services/monthly-planning.service";
+import { findKnownCryptoByQuery } from "../../services/ticker.service";
 import { filterSensitiveData } from "../utils/ai-sensitive-data-filter";
 
 export type InvestmentContextFocus =
@@ -65,6 +67,7 @@ function compactAsset(asset: Awaited<ReturnType<typeof getPortfolio>>["assets"][
   return {
     ticker: asset.ticker,
     name: asset.name,
+    coingeckoId: asset.coingeckoId,
     category: asset.category,
     quantity: asset.quantity,
     averagePrice: asset.averagePrice,
@@ -76,6 +79,71 @@ function compactAsset(asset: Awaited<ReturnType<typeof getPortfolio>>["assets"][
     dividendYield: asset.dividendYield,
     portfolioWeight: asset.portfolioWeight,
     hasPosition: asset.hasPosition
+  };
+}
+
+function normalizeText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function assetMatchesSpotlight(asset: Awaited<ReturnType<typeof getPortfolio>>["assets"][number], message: string) {
+  const normalized = normalizeText(message);
+  return [asset.ticker, asset.name, asset.coingeckoId]
+    .filter(Boolean)
+    .some((value) => normalized.includes(normalizeText(String(value))));
+}
+
+function hasValidQuotePrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+async function buildMarketSpotlight(message: string, portfolio: Awaited<ReturnType<typeof getPortfolio>>) {
+  const portfolioAsset = portfolio.assets.find((asset) => assetMatchesSpotlight(asset, message));
+  const knownCrypto = portfolioAsset ? null : findKnownCryptoByQuery(message);
+
+  if (!portfolioAsset && !knownCrypto) return null;
+
+  const asset = portfolioAsset
+    ? {
+        name: portfolioAsset.name,
+        ticker: portfolioAsset.ticker,
+        category: portfolioAsset.categoryId ?? portfolioAsset.category,
+        coingeckoId: portfolioAsset.coingeckoId,
+        currency: portfolioAsset.currency,
+        active: true
+      }
+    : {
+        name: knownCrypto?.name ?? "",
+        ticker: knownCrypto?.symbol ?? "",
+        category: "CRIPTO",
+        coingeckoId: knownCrypto?.coingeckoId ?? "",
+        currency: "BRL",
+        active: true
+      };
+  const quote = await getMarketQuoteSnapshot(asset, { refreshIfMissing: true });
+  const currentPrice = hasValidQuotePrice(quote?.price) ? quote.price : null;
+
+  return {
+    name: asset.name,
+    ticker: asset.ticker,
+    coingeckoId: asset.coingeckoId ?? null,
+    currentPrice,
+    quotedAt: quote?.quotedAt ?? null,
+    source: quote?.source ?? null,
+    status: quote?.status ?? "unavailable",
+    change24h: quote?.change24h ?? null,
+    marketCap: quote?.marketCap ?? null,
+    volume24h: quote?.volume24h ?? null,
+    quantity: portfolioAsset?.quantity ?? null,
+    averagePrice: portfolioAsset?.averagePrice ?? null,
+    currentValue:
+      portfolioAsset && currentPrice
+        ? portfolioAsset.quantity * currentPrice
+        : portfolioAsset?.currentValue ?? null,
+    hasPosition: portfolioAsset?.hasPosition ?? false
   };
 }
 
@@ -166,7 +234,7 @@ function buildAiSettingsStatus() {
   };
 }
 
-async function buildInvestmentOverviewContext(positionLimit = 12) {
+async function buildInvestmentOverviewContext(positionLimit = 12, spotlightMessage?: string) {
   const period = currentPeriod();
   const [dashboard, portfolio, dividends, contributions, goals, planning] = await Promise.all([
     getDashboard(),
@@ -185,6 +253,7 @@ async function buildInvestmentOverviewContext(positionLimit = 12) {
     (metrics.cashboxCount ?? 0) > 0 ||
     (contributions.totals.invested ?? 0) > 0 ||
     (dividends.totals.allTime ?? 0) > 0;
+  const marketSpotlight = spotlightMessage ? await buildMarketSpotlight(spotlightMessage, portfolio) : null;
 
   return filterSensitiveData({
     scope: "investments:summary",
@@ -209,6 +278,7 @@ async function buildInvestmentOverviewContext(positionLimit = 12) {
       cashboxCount: metrics.cashboxCount
     },
     classDistribution: buildClassDistribution(dashboard),
+    marketSpotlight,
     concentration: {
       ...concentration,
       topPositions: concentration.topPositions.slice(0, positionLimit)
@@ -240,11 +310,11 @@ async function buildInvestmentOverviewContext(positionLimit = 12) {
       activeGoals: goals.filter((goal) => goal.active !== false).slice(0, 6)
     },
     responseGuidance:
-      "Se dataStatus for available, analise estes numeros diretamente. Nunca diga que nao consegue acessar a carteira quando este contexto esta presente."
+      "Se dataStatus for available, analise estes numeros diretamente. Nunca diga que nao consegue acessar a carteira quando este contexto esta presente. Se marketSpotlight existir, use-o como fonte oficial para perguntas diretas sobre cotacao ou posicao do ativo."
   });
 }
 
-export async function buildInvestmentContext(focus: InvestmentContextFocus = "overview") {
+export async function buildInvestmentContext(focus: InvestmentContextFocus = "overview", options: { spotlightMessage?: string } = {}) {
   if (focus === "dividends") {
     const dividends = await getDividendsOverview();
     return filterSensitiveData({
@@ -338,12 +408,12 @@ export async function buildInvestmentContext(focus: InvestmentContextFocus = "ov
   }
 
   if (focus === "overview" || focus === "investments") {
-    return buildInvestmentOverviewContext(12);
+    return buildInvestmentOverviewContext(12, options.spotlightMessage);
   }
 
   if (focus === "portfolio" || focus === "allocation") {
     const [dashboard, portfolio] = await Promise.all([getDashboard(), getPortfolio()]);
-    const overview = await buildInvestmentOverviewContext(focus === "portfolio" ? 18 : 10);
+    const overview = await buildInvestmentOverviewContext(focus === "portfolio" ? 18 : 10, options.spotlightMessage);
     return filterSensitiveData({
       scope: `investments:${focus}`,
       overview,
@@ -352,5 +422,5 @@ export async function buildInvestmentContext(focus: InvestmentContextFocus = "ov
     });
   }
 
-  return buildInvestmentOverviewContext(12);
+  return buildInvestmentOverviewContext(12, options.spotlightMessage);
 }

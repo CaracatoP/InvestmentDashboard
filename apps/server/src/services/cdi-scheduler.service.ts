@@ -1,6 +1,8 @@
 import { env } from "../config/env";
+import { runWithAuthContext } from "../auth/auth-context";
 import { getLatestCdiRate } from "../repositories/investment.repository";
 import { refreshCdiAndRecalculate, toReferenceDate } from "./cdi.service";
+import { listUsers } from "./auth.service";
 
 const schedulerState = globalThis as typeof globalThis & {
   __investmentDashboardCdiSchedulerStarted?: boolean;
@@ -49,13 +51,31 @@ export function shouldRunStartupCdiRefresh(date: Date, latestReferenceDate?: str
 
 async function runScheduledRefresh(trigger: "startup" | "interval") {
   try {
-    const result = await refreshCdiAndRecalculate();
+    const activeUsers = (await listUsers()).filter((user) => user.status === "active");
+    let lastResult: Awaited<ReturnType<typeof refreshCdiAndRecalculate>> | null = null;
+    let applied = 0;
+    let skipped = 0;
+
+    for (const user of activeUsers) {
+      const result = await runWithAuthContext({ userId: user.id, role: user.role, email: user.email, channel: "system" }, () =>
+        refreshCdiAndRecalculate()
+      );
+      lastResult = result;
+      applied += result.recalculation.applied;
+      skipped += result.recalculation.skipped;
+    }
+
+    if (!lastResult) {
+      logCdiScheduler("info", "Nenhum usuario ativo para recalculo", { trigger });
+      return;
+    }
+
     logCdiScheduler("info", "Atualizacao e recalculo concluidos", {
       trigger,
-      source: result.rate.source,
-      referenceDate: result.rate.referenceDate,
-      applied: result.recalculation.applied,
-      skipped: result.recalculation.skipped
+      source: lastResult.rate.source,
+      referenceDate: lastResult.rate.referenceDate,
+      applied,
+      skipped
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown CDI scheduler error";

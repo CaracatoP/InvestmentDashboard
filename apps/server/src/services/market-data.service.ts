@@ -1,7 +1,21 @@
 import { env } from "../config/env";
-import { createPriceHistory, listAssets, listMarketQuotes, listPriceHistory, upsertMarketQuote } from "../repositories/investment.repository";
+import {
+  createPriceHistory,
+  findMarketQuoteByAssetKey,
+  listAllActiveAssetsForMarketData,
+  listAssets,
+  listMarketQuotes,
+  listPriceHistory,
+  upsertMarketQuote
+} from "../repositories/investment.repository";
 import type { AssetRecord, MarketQuoteRecord } from "../types/investment";
-import { getTickerProfile, normalizeTicker, type TickerProfile } from "./ticker.service";
+import {
+  fetchCoinGeckoMarketChart,
+  fetchCoinGeckoMarkets,
+  searchCoinGeckoAssets,
+  type CoinGeckoSearchResult
+} from "./coingecko-client";
+import { buildAssetMarketKey, buildStoredMarketDataKey, getTickerProfile, normalizeTicker, type TickerProfile } from "./ticker.service";
 
 type QuoteStatus = MarketQuoteRecord["status"];
 type PriceHistoryStatus = "updated" | "cached" | "stale" | "unavailable" | "unsupported" | "error";
@@ -77,6 +91,7 @@ interface BrapiHistoricalPoint {
 }
 
 interface MarketQuoteInput {
+  assetKey: string;
   ticker: string;
   providerSymbol: string;
   price: number;
@@ -86,6 +101,10 @@ interface MarketQuoteInput {
   market: string;
   assetKind: string;
   errorMessage?: string;
+  change24h?: number;
+  marketCap?: number;
+  volume24h?: number;
+  displayName?: string;
 }
 
 interface ProviderRequestAsset {
@@ -97,6 +116,49 @@ interface MarketDataProvider {
   name: string;
   fetchBatch(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]>;
   fetchHistoricalPrices(item: ProviderRequestAsset, range: HistoryRange, interval: HistoryInterval): Promise<HistoricalPricesResult>;
+}
+
+function configuredMarketProviders() {
+  const providers: string[] = [];
+  if (env.marketDataProvider.trim() && env.marketDataApiKey.trim()) providers.push(env.marketDataProvider.trim().toLowerCase());
+  if (env.coingeckoApiKey.trim()) providers.push("coingecko");
+  return providers;
+}
+
+function marketProviderLabel() {
+  const providers = configuredMarketProviders();
+  return providers.length > 0 ? providers.join("+") : "unconfigured";
+}
+
+function validOptionalNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function dedupeAssetsForMarketData(assets: AssetRecord[]) {
+  const byMarketKey = new Map<string, AssetRecord>();
+
+  for (const asset of assets.filter((item) => item.active && item.ticker)) {
+    const marketKey = buildAssetMarketKey(asset);
+    if (!byMarketKey.has(marketKey)) byMarketKey.set(marketKey, asset);
+  }
+
+  return [...byMarketKey.values()];
+}
+
+function buildInvalidQuoteInput(item: ProviderRequestAsset, source: string, errorMessage: string): MarketQuoteInput {
+  return {
+    assetKey: item.profile.marketKey,
+    ticker: item.profile.internalTicker,
+    providerSymbol: item.profile.providerSymbol,
+    price: Number.NaN,
+    quotedAt: new Date(),
+    source,
+    currency: item.asset.currency ?? "BRL",
+    market: item.profile.market,
+    assetKind: item.profile.kind,
+    errorMessage,
+    displayName: item.asset.name
+  };
 }
 
 export function normalizeHistoryRange(input?: string) {
@@ -203,6 +265,20 @@ function toDateInput(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+function coinGeckoDaysForRange(range: HistoryRange) {
+  if (range === "max") return "max";
+
+  const daysByRange: Record<Exclude<HistoryRange, "max">, string> = {
+    "1mo": "30",
+    "3mo": "90",
+    "6mo": "180",
+    "1y": "365",
+    "5y": "1825"
+  };
+
+  return daysByRange[range];
+}
+
 export function parseBrapiTimestamp(value: number | string | undefined): Date | null {
   if (value === undefined || value === null || value === "") return null;
 
@@ -214,10 +290,6 @@ export function parseBrapiTimestamp(value: number | string | undefined): Date | 
 
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function validOptionalNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 export function normalizeHistoricalPricePoints(points: BrapiHistoricalPoint[]) {
@@ -294,7 +366,11 @@ export function mapBrapiFiiHistoricalResponse(payload: unknown, fallbackTicker: 
 }
 
 class UnavailableMarketDataProvider implements MarketDataProvider {
-  name = env.marketDataProvider || "unconfigured";
+  name: string;
+
+  constructor(name = "unavailable") {
+    this.name = name;
+  }
 
   async fetchBatch(): Promise<MarketQuoteInput[]> {
     return [];
@@ -317,8 +393,7 @@ class BrapiMarketDataProvider implements MarketDataProvider {
   name = "brapi";
 
   async fetchBatch(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]> {
-    const [b3Quotes, cryptoQuotes] = await Promise.all([this.fetchB3Quotes(items), this.fetchCryptoQuotes(items)]);
-    return [...b3Quotes, ...cryptoQuotes];
+    return this.fetchB3Quotes(items.filter((item) => item.profile.market === "b3"));
   }
 
   async fetchHistoricalPrices(item: ProviderRequestAsset, range: HistoryRange, interval: HistoryInterval): Promise<HistoricalPricesResult> {
@@ -376,128 +451,39 @@ class BrapiMarketDataProvider implements MarketDataProvider {
   }
 
   private async fetchB3Quotes(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]> {
-    const b3Items = items.filter((item) => item.profile.market === "b3");
     const quotes: MarketQuoteInput[] = [];
 
-    for (const item of b3Items) {
+    for (const item of items) {
       const url = `https://brapi.dev/api/v2/stocks/quote?symbols=${encodeURIComponent(item.profile.providerSymbol)}`;
 
       try {
         const payload = await this.fetchJson<{
           results?: Array<{
-            requestedSymbol?: string;
             symbol?: string;
-            changed?: boolean;
             data?: {
               regularMarketPrice?: number;
               regularMarketTime?: string;
               currency?: string;
             };
           }>;
-          requestedAt?: string;
-          took?: number;
         }>(url, item.profile.providerSymbol);
         const result = (payload.results ?? [])[0];
         const data = result?.data;
-        const ticker = normalizeTicker(String(result?.symbol ?? item.profile.internalTicker));
-
-        console.info("Brapi stock quote parsed", {
-          requestedTicker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          returnedTicker: ticker,
-          price: data?.regularMarketPrice,
-          regularMarketTime: data?.regularMarketTime
-        });
 
         quotes.push({
-          ticker,
+          assetKey: item.profile.marketKey,
+          ticker: normalizeTicker(String(result?.symbol ?? item.profile.internalTicker)),
           providerSymbol: item.profile.providerSymbol,
           price: Number(data?.regularMarketPrice),
           quotedAt: data?.regularMarketTime ? new Date(data.regularMarketTime) : new Date(),
           source: this.name,
           currency: data?.currency ?? "BRL",
           market: item.profile.market,
-          assetKind: item.profile.kind
+          assetKind: item.profile.kind,
+          displayName: item.asset.name
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown BRAPI error";
-        console.warn("Brapi stock quote failed", {
-          ticker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          message
-        });
-        quotes.push({
-          ticker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          price: Number.NaN,
-          quotedAt: new Date(),
-          source: this.name,
-          currency: item.asset.currency ?? "BRL",
-          market: item.profile.market,
-          assetKind: item.profile.kind,
-          errorMessage: message
-        });
-      }
-    }
-
-    return quotes;
-  }
-
-  private async fetchCryptoQuotes(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]> {
-    const cryptoItems = items.filter((item) => item.profile.market === "crypto");
-    const quotes: MarketQuoteInput[] = [];
-
-    for (const item of cryptoItems) {
-      const url = `https://brapi.dev/api/v2/crypto?coin=${encodeURIComponent(item.profile.providerSymbol)}&currency=BRL`;
-
-      try {
-        const payload = await this.fetchJson<{
-          coins?: Array<{
-            coin?: string;
-            regularMarketPrice?: number;
-            regularMarketTime?: string;
-            currency?: string;
-          }>;
-        }>(url, item.profile.providerSymbol);
-        const coin = (payload.coins ?? [])[0];
-        const ticker = normalizeTicker(String(coin?.coin ?? item.profile.internalTicker));
-
-        console.info("Brapi crypto quote parsed", {
-          requestedTicker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          returnedTicker: ticker,
-          price: coin?.regularMarketPrice,
-          regularMarketTime: coin?.regularMarketTime
-        });
-
-        quotes.push({
-          ticker,
-          providerSymbol: item.profile.providerSymbol,
-          price: Number(coin?.regularMarketPrice),
-          quotedAt: coin?.regularMarketTime ? new Date(coin.regularMarketTime) : new Date(),
-          source: this.name,
-          currency: coin?.currency ?? "BRL",
-          market: "crypto",
-          assetKind: "crypto"
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown BRAPI error";
-        console.warn("Brapi crypto quote failed", {
-          ticker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          message
-        });
-        quotes.push({
-          ticker: item.profile.internalTicker,
-          providerSymbol: item.profile.providerSymbol,
-          price: Number.NaN,
-          quotedAt: new Date(),
-          source: this.name,
-          currency: item.asset.currency ?? "BRL",
-          market: item.profile.market,
-          assetKind: item.profile.kind,
-          errorMessage: message
-        });
+        quotes.push(buildInvalidQuoteInput(item, this.name, error instanceof Error ? error.message : "Unknown BRAPI error"));
       }
     }
 
@@ -506,56 +492,10 @@ class BrapiMarketDataProvider implements MarketDataProvider {
 
   private async fetchJson<T>(url: string, symbol: string): Promise<T> {
     const token = env.marketDataApiKey.replace(/^Bearer\s+/i, "").trim();
+    if (!token) throw new Error("Market data provider not configured");
 
-    const result = await this.requestJson(url, symbol, {
-      Authorization: `Bearer ${token}`
-    });
-
-    if (result.response.ok) return result.payload as T;
-    this.throwBrapiError(result.response.status, result.payload);
-  }
-
-  private sanitizeUrl(url: string) {
-    return url.replace(/([?&]token=)[^&]+/i, "$1***");
-  }
-
-  private summarizePayload(payload: unknown) {
-    if (!payload || typeof payload !== "object") return payload;
-
-    const data = payload as {
-      results?: Array<{ symbol?: string; data?: { historicalDataPrice?: unknown[] } }>;
-      fiis?: Array<{ symbol?: string; historicalDataPrice?: unknown[] }>;
-      coins?: unknown[];
-      error?: unknown;
-      message?: unknown;
-      code?: unknown;
-    };
-
-    if (data.results?.some((item) => item.data?.historicalDataPrice)) {
-      return {
-        results: data.results.map((item) => ({
-          symbol: item.symbol,
-          historicalPoints: item.data?.historicalDataPrice?.length ?? 0
-        }))
-      };
-    }
-
-    if (data.fiis?.some((item) => item.historicalDataPrice)) {
-      return {
-        fiis: data.fiis.map((item) => ({
-          symbol: item.symbol,
-          historicalPoints: item.historicalDataPrice?.length ?? 0
-        }))
-      };
-    }
-
-    return payload;
-  }
-
-  private async requestJson(url: string, symbol: string, headers: Record<string, string>) {
-    console.info("Brapi request", { ticker: symbol, url: this.sanitizeUrl(url), auth: headers.Authorization ? "bearer" : "none" });
     const response = await fetch(url, {
-      headers,
+      headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(12000)
     });
     const text = await response.text();
@@ -569,25 +509,148 @@ class BrapiMarketDataProvider implements MarketDataProvider {
 
     console.info("Brapi response", {
       ticker: symbol,
-      url: this.sanitizeUrl(url),
       status: response.status,
-      json: this.summarizePayload(payload)
+      payload: typeof payload === "object" ? payload : String(payload)
     });
 
-    return { response, payload };
-  }
-
-  private throwBrapiError(status: number, payload: unknown): never {
-    if (status === 429) throw new Error("Market data rate limit reached");
+    if (response.ok) return payload as T;
+    if (response.status === 429) throw new Error("Market data rate limit reached");
     const message =
       typeof payload === "object" && payload && "message" in payload ? String((payload as { message?: unknown }).message) : "Market data request failed";
-    throw new Error(`Market data request failed with status ${status}: ${message}`);
+    throw new Error(`Market data request failed with status ${response.status}: ${message}`);
+  }
+}
+
+class CoinGeckoMarketDataProvider implements MarketDataProvider {
+  name = "coingecko";
+
+  async fetchBatch(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]> {
+    const cryptoItems = items.filter((item) => item.profile.market === "crypto");
+    if (cryptoItems.length === 0) return [];
+    if (!env.coingeckoApiKey.trim()) {
+      return cryptoItems.map((item) => buildInvalidQuoteInput(item, this.name, "CoinGecko API key not configured"));
+    }
+
+    try {
+      const markets = await fetchCoinGeckoMarkets(cryptoItems.map((item) => item.profile.providerSymbol));
+      const marketById = new Map(markets.map((market) => [market.coingeckoId, market]));
+
+      return cryptoItems.map((item) => {
+        const market = marketById.get(item.profile.providerSymbol);
+        if (!market) return buildInvalidQuoteInput(item, this.name, "CoinGecko did not return this asset");
+
+        return {
+          assetKey: item.profile.marketKey,
+          ticker: item.profile.internalTicker,
+          providerSymbol: item.profile.providerSymbol,
+          price: market.currentPrice,
+          quotedAt: market.lastUpdatedAt ?? new Date(),
+          source: this.name,
+          currency: "BRL",
+          market: item.profile.market,
+          assetKind: item.profile.kind,
+          displayName: market.name,
+          change24h: market.priceChange24h,
+          marketCap: market.marketCap,
+          volume24h: market.volume24h
+        };
+      });
+    } catch (error) {
+      return cryptoItems.map((item) => buildInvalidQuoteInput(item, this.name, error instanceof Error ? error.message : "Unknown CoinGecko error"));
+    }
+  }
+
+  async fetchHistoricalPrices(item: ProviderRequestAsset, range: HistoryRange, interval: HistoryInterval): Promise<HistoricalPricesResult> {
+    if (item.profile.market !== "crypto") {
+      return {
+        ticker: item.profile.internalTicker,
+        providerSymbol: item.profile.providerSymbol,
+        source: this.name,
+        currency: item.asset.currency ?? "BRL",
+        range,
+        interval,
+        points: []
+      };
+    }
+
+    const chartPoints = await fetchCoinGeckoMarketChart(item.profile.providerSymbol, coinGeckoDaysForRange(range));
+    const reducedPoints = reducePointsToInterval(
+      chartPoints.map((point) => ({
+        timestamp: point.timestamp,
+        close: point.price,
+        volume: point.volume
+      })),
+      interval
+    );
+
+    if (reducedPoints.length === 0) throw new Error("CoinGecko did not return historical prices for this asset");
+
+    return {
+      ticker: item.profile.internalTicker,
+      providerSymbol: item.profile.providerSymbol,
+      source: this.name,
+      currency: "BRL",
+      range,
+      interval,
+      points: reducedPoints
+    };
+  }
+}
+
+class RoutedMarketDataProvider implements MarketDataProvider {
+  name = marketProviderLabel();
+  private readonly b3Provider: MarketDataProvider;
+  private readonly cryptoProvider: MarketDataProvider;
+
+  constructor() {
+    this.b3Provider = env.marketDataProvider.trim().toLowerCase() === "brapi" ? new BrapiMarketDataProvider() : new UnavailableMarketDataProvider(env.marketDataProvider || "b3-unconfigured");
+    this.cryptoProvider = new CoinGeckoMarketDataProvider();
+  }
+
+  async fetchBatch(items: ProviderRequestAsset[]): Promise<MarketQuoteInput[]> {
+    const b3Items = items.filter((item) => item.profile.market === "b3");
+    const cryptoItems = items.filter((item) => item.profile.market === "crypto");
+    const [b3Quotes, cryptoQuotes] = await Promise.all([
+      this.safeFetch(this.b3Provider, b3Items),
+      this.safeFetch(this.cryptoProvider, cryptoItems)
+    ]);
+
+    return [...b3Quotes, ...cryptoQuotes];
+  }
+
+  async fetchHistoricalPrices(item: ProviderRequestAsset, range: HistoryRange, interval: HistoryInterval): Promise<HistoricalPricesResult> {
+    if (item.profile.market === "crypto") return this.cryptoProvider.fetchHistoricalPrices(item, range, interval);
+    if (item.profile.market === "b3") return this.b3Provider.fetchHistoricalPrices(item, range, interval);
+
+    return {
+      ticker: item.profile.internalTicker,
+      providerSymbol: item.profile.providerSymbol,
+      source: this.name,
+      currency: item.asset.currency ?? "BRL",
+      range,
+      interval,
+      points: []
+    };
+  }
+
+  private async safeFetch(provider: MarketDataProvider, items: ProviderRequestAsset[]) {
+    if (items.length === 0) return [];
+
+    try {
+      return await provider.fetchBatch(items);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Unknown ${provider.name} error`;
+      return items.map((item) => buildInvalidQuoteInput(item, provider.name, message));
+    }
   }
 }
 
 function getProvider(): MarketDataProvider {
-  if (env.marketDataProvider.toLowerCase() === "brapi") return new BrapiMarketDataProvider();
-  return new UnavailableMarketDataProvider();
+  return new RoutedMarketDataProvider();
+}
+
+function storedQuoteKey(quote: Pick<MarketQuoteRecord, "assetKey" | "ticker" | "market" | "providerSymbol">) {
+  return quote.assetKey?.trim() || buildStoredMarketDataKey(quote);
 }
 
 export function isValidMarketPrice(price: unknown): price is number {
@@ -609,6 +672,7 @@ export function buildRejectedQuote(
   const hasPrevious = isValidStoredQuote(previous);
 
   return {
+    assetKey: profile.marketKey,
     ticker: profile.internalTicker,
     providerSymbol: profile.providerSymbol,
     price: hasPrevious ? previous?.price : null,
@@ -618,12 +682,17 @@ export function buildRejectedQuote(
     status: hasPrevious ? "stale" : status,
     errorMessage,
     market: profile.market,
-    assetKind: profile.kind
+    assetKind: profile.kind,
+    change24h: previous?.change24h,
+    marketCap: previous?.marketCap,
+    volume24h: previous?.volume24h,
+    displayName: previous?.displayName ?? asset.name
   };
 }
 
 function buildUpdatedQuote(quote: MarketQuoteInput): Omit<MarketQuoteRecord, "id"> {
   return {
+    assetKey: quote.assetKey,
     ticker: quote.ticker,
     providerSymbol: quote.providerSymbol,
     price: quote.price,
@@ -633,68 +702,70 @@ function buildUpdatedQuote(quote: MarketQuoteInput): Omit<MarketQuoteRecord, "id
     status: "updated",
     errorMessage: "",
     market: quote.market,
-    assetKind: quote.assetKind
+    assetKind: quote.assetKind,
+    change24h: quote.change24h,
+    marketCap: quote.marketCap,
+    volume24h: quote.volume24h,
+    displayName: quote.displayName
   };
 }
 
-export async function refreshMarketQuotes() {
+async function persistQuoteSnapshot(item: ProviderRequestAsset, quote: MarketQuoteInput) {
+  await createPriceHistory({
+    assetKey: quote.assetKey,
+    ticker: item.profile.internalTicker,
+    price: quote.price,
+    capturedAt: quote.quotedAt,
+    source: quote.source,
+    currency: quote.currency,
+    providerSymbol: quote.providerSymbol,
+    market: quote.market,
+    assetKind: quote.assetKind,
+    type: "intraday_snapshot",
+    interval: "snapshot",
+    granularity: "snapshot"
+  });
+}
+
+async function refreshMarketQuotesForAssets(assets: AssetRecord[]) {
   const provider = getProvider();
-  const activeAssets = (await listAssets()).filter((asset) => asset.active && asset.ticker);
-  const previousQuotes = new Map((await listMarketQuotes()).map((quote) => [normalizeTicker(quote.ticker), quote]));
-  const now = new Date();
+  const activeAssets = dedupeAssetsForMarketData(assets);
+  const previousQuotes = new Map((await listMarketQuotes()).map((quote) => [storedQuoteKey(quote), quote]));
   const requestItems = activeAssets.map((asset) => ({ asset, profile: getTickerProfile(asset) }));
   const supportedItems = requestItems.filter((item) => item.profile.supported);
   const unsupportedItems = requestItems.filter((item) => !item.profile.supported);
+  const fetchedQuotes = await provider.fetchBatch(supportedItems);
+  const fetchedByKey = new Map(fetchedQuotes.map((quote) => [quote.assetKey, quote]));
 
-  console.info("Market refresh request", {
-    provider: provider.name,
-    tickers: requestItems.map((item) => item.profile.internalTicker),
-    providerSymbols: requestItems.map((item) => item.profile.providerSymbol),
-    unsupported: unsupportedItems.map((item) => item.profile.internalTicker)
-  });
-
-  let fetchedQuotes: MarketQuoteInput[] = [];
-  let providerError = "";
-
-  if (!env.marketDataProvider || !env.marketDataApiKey) {
-    providerError = "Market data provider not configured";
-  } else {
-    try {
-      fetchedQuotes = await provider.fetchBatch(supportedItems);
-    } catch (error) {
-      providerError = error instanceof Error ? error.message : "Unknown market data error";
-    }
-  }
-
-  const fetchedByTicker = new Map(fetchedQuotes.map((quote) => [normalizeTicker(quote.ticker), quote]));
   let updated = 0;
   let stale = 0;
   let failed = 0;
   let unsupported = 0;
   const quotes: MarketQuoteRecord[] = [];
 
-  console.info("Market provider response", {
-    received: fetchedQuotes.map((quote) => quote.ticker),
-    missing: supportedItems.filter((item) => !fetchedByTicker.has(item.profile.internalTicker)).map((item) => item.profile.internalTicker)
-  });
-
   for (const item of unsupportedItems) {
     unsupported += 1;
     failed += 1;
     const savedQuote = await upsertMarketQuote(
-      buildRejectedQuote(item.asset, item.profile, previousQuotes.get(item.profile.internalTicker), "unsupported", "Asset type is not supported by market data provider", provider.name)
+      buildRejectedQuote(
+        item.asset,
+        item.profile,
+        previousQuotes.get(item.profile.marketKey),
+        "unsupported",
+        item.profile.market === "crypto" ? "Crypto asset is missing CoinGecko identifier" : "Asset type is not supported by market data provider",
+        provider.name
+      )
     );
     quotes.push(savedQuote);
   }
 
   for (const item of supportedItems) {
-    const fetched = fetchedByTicker.get(item.profile.internalTicker);
-    const previous = previousQuotes.get(item.profile.internalTicker);
+    const fetched = fetchedByKey.get(item.profile.marketKey);
+    const previous = previousQuotes.get(item.profile.marketKey);
 
     if (!fetched) {
-      const status: QuoteStatus = providerError ? "error" : "unavailable";
       const savedQuote = await upsertMarketQuote(
-        buildRejectedQuote(item.asset, item.profile, previous, status, providerError || "Provider did not return this ticker", provider.name)
+        buildRejectedQuote(item.asset, item.profile, previous, "unavailable", "Provider did not return this asset", provider.name)
       );
       if (savedQuote.status === "stale") stale += 1;
       else failed += 1;
@@ -703,9 +774,8 @@ export async function refreshMarketQuotes() {
     }
 
     if (!isValidMarketPrice(fetched.price)) {
-      console.warn("Market quote rejected", { ticker: item.profile.internalTicker, providerSymbol: item.profile.providerSymbol, price: fetched.price });
       const savedQuote = await upsertMarketQuote(
-        buildRejectedQuote(item.asset, item.profile, previous, "unavailable", fetched.errorMessage ?? "Provider returned an invalid price", provider.name)
+        buildRejectedQuote(item.asset, item.profile, previous, "unavailable", fetched.errorMessage ?? "Provider returned an invalid price", fetched.source || provider.name)
       );
       if (savedQuote.status === "stale") stale += 1;
       else failed += 1;
@@ -715,26 +785,13 @@ export async function refreshMarketQuotes() {
 
     updated += 1;
     const savedQuote = await upsertMarketQuote(buildUpdatedQuote(fetched));
-    await createPriceHistory({
-      ticker: item.profile.internalTicker,
-      price: fetched.price,
-      capturedAt: fetched.quotedAt,
-      source: fetched.source
-    });
+    await persistQuoteSnapshot(item, fetched);
     quotes.push(savedQuote);
   }
 
-  console.info("Market refresh upserts", {
-    updated,
-    stale,
-    failed,
-    unsupported,
-    total: requestItems.length
-  });
-
   return {
     provider: provider.name,
-    refreshedAt: now,
+    refreshedAt: new Date(),
     total: requestItems.length,
     requested: supportedItems.length,
     updated,
@@ -745,17 +802,53 @@ export async function refreshMarketQuotes() {
   };
 }
 
+export async function refreshMarketQuotes() {
+  return refreshMarketQuotesForAssets(await listAssets());
+}
+
+export async function refreshAllMarketQuotes() {
+  return refreshMarketQuotesForAssets(await listAllActiveAssetsForMarketData());
+}
+
+export async function searchCryptoAssets(query: string, limit = 10): Promise<CoinGeckoSearchResult[]> {
+  return searchCoinGeckoAssets(query, limit);
+}
+
+export async function getMarketQuoteSnapshot(asset: AssetRecord, options: { refreshIfMissing?: boolean } = {}) {
+  const profile = getTickerProfile(asset);
+  const previous = await findMarketQuoteByAssetKey(profile.marketKey);
+
+  if (isValidStoredQuote(previous)) return previous;
+  if (options.refreshIfMissing === false) return previous;
+  if (!profile.supported) return buildRejectedQuote(asset, profile, previous, "unsupported", "Asset is missing provider identity");
+
+  const provider = getProvider();
+  const fetched = await provider.fetchBatch([{ asset, profile }]);
+  const quote = fetched[0];
+
+  if (quote && isValidMarketPrice(quote.price)) {
+    const saved = await upsertMarketQuote(buildUpdatedQuote(quote));
+    await persistQuoteSnapshot({ asset, profile }, quote);
+    return saved;
+  }
+
+  const rejected = buildRejectedQuote(asset, profile, previous, previous ? "stale" : "unavailable", quote?.errorMessage ?? "Provider did not return a valid quote", provider.name);
+  return upsertMarketQuote(rejected);
+}
+
 export async function getMarketStatus() {
-  const quotes = await listMarketQuotes();
+  const [assets, allQuotes] = await Promise.all([listAssets(), listMarketQuotes()]);
+  const userAssetKeys = new Set(assets.map((asset) => buildAssetMarketKey(asset)));
+  const quotes = allQuotes.filter((quote) => userAssetKeys.has(storedQuoteKey(quote)));
   const validQuotes = quotes.filter((quote) => isValidMarketPrice(quote.price));
   const lastQuote = [...validQuotes].sort((left, right) => new Date(right.quotedAt).getTime() - new Date(left.quotedAt).getTime())[0];
 
   return {
-    provider: env.marketDataProvider || "unconfigured",
+    provider: marketProviderLabel(),
     timezone: env.marketTimezone,
     refreshHours: env.marketRefreshHours,
     lastUpdatedAt: lastQuote?.quotedAt ?? null,
-    connected: Boolean(env.marketDataProvider && env.marketDataApiKey),
+    connected: configuredMarketProviders().length > 0,
     quotes
   };
 }
@@ -794,11 +887,11 @@ function getHistoryCacheTtlMs(range: HistoryRange) {
   return defaultHistoryCacheTtlMs[range];
 }
 
-function buildHistoryCacheKey(asset: AssetRecord, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
+function buildHistoryCacheKey(asset: AssetRecord, profile: TickerProfile, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
   return [
     "asset-history",
-    asset.id ?? normalizeTicker(asset.ticker),
-    normalizeTicker(asset.ticker),
+    asset.id ?? profile.marketKey,
+    profile.marketKey,
     range,
     interval,
     startDate ? toDateInput(startDate) : "",
@@ -843,6 +936,7 @@ function cacheCoversRange(records: Awaited<ReturnType<typeof listPriceHistory>>,
 
 function buildHistoryResponse(
   asset: AssetRecord,
+  profile: TickerProfile,
   range: HistoryRange,
   interval: HistoryInterval,
   source: string,
@@ -871,8 +965,18 @@ function buildHistoryResponse(
   };
 }
 
-async function listCachedHistoricalPrices(asset: AssetRecord, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
+async function listCachedHistoricalPrices(asset: AssetRecord, profile: TickerProfile, range: HistoryRange, interval: HistoryInterval, startDate?: Date, endDate?: Date) {
   const from = startDate ?? (range === "max" ? undefined : rangeStartDate(range));
+  const byAssetKey = await listPriceHistory(undefined, {
+    assetKey: profile.marketKey,
+    type: "market_history",
+    interval,
+    from,
+    to: endDate
+  });
+
+  if (byAssetKey.length > 0) return byAssetKey;
+
   return listPriceHistory(asset.ticker, {
     type: "market_history",
     interval,
@@ -886,6 +990,7 @@ async function persistHistoricalPrices(asset: AssetRecord, profile: TickerProfil
 
   for (const point of result.points) {
     await createPriceHistory({
+      assetKey: profile.marketKey,
       ticker: profile.internalTicker,
       price: point.close,
       capturedAt: point.timestamp,
@@ -920,14 +1025,6 @@ async function refreshHistoricalPrices(input: {
 }) {
   const { asset, profile, provider, range, interval, startDate, endDate, cachedRecords, cacheKey, requestedAt } = input;
 
-  if (!env.marketDataProvider || !env.marketDataApiKey) {
-    const response = cachedRecords.length > 0
-      ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Market data provider not configured")
-      : buildHistoryResponse(asset, range, interval, provider.name, "unavailable", [], "Market data provider not configured");
-    rememberHistoryResponse(cacheKey, response, range);
-    return response;
-  }
-
   try {
     const providerStartedAt = Date.now();
     const fetched = await provider.fetchHistoricalPrices({ asset, profile }, range, interval);
@@ -936,15 +1033,15 @@ async function refreshHistoricalPrices(input: {
 
     if (points.length === 0) {
       const response = cachedRecords.length > 0
-        ? buildHistoryResponse(asset, range, interval, fetched.source, "stale", cachedRecords, "Provider returned no valid historical prices")
-        : buildHistoryResponse(asset, range, interval, fetched.source, "unavailable", [], "Provider returned no valid historical prices");
+        ? buildHistoryResponse(asset, profile, range, interval, fetched.source, "stale", cachedRecords, "Provider returned no valid historical prices")
+        : buildHistoryResponse(asset, profile, range, interval, fetched.source, "unavailable", [], "Provider returned no valid historical prices");
       rememberHistoryResponse(cacheKey, response, range);
       return response;
     }
 
     await persistHistoricalPrices(asset, profile, { ...fetched, points });
-    const refreshedRecords = await listCachedHistoricalPrices(asset, range, interval, startDate, endDate);
-    const response = buildHistoryResponse(asset, range, interval, fetched.source, "updated", refreshedRecords.length > 0 ? refreshedRecords : cachedRecords);
+    const refreshedRecords = await listCachedHistoricalPrices(asset, profile, range, interval, startDate, endDate);
+    const response = buildHistoryResponse(asset, profile, range, interval, fetched.source, "updated", refreshedRecords.length > 0 ? refreshedRecords : cachedRecords);
     rememberHistoryResponse(cacheKey, response, range);
     console.info("Asset history provider refresh", {
       assetId: asset.id,
@@ -960,8 +1057,8 @@ async function refreshHistoricalPrices(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown historical price provider error";
     const response = cachedRecords.length > 0
-      ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, message)
-      : buildHistoryResponse(asset, range, interval, provider.name, "error", [], message);
+      ? buildHistoryResponse(asset, profile, range, interval, provider.name, "stale", cachedRecords, message)
+      : buildHistoryResponse(asset, profile, range, interval, provider.name, "error", [], message);
     rememberHistoryResponse(cacheKey, response, range);
     return response;
   }
@@ -980,7 +1077,7 @@ function scheduleHistoricalRefresh(input: Parameters<typeof refreshHistoricalPri
         interval: input.interval,
         message: error instanceof Error ? error.message : "Unknown historical refresh error"
       });
-      return buildHistoryResponse(input.asset, input.range, input.interval, input.provider.name, "stale", input.cachedRecords, "Background refresh failed");
+      return buildHistoryResponse(input.asset, input.profile, input.range, input.interval, input.provider.name, "stale", input.cachedRecords, "Background refresh failed");
     })
     .finally(() => {
       historyRefreshPromises.delete(input.cacheKey);
@@ -1015,7 +1112,7 @@ export async function getAssetPriceHistory(asset: AssetRecord, requestedRange?: 
   const { range, interval, startDate, endDate, forceRefresh } = normalizeHistoryRequest(requestedRange);
   const profile = getTickerProfile(asset);
   const provider = getProvider();
-  const cacheKey = buildHistoryCacheKey(asset, range, interval, startDate, endDate);
+  const cacheKey = buildHistoryCacheKey(asset, profile, range, interval, startDate, endDate);
   const memoryCache = historyResponseCache.get(cacheKey);
 
   if (!forceRefresh && memoryCache && Date.now() <= memoryCache.expiresAt) {
@@ -1024,13 +1121,13 @@ export async function getAssetPriceHistory(asset: AssetRecord, requestedRange?: 
     return response;
   }
 
-  const cachedRecords = await listCachedHistoricalPrices(asset, range, interval, startDate, endDate);
-  const supportsHistory = profile.supported && profile.market === "b3";
+  const cachedRecords = await listCachedHistoricalPrices(asset, profile, range, interval, startDate, endDate);
+  const supportsHistory = profile.supported && profile.market !== "unsupported";
 
   if (!supportsHistory) {
     const response = cachedRecords.length > 0
-      ? buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Asset is not supported by historical price provider")
-      : buildHistoryResponse(asset, range, interval, provider.name, "unsupported", [], "Asset is not supported by historical price provider");
+      ? buildHistoryResponse(asset, profile, range, interval, provider.name, "stale", cachedRecords, "Asset is not supported by historical price provider")
+      : buildHistoryResponse(asset, profile, range, interval, provider.name, "unsupported", [], "Asset is not supported by historical price provider");
     rememberHistoryResponse(cacheKey, response, range);
     logHistoryResponse({ asset, range, interval, cache: "unsupported", response, startedAt });
     return response;
@@ -1040,14 +1137,14 @@ export async function getAssetPriceHistory(asset: AssetRecord, requestedRange?: 
   const persistentCacheIsFresh = hasUsablePersistentCache && cacheIsFresh(cachedRecords, range);
 
   if (!forceRefresh && persistentCacheIsFresh) {
-    const response = buildHistoryResponse(asset, range, interval, provider.name, "cached", cachedRecords);
+    const response = buildHistoryResponse(asset, profile, range, interval, provider.name, "cached", cachedRecords);
     rememberHistoryResponse(cacheKey, response, range);
     logHistoryResponse({ asset, range, interval, cache: "persistent-hit", response, startedAt });
     return response;
   }
 
   if (!forceRefresh && hasUsablePersistentCache) {
-    const response = buildHistoryResponse(asset, range, interval, provider.name, "stale", cachedRecords, "Exibindo dados salvos enquanto o historico atualiza em segundo plano.");
+    const response = buildHistoryResponse(asset, profile, range, interval, provider.name, "stale", cachedRecords, "Exibindo dados salvos enquanto o historico atualiza em segundo plano.");
     rememberHistoryResponse(cacheKey, response, range);
     void scheduleHistoricalRefresh({ asset, profile, provider, range, interval, startDate, endDate, cachedRecords, cacheKey, requestedAt: startedAt });
     logHistoryResponse({ asset, range, interval, cache: "stale", response, startedAt });

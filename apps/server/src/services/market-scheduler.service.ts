@@ -1,5 +1,5 @@
 import { env } from "../config/env";
-import { refreshMarketQuotes } from "./market-data.service";
+import { refreshAllMarketQuotes } from "./market-data.service";
 
 const schedulerState = globalThis as typeof globalThis & {
   __investmentDashboardMarketSchedulerStarted?: boolean;
@@ -46,7 +46,7 @@ export function startMarketScheduler() {
 
     lastRunKey = runKey;
     isRunning = true;
-    void refreshMarketQuotes()
+    void refreshAllMarketQuotes()
       .then((result) => {
         console.info(`Market refresh finished: ${result.updated}/${result.total} updated.`);
       })

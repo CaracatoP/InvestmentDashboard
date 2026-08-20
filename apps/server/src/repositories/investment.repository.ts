@@ -1,5 +1,6 @@
 import { isDatabaseConnected } from "../config/database";
 import { randomUUID } from "crypto";
+import { getCurrentUserId, SYSTEM_USER_ID } from "../auth/auth-context";
 import { AssetModel } from "../models/asset.model";
 import { CashBoxModel } from "../models/cash-box.model";
 import { CashBoxYieldModel } from "../models/cash-box-yield.model";
@@ -12,7 +13,7 @@ import { OperationModel } from "../models/operation.model";
 import { PriceHistoryModel } from "../models/price-history.model";
 import { SettingsModel } from "../models/settings.model";
 import { SnapshotModel } from "../models/snapshot.model";
-import { normalizeTicker } from "../services/ticker.service";
+import { buildStoredMarketDataKey, normalizeCoinGeckoId, normalizeTicker } from "../services/ticker.service";
 import type {
   AllocationRecord,
   AssetRecord,
@@ -30,6 +31,7 @@ import type {
 } from "../types/investment";
 
 const positionOperationTypes = ["COMPRA", "VENDA", "BONIFICACAO", "DESDOBRAMENTO", "GRUPAMENTO"];
+const emptyMongoOwnerId = "000000000000000000000000";
 
 const baseAllocations: AllocationRecord[] = [
   { category: "FII", targetPercentage: 0, priority: 1 },
@@ -78,7 +80,7 @@ let localDividends: DividendRecord[] = [];
 let localContributions: ContributionRecord[] = [];
 let localGoals: GoalRecord[] = [];
 let localCashBoxes: CashBoxRecord[] = [];
-let localSettings: SettingsRecord = createEmptySettings();
+let localSettingsByUser = new Map<string, SettingsRecord>();
 let localSnapshots: SnapshotRecord[] = [];
 let localMarketQuotes: MarketQuoteRecord[] = [];
 let localPriceHistory: PriceHistoryRecord[] = [];
@@ -86,6 +88,7 @@ let localCdiRates: CdiRateRecord[] = [];
 let localCashBoxYields: CashBoxYieldRecord[] = [];
 
 interface PriceHistoryFilters {
+  assetKey?: string;
   source?: string;
   type?: string;
   interval?: string;
@@ -101,6 +104,23 @@ function withId(record: unknown) {
   };
 }
 
+function currentOwnerId() {
+  const userId = getCurrentUserId();
+  return isDatabaseConnected() && userId === SYSTEM_USER_ID ? emptyMongoOwnerId : userId;
+}
+
+function ownerFilter<T extends object>(filter: T = {} as T) {
+  return { ...filter, userId: currentOwnerId() };
+}
+
+function withOwner<T extends object>(input: T) {
+  return { ...input, userId: currentOwnerId() };
+}
+
+function isOwned(record: { userId?: string }) {
+  return (record.userId ?? SYSTEM_USER_ID) === currentOwnerId();
+}
+
 function byDateDesc(left: { date?: string | Date; paymentDate?: string | Date }, right: { date?: string | Date; paymentDate?: string | Date }) {
   const leftDate = left.date ?? left.paymentDate ?? new Date(0);
   const rightDate = right.date ?? right.paymentDate ?? new Date(0);
@@ -111,49 +131,87 @@ function sum(values: number[]) {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function normalizeAssetRecordInput<T extends Partial<AssetRecord>>(input: T): T {
+  const normalized = { ...input } as T;
+
+  if (typeof normalized.ticker === "string") normalized.ticker = normalizeTicker(normalized.ticker) as T["ticker"];
+  if (typeof normalized.coingeckoId === "string") normalized.coingeckoId = normalizeCoinGeckoId(normalized.coingeckoId) as T["coingeckoId"];
+
+  return normalized;
+}
+
+function resolveMarketDataAssetKey(input: Pick<MarketQuoteRecord, "assetKey" | "ticker" | "market" | "providerSymbol">) {
+  return input.assetKey?.trim() || buildStoredMarketDataKey(input);
+}
+
+function resolvePriceHistoryAssetKey(input: Pick<PriceHistoryRecord, "assetKey" | "ticker" | "market" | "providerSymbol">) {
+  return input.assetKey?.trim() || buildStoredMarketDataKey(input);
+}
+
 export async function listAssets(): Promise<AssetRecord[]> {
+  if (isDatabaseConnected()) {
+    const assets = await AssetModel.find(ownerFilter({ active: true })).sort({ ticker: 1 }).lean();
+    return assets.map((asset) => withId(asset)) as unknown as AssetRecord[];
+  }
+
+  return localAssets.filter(isOwned).sort((left, right) => left.ticker.localeCompare(right.ticker));
+}
+
+export async function listAllActiveAssetsForMarketData(): Promise<AssetRecord[]> {
   if (isDatabaseConnected()) {
     const assets = await AssetModel.find({ active: true }).sort({ ticker: 1 }).lean();
     return assets.map((asset) => withId(asset)) as unknown as AssetRecord[];
   }
 
-  return [...localAssets].sort((left, right) => left.ticker.localeCompare(right.ticker));
+  return localAssets.filter((asset) => asset.active).sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
 export async function listMarketQuotes(): Promise<MarketQuoteRecord[]> {
   if (isDatabaseConnected()) {
-    const quotes = await MarketQuoteModel.find().sort({ ticker: 1 }).lean();
+    const quotes = await MarketQuoteModel.find().sort({ assetKey: 1, ticker: 1 }).lean();
     return quotes.map((quote) => withId(quote)) as unknown as MarketQuoteRecord[];
   }
 
-  return [...localMarketQuotes].sort((left, right) => left.ticker.localeCompare(right.ticker));
+  return [...localMarketQuotes].sort((left, right) => (left.assetKey ?? left.ticker).localeCompare(right.assetKey ?? right.ticker));
 }
 
 export async function findMarketQuoteByTicker(ticker: string): Promise<MarketQuoteRecord | null> {
   const canonicalTicker = normalizeTicker(ticker);
 
   if (isDatabaseConnected()) {
-    const quote = await MarketQuoteModel.findOne({ ticker: canonicalTicker }).lean();
+    const quote = await MarketQuoteModel.findOne({ ticker: canonicalTicker }).sort({ quotedAt: -1 }).lean();
     return quote ? (withId(quote) as unknown as MarketQuoteRecord) : null;
   }
 
-  return localMarketQuotes.find((quote) => quote.ticker === canonicalTicker) ?? null;
+  return [...localMarketQuotes]
+    .filter((quote) => quote.ticker === canonicalTicker)
+    .sort((left, right) => new Date(right.quotedAt).getTime() - new Date(left.quotedAt).getTime())[0] ?? null;
+}
+
+export async function findMarketQuoteByAssetKey(assetKey: string): Promise<MarketQuoteRecord | null> {
+  if (isDatabaseConnected()) {
+    const quote = await MarketQuoteModel.findOne({ assetKey }).lean();
+    return quote ? (withId(quote) as unknown as MarketQuoteRecord) : null;
+  }
+
+  return localMarketQuotes.find((quote) => (quote.assetKey ?? resolveMarketDataAssetKey(quote)) === assetKey) ?? null;
 }
 
 export async function upsertMarketQuote(input: Omit<MarketQuoteRecord, "id">): Promise<MarketQuoteRecord> {
   const canonicalTicker = normalizeTicker(input.ticker);
+  const assetKey = resolveMarketDataAssetKey({ ...input, ticker: canonicalTicker });
 
   if (isDatabaseConnected()) {
     const quote = await MarketQuoteModel.findOneAndUpdate(
-      { ticker: canonicalTicker },
-      { ...input, ticker: canonicalTicker },
+      { assetKey },
+      { ...input, assetKey, ticker: canonicalTicker },
       { new: true, upsert: true }
     ).lean();
     return withId(quote) as unknown as MarketQuoteRecord;
   }
 
-  const index = localMarketQuotes.findIndex((quote) => quote.ticker === canonicalTicker);
-  const quote = { ...input, ticker: canonicalTicker, id: localMarketQuotes[index]?.id ?? randomUUID() };
+  const index = localMarketQuotes.findIndex((quote) => (quote.assetKey ?? resolveMarketDataAssetKey(quote)) === assetKey);
+  const quote = { ...input, assetKey, ticker: canonicalTicker, id: localMarketQuotes[index]?.id ?? randomUUID() };
   if (index >= 0) localMarketQuotes[index] = quote;
   else localMarketQuotes = [quote, ...localMarketQuotes];
   return quote;
@@ -161,14 +219,15 @@ export async function upsertMarketQuote(input: Omit<MarketQuoteRecord, "id">): P
 
 export async function createPriceHistory(input: Omit<PriceHistoryRecord, "id">): Promise<PriceHistoryRecord> {
   const canonicalTicker = normalizeTicker(input.ticker);
+  const assetKey = resolvePriceHistoryAssetKey({ ...input, ticker: canonicalTicker });
   if (!Number.isFinite(input.price) || input.price <= 0) {
     throw new Error(`Invalid price history value for ${canonicalTicker}`);
   }
 
   if (isDatabaseConnected()) {
     const history = await PriceHistoryModel.findOneAndUpdate(
-      { ticker: canonicalTicker, capturedAt: input.capturedAt, source: input.source },
-      { ...input, ticker: canonicalTicker },
+      { assetKey, capturedAt: input.capturedAt, source: input.source },
+      { ...input, assetKey, ticker: canonicalTicker },
       { new: true, upsert: true }
     ).lean();
     return withId(history) as unknown as PriceHistoryRecord;
@@ -176,13 +235,14 @@ export async function createPriceHistory(input: Omit<PriceHistoryRecord, "id">):
 
   const existingHistory = localPriceHistory.find(
     (item) =>
-      item.ticker === canonicalTicker &&
+      (item.assetKey ?? resolvePriceHistoryAssetKey(item)) === assetKey &&
       new Date(item.capturedAt).getTime() === new Date(input.capturedAt).getTime() &&
       item.source === input.source
   );
   if (existingHistory) return existingHistory;
   const history = {
     ...input,
+    assetKey,
     ticker: canonicalTicker,
     id: randomUUID(),
     createdAt: new Date(),
@@ -193,6 +253,7 @@ export async function createPriceHistory(input: Omit<PriceHistoryRecord, "id">):
 }
 
 function matchesPriceHistoryFilters(item: PriceHistoryRecord, filters: PriceHistoryFilters = {}) {
+  if (filters.assetKey && (item.assetKey ?? resolvePriceHistoryAssetKey(item)) !== filters.assetKey) return false;
   if (filters.source && item.source !== filters.source) return false;
   if (filters.type && item.type !== filters.type) return false;
   if (filters.interval && item.interval !== filters.interval) return false;
@@ -205,7 +266,9 @@ export async function listPriceHistory(ticker?: string, filters: PriceHistoryFil
   const canonicalTicker = ticker ? normalizeTicker(ticker) : undefined;
 
   if (isDatabaseConnected()) {
-    const query: Record<string, unknown> = canonicalTicker ? { ticker: canonicalTicker } : {};
+    const query: Record<string, unknown> = {};
+    if (filters.assetKey) query.assetKey = filters.assetKey;
+    else if (canonicalTicker) query.ticker = canonicalTicker;
     if (filters.source) query.source = filters.source;
     if (filters.type) query.type = filters.type;
     if (filters.interval) query.interval = filters.interval;
@@ -220,7 +283,11 @@ export async function listPriceHistory(ticker?: string, filters: PriceHistoryFil
   }
 
   return localPriceHistory
-    .filter((item) => !canonicalTicker || item.ticker === canonicalTicker)
+    .filter((item) => {
+      if (filters.assetKey) return (item.assetKey ?? resolvePriceHistoryAssetKey(item)) === filters.assetKey;
+      if (!canonicalTicker) return true;
+      return item.ticker === canonicalTicker;
+    })
     .filter((item) => matchesPriceHistoryFilters(item, filters))
     .sort((left, right) => new Date(left.capturedAt).getTime() - new Date(right.capturedAt).getTime());
 }
@@ -283,18 +350,18 @@ export async function upsertCdiRate(input: Omit<CdiRateRecord, "id">): Promise<C
 
 export async function findCashBoxYield(cashBoxId: string, referenceDate: string): Promise<CashBoxYieldRecord | null> {
   if (isDatabaseConnected()) {
-    const yieldRecord = await CashBoxYieldModel.findOne({ cashBoxId, referenceDate }).lean();
+    const yieldRecord = await CashBoxYieldModel.findOne(ownerFilter({ cashBoxId, referenceDate })).lean();
     return yieldRecord ? normalizeCashBoxYield(yieldRecord) : null;
   }
 
-  return localCashBoxYields.find((yieldRecord) => yieldRecord.cashBoxId === cashBoxId && yieldRecord.referenceDate === referenceDate) ?? null;
+  return localCashBoxYields.find((yieldRecord) => isOwned(yieldRecord) && yieldRecord.cashBoxId === cashBoxId && yieldRecord.referenceDate === referenceDate) ?? null;
 }
 
 export async function createCashBoxYield(input: Omit<CashBoxYieldRecord, "id">): Promise<CashBoxYieldRecord> {
   if (isDatabaseConnected()) {
     const yieldRecord = await CashBoxYieldModel.findOneAndUpdate(
-      { cashBoxId: input.cashBoxId, referenceDate: input.referenceDate },
-      input,
+      ownerFilter({ cashBoxId: input.cashBoxId, referenceDate: input.referenceDate }),
+      withOwner(input),
       { new: true, upsert: true }
     ).lean();
     return normalizeCashBoxYield(yieldRecord);
@@ -302,20 +369,20 @@ export async function createCashBoxYield(input: Omit<CashBoxYieldRecord, "id">):
 
   const existing = await findCashBoxYield(input.cashBoxId, input.referenceDate);
   if (existing) return existing;
-  const yieldRecord = { ...input, id: randomUUID() };
+  const yieldRecord = { ...withOwner(input), id: randomUUID() };
   localCashBoxYields = [yieldRecord, ...localCashBoxYields];
   return yieldRecord;
 }
 
 export async function listCashBoxYields(cashBoxId?: string): Promise<CashBoxYieldRecord[]> {
   if (isDatabaseConnected()) {
-    const query = cashBoxId ? { cashBoxId } : {};
+    const query = ownerFilter(cashBoxId ? { cashBoxId } : {});
     const yieldRecords = await CashBoxYieldModel.find(query).sort({ referenceDate: -1 }).lean();
     return yieldRecords.map(normalizeCashBoxYield);
   }
 
   return localCashBoxYields
-    .filter((yieldRecord) => !cashBoxId || yieldRecord.cashBoxId === cashBoxId)
+    .filter((yieldRecord) => isOwned(yieldRecord) && (!cashBoxId || yieldRecord.cashBoxId === cashBoxId))
     .sort((left, right) => right.referenceDate.localeCompare(left.referenceDate));
 }
 
@@ -323,24 +390,24 @@ export async function findAssetByTicker(ticker: string): Promise<AssetRecord | n
   const canonicalTicker = normalizeTicker(ticker);
 
   if (isDatabaseConnected()) {
-    const asset = await AssetModel.findOne({ ticker: canonicalTicker, active: true }).lean();
+    const asset = await AssetModel.findOne(ownerFilter({ ticker: canonicalTicker, active: true })).lean();
     return asset ? (withId(asset) as unknown as AssetRecord) : null;
   }
 
-  return localAssets.find((asset) => asset.ticker === canonicalTicker && asset.active) ?? null;
+  return localAssets.find((asset) => isOwned(asset) && asset.ticker === canonicalTicker && asset.active) ?? null;
 }
 
 export async function findAssetById(id: string): Promise<AssetRecord | null> {
   if (isDatabaseConnected()) {
-    const asset = await AssetModel.findById(id).lean();
+    const asset = await AssetModel.findOne(ownerFilter({ _id: id })).lean();
     return asset ? (withId(asset) as unknown as AssetRecord) : null;
   }
 
-  return localAssets.find((asset) => asset.id === id && asset.active) ?? null;
+  return localAssets.find((asset) => isOwned(asset) && asset.id === id && asset.active) ?? null;
 }
 
 export async function createAsset(input: Omit<AssetRecord, "id" | "createdAt">): Promise<AssetRecord> {
-  const normalizedInput = { ...input, ticker: normalizeTicker(input.ticker) };
+  const normalizedInput = withOwner(normalizeAssetRecordInput(input));
 
   if (isDatabaseConnected()) {
     return withId(await AssetModel.create(normalizedInput).then((asset) => asset.toObject())) as unknown as AssetRecord;
@@ -354,15 +421,15 @@ export async function createAsset(input: Omit<AssetRecord, "id" | "createdAt">):
 export async function updateAsset(ticker: string, input: Partial<Omit<AssetRecord, "id" | "createdAt">>): Promise<AssetRecord | null> {
   const isObjectId = /^[a-f\d]{24}$/i.test(ticker);
   const canonicalTicker = normalizeTicker(ticker);
-  const normalizedInput = input.ticker ? { ...input, ticker: normalizeTicker(input.ticker) } : input;
+  const normalizedInput = normalizeAssetRecordInput(input);
 
   if (isDatabaseConnected()) {
-    const query = isObjectId ? { _id: ticker } : { ticker: canonicalTicker };
+    const query = ownerFilter(isObjectId ? { _id: ticker } : { ticker: canonicalTicker });
     const asset = await AssetModel.findOneAndUpdate(query, normalizedInput, { new: true }).lean();
     return asset ? (withId(asset) as unknown as AssetRecord) : null;
   }
 
-  const index = localAssets.findIndex((asset) => asset.id === ticker || asset.ticker === canonicalTicker);
+  const index = localAssets.findIndex((asset) => isOwned(asset) && (asset.id === ticker || asset.ticker === canonicalTicker));
   if (index < 0) return null;
   localAssets[index] = { ...localAssets[index], ...normalizedInput, ticker: normalizedInput.ticker ?? localAssets[index].ticker };
   return localAssets[index];
@@ -373,45 +440,49 @@ export async function deleteAsset(ticker: string): Promise<boolean> {
   const canonicalTicker = normalizeTicker(ticker);
 
   if (isDatabaseConnected()) {
-    const query = isObjectId ? { _id: ticker } : { ticker: canonicalTicker };
+    const query = ownerFilter(isObjectId ? { _id: ticker } : { ticker: canonicalTicker });
     const result = await AssetModel.findOneAndUpdate(query, { active: false });
     return Boolean(result);
   }
 
-  const before = localAssets.length;
-  localAssets = localAssets.map((asset) => (asset.id === ticker || asset.ticker === canonicalTicker ? { ...asset, active: false } : asset));
-  return localAssets.length === before;
+  let deleted = false;
+  localAssets = localAssets.map((asset) => {
+    if (!isOwned(asset) || (asset.id !== ticker && asset.ticker !== canonicalTicker) || !asset.active) return asset;
+    deleted = true;
+    return { ...asset, active: false };
+  });
+  return deleted;
 }
 
 export async function listOperations(): Promise<OperationRecord[]> {
   if (isDatabaseConnected()) {
-    const operations = await OperationModel.find({ type: { $in: positionOperationTypes } }).sort({ date: -1 }).lean();
+    const operations = await OperationModel.find(ownerFilter({ type: { $in: positionOperationTypes } })).sort({ date: -1 }).lean();
     return operations.map((operation) => withId(operation)) as unknown as OperationRecord[];
   }
 
-  return localOperations.filter((operation) => positionOperationTypes.includes(operation.type)).sort(byDateDesc);
+  return localOperations.filter((operation) => isOwned(operation) && positionOperationTypes.includes(operation.type)).sort(byDateDesc);
 }
 
 export async function findOperationById(id: string): Promise<OperationRecord | null> {
   if (isDatabaseConnected()) {
-    const operation = await OperationModel.findById(id).lean();
+    const operation = await OperationModel.findOne(ownerFilter({ _id: id })).lean();
     return operation ? (withId(operation) as unknown as OperationRecord) : null;
   }
 
-  return localOperations.find((operation) => operation.id === id) ?? null;
+  return localOperations.find((operation) => isOwned(operation) && operation.id === id) ?? null;
 }
 
 export async function findOperationByPlanningExpenseId(expenseId: string): Promise<OperationRecord | null> {
   if (isDatabaseConnected()) {
-    const operation = await OperationModel.findOne({ "planningLink.expenseId": expenseId }).lean();
+    const operation = await OperationModel.findOne(ownerFilter({ "planningLink.expenseId": expenseId })).lean();
     return operation ? (withId(operation) as unknown as OperationRecord) : null;
   }
 
-  return localOperations.find((operation) => operation.planningLink?.expenseId === expenseId) ?? null;
+  return localOperations.find((operation) => isOwned(operation) && operation.planningLink?.expenseId === expenseId) ?? null;
 }
 
 export async function createOperation(input: Omit<OperationRecord, "id">): Promise<OperationRecord> {
-  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+  const normalizedInput = withOwner(input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input);
 
   if (isDatabaseConnected()) {
     return withId(await OperationModel.create(normalizedInput).then((operation) => operation.toObject())) as unknown as OperationRecord;
@@ -426,11 +497,11 @@ export async function updateOperation(id: string, input: Partial<Omit<OperationR
   const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
 
   if (isDatabaseConnected()) {
-    const operation = await OperationModel.findByIdAndUpdate(id, normalizedInput, { new: true }).lean();
+    const operation = await OperationModel.findOneAndUpdate(ownerFilter({ _id: id }), normalizedInput, { new: true }).lean();
     return operation ? (withId(operation) as unknown as OperationRecord) : null;
   }
 
-  const index = localOperations.findIndex((operation) => operation.id === id);
+  const index = localOperations.findIndex((operation) => isOwned(operation) && operation.id === id);
   if (index < 0) return null;
   localOperations[index] = { ...localOperations[index], ...normalizedInput };
   return localOperations[index];
@@ -438,35 +509,35 @@ export async function updateOperation(id: string, input: Partial<Omit<OperationR
 
 export async function deleteOperation(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await OperationModel.findByIdAndDelete(id);
+    const result = await OperationModel.findOneAndDelete(ownerFilter({ _id: id }));
     return Boolean(result);
   }
 
   const before = localOperations.length;
-  localOperations = localOperations.filter((operation) => operation.id !== id);
+  localOperations = localOperations.filter((operation) => !(isOwned(operation) && operation.id === id));
   return localOperations.length < before;
 }
 
 export async function listDividends(): Promise<DividendRecord[]> {
   if (isDatabaseConnected()) {
-    const dividends = await DividendModel.find().sort({ paymentDate: -1 }).lean();
+    const dividends = await DividendModel.find(ownerFilter()).sort({ paymentDate: -1 }).lean();
     return dividends.map((dividend) => withId(dividend)) as unknown as DividendRecord[];
   }
 
-  return [...localDividends].sort(byDateDesc);
+  return localDividends.filter(isOwned).sort(byDateDesc);
 }
 
 export async function findDividendById(id: string): Promise<DividendRecord | null> {
   if (isDatabaseConnected()) {
-    const dividend = await DividendModel.findById(id).lean();
+    const dividend = await DividendModel.findOne(ownerFilter({ _id: id })).lean();
     return dividend ? (withId(dividend) as unknown as DividendRecord) : null;
   }
 
-  return localDividends.find((dividend) => dividend.id === id) ?? null;
+  return localDividends.find((dividend) => isOwned(dividend) && dividend.id === id) ?? null;
 }
 
 export async function createDividend(input: Omit<DividendRecord, "id">): Promise<DividendRecord> {
-  const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
+  const normalizedInput = withOwner(input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input);
 
   if (isDatabaseConnected()) {
     return withId(await DividendModel.create(normalizedInput).then((dividend) => dividend.toObject())) as unknown as DividendRecord;
@@ -481,11 +552,11 @@ export async function updateDividend(id: string, input: Partial<Omit<DividendRec
   const normalizedInput = input.assetTicker ? { ...input, assetTicker: normalizeTicker(input.assetTicker) } : input;
 
   if (isDatabaseConnected()) {
-    const dividend = await DividendModel.findByIdAndUpdate(id, normalizedInput, { new: true }).lean();
+    const dividend = await DividendModel.findOneAndUpdate(ownerFilter({ _id: id }), normalizedInput, { new: true }).lean();
     return dividend ? (withId(dividend) as unknown as DividendRecord) : null;
   }
 
-  const index = localDividends.findIndex((dividend) => dividend.id === id);
+  const index = localDividends.findIndex((dividend) => isOwned(dividend) && dividend.id === id);
   if (index < 0) return null;
   localDividends[index] = { ...localDividends[index], ...normalizedInput };
   return localDividends[index];
@@ -493,50 +564,50 @@ export async function updateDividend(id: string, input: Partial<Omit<DividendRec
 
 export async function deleteDividend(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await DividendModel.findByIdAndDelete(id);
+    const result = await DividendModel.findOneAndDelete(ownerFilter({ _id: id }));
     return Boolean(result);
   }
 
   const before = localDividends.length;
-  localDividends = localDividends.filter((dividend) => dividend.id !== id);
+  localDividends = localDividends.filter((dividend) => !(isOwned(dividend) && dividend.id === id));
   return localDividends.length < before;
 }
 
 export async function listContributions(): Promise<ContributionRecord[]> {
   if (isDatabaseConnected()) {
-    const contributions = await ContributionModel.find().sort({ date: -1 }).lean();
+    const contributions = await ContributionModel.find(ownerFilter()).sort({ date: -1 }).lean();
     return contributions.map((contribution) => withId(contribution)) as unknown as ContributionRecord[];
   }
 
-  return [...localContributions].sort(byDateDesc);
+  return localContributions.filter(isOwned).sort(byDateDesc);
 }
 
 export async function findContributionById(id: string): Promise<ContributionRecord | null> {
   if (isDatabaseConnected()) {
-    const contribution = await ContributionModel.findById(id).lean();
+    const contribution = await ContributionModel.findOne(ownerFilter({ _id: id })).lean();
     return contribution ? (withId(contribution) as unknown as ContributionRecord) : null;
   }
 
-  return localContributions.find((contribution) => contribution.id === id) ?? null;
+  return localContributions.find((contribution) => isOwned(contribution) && contribution.id === id) ?? null;
 }
 
 export async function createContribution(input: Omit<ContributionRecord, "id">): Promise<ContributionRecord> {
   if (isDatabaseConnected()) {
-    return withId(await ContributionModel.create(input).then((contribution) => contribution.toObject())) as unknown as ContributionRecord;
+    return withId(await ContributionModel.create(withOwner(input)).then((contribution) => contribution.toObject())) as unknown as ContributionRecord;
   }
 
-  const contribution = { ...input, id: randomUUID() };
+  const contribution = { ...withOwner(input), id: randomUUID() };
   localContributions = [contribution, ...localContributions];
   return contribution;
 }
 
 export async function updateContribution(id: string, input: Partial<Omit<ContributionRecord, "id">>): Promise<ContributionRecord | null> {
   if (isDatabaseConnected()) {
-    const contribution = await ContributionModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const contribution = await ContributionModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return contribution ? (withId(contribution) as unknown as ContributionRecord) : null;
   }
 
-  const index = localContributions.findIndex((contribution) => contribution.id === id);
+  const index = localContributions.findIndex((contribution) => isOwned(contribution) && contribution.id === id);
   if (index < 0) return null;
   localContributions[index] = { ...localContributions[index], ...input };
   return localContributions[index];
@@ -544,50 +615,50 @@ export async function updateContribution(id: string, input: Partial<Omit<Contrib
 
 export async function deleteContribution(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await ContributionModel.findByIdAndDelete(id);
+    const result = await ContributionModel.findOneAndDelete(ownerFilter({ _id: id }));
     return Boolean(result);
   }
 
   const before = localContributions.length;
-  localContributions = localContributions.filter((contribution) => contribution.id !== id);
+  localContributions = localContributions.filter((contribution) => !(isOwned(contribution) && contribution.id === id));
   return localContributions.length < before;
 }
 
 export async function listGoals(): Promise<GoalRecord[]> {
   if (isDatabaseConnected()) {
-    const goals = await GoalModel.find({ active: true }).sort({ createdAt: -1 }).lean();
+    const goals = await GoalModel.find(ownerFilter({ active: true })).sort({ createdAt: -1 }).lean();
     return goals.map((goal) => withId(goal)) as unknown as GoalRecord[];
   }
 
-  return [...localGoals].filter((goal) => goal.active);
+  return localGoals.filter((goal) => isOwned(goal) && goal.active);
 }
 
 export async function findGoalById(id: string): Promise<GoalRecord | null> {
   if (isDatabaseConnected()) {
-    const goal = await GoalModel.findById(id).lean();
+    const goal = await GoalModel.findOne(ownerFilter({ _id: id })).lean();
     return goal ? (withId(goal) as unknown as GoalRecord) : null;
   }
 
-  return localGoals.find((goal) => goal.id === id && goal.active) ?? null;
+  return localGoals.find((goal) => isOwned(goal) && goal.id === id && goal.active) ?? null;
 }
 
 export async function createGoal(input: Omit<GoalRecord, "id">): Promise<GoalRecord> {
   if (isDatabaseConnected()) {
-    return withId(await GoalModel.create(input).then((goal) => goal.toObject())) as unknown as GoalRecord;
+    return withId(await GoalModel.create(withOwner(input)).then((goal) => goal.toObject())) as unknown as GoalRecord;
   }
 
-  const goal = { ...input, id: randomUUID() };
+  const goal = { ...withOwner(input), id: randomUUID() };
   localGoals = [goal, ...localGoals];
   return goal;
 }
 
 export async function updateGoal(id: string, input: Partial<Omit<GoalRecord, "id">>): Promise<GoalRecord | null> {
   if (isDatabaseConnected()) {
-    const goal = await GoalModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const goal = await GoalModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return goal ? (withId(goal) as unknown as GoalRecord) : null;
   }
 
-  const index = localGoals.findIndex((goal) => goal.id === id);
+  const index = localGoals.findIndex((goal) => isOwned(goal) && goal.id === id);
   if (index < 0) return null;
   localGoals[index] = { ...localGoals[index], ...input };
   return localGoals[index];
@@ -595,50 +666,54 @@ export async function updateGoal(id: string, input: Partial<Omit<GoalRecord, "id
 
 export async function deleteGoal(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await GoalModel.findByIdAndUpdate(id, { active: false });
+    const result = await GoalModel.findOneAndUpdate(ownerFilter({ _id: id }), { active: false });
     return Boolean(result);
   }
 
-  const before = localGoals.length;
-  localGoals = localGoals.map((goal) => (goal.id === id ? { ...goal, active: false } : goal));
-  return localGoals.length === before;
+  let deleted = false;
+  localGoals = localGoals.map((goal) => {
+    if (!isOwned(goal) || goal.id !== id || !goal.active) return goal;
+    deleted = true;
+    return { ...goal, active: false };
+  });
+  return deleted;
 }
 
 export async function listCashBoxes(): Promise<CashBoxRecord[]> {
   if (isDatabaseConnected()) {
-    const cashBoxes = await CashBoxModel.find({ active: true }).sort({ name: 1 }).lean();
+    const cashBoxes = await CashBoxModel.find(ownerFilter({ active: true })).sort({ name: 1 }).lean();
     return cashBoxes.map((cashBox) => withId(cashBox)) as unknown as CashBoxRecord[];
   }
 
-  return [...localCashBoxes].filter((cashBox) => cashBox.active);
+  return localCashBoxes.filter((cashBox) => isOwned(cashBox) && cashBox.active);
 }
 
 export async function findCashBoxById(id: string): Promise<CashBoxRecord | null> {
   if (isDatabaseConnected()) {
-    const cashBox = await CashBoxModel.findById(id).lean();
+    const cashBox = await CashBoxModel.findOne(ownerFilter({ _id: id })).lean();
     return cashBox ? (withId(cashBox) as unknown as CashBoxRecord) : null;
   }
 
-  return localCashBoxes.find((cashBox) => cashBox.id === id && cashBox.active) ?? null;
+  return localCashBoxes.find((cashBox) => isOwned(cashBox) && cashBox.id === id && cashBox.active) ?? null;
 }
 
 export async function createCashBox(input: Omit<CashBoxRecord, "id">): Promise<CashBoxRecord> {
   if (isDatabaseConnected()) {
-    return withId(await CashBoxModel.create(input).then((cashBox) => cashBox.toObject())) as unknown as CashBoxRecord;
+    return withId(await CashBoxModel.create(withOwner(input)).then((cashBox) => cashBox.toObject())) as unknown as CashBoxRecord;
   }
 
-  const cashBox = { ...input, id: randomUUID() };
+  const cashBox = { ...withOwner(input), id: randomUUID() };
   localCashBoxes = [cashBox, ...localCashBoxes];
   return cashBox;
 }
 
 export async function updateCashBox(id: string, input: Partial<Omit<CashBoxRecord, "id">>): Promise<CashBoxRecord | null> {
   if (isDatabaseConnected()) {
-    const cashBox = await CashBoxModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const cashBox = await CashBoxModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return cashBox ? (withId(cashBox) as unknown as CashBoxRecord) : null;
   }
 
-  const index = localCashBoxes.findIndex((cashBox) => cashBox.id === id);
+  const index = localCashBoxes.findIndex((cashBox) => isOwned(cashBox) && cashBox.id === id);
   if (index < 0) return null;
   localCashBoxes[index] = { ...localCashBoxes[index], ...input };
   return localCashBoxes[index];
@@ -646,13 +721,17 @@ export async function updateCashBox(id: string, input: Partial<Omit<CashBoxRecor
 
 export async function deleteCashBox(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await CashBoxModel.findByIdAndUpdate(id, { active: false });
+    const result = await CashBoxModel.findOneAndUpdate(ownerFilter({ _id: id }), { active: false });
     return Boolean(result);
   }
 
-  const before = localCashBoxes.length;
-  localCashBoxes = localCashBoxes.map((cashBox) => (cashBox.id === id ? { ...cashBox, active: false } : cashBox));
-  return localCashBoxes.length === before;
+  let deleted = false;
+  localCashBoxes = localCashBoxes.map((cashBox) => {
+    if (!isOwned(cashBox) || cashBox.id !== id || !cashBox.active) return cashBox;
+    deleted = true;
+    return { ...cashBox, active: false };
+  });
+  return deleted;
 }
 
 function isContributionMovement(type: string) {
@@ -711,7 +790,7 @@ export async function migrateCashBoxes(): Promise<{ updated: number }> {
 
 export async function getSettingsRecord(): Promise<SettingsRecord> {
   if (isDatabaseConnected()) {
-    const settings = await SettingsModel.findOne().lean();
+    const settings = await SettingsModel.findOne(ownerFilter()).lean();
     if (settings) {
       const rawSettings = withId(settings) as unknown as SettingsRecord;
       const normalized = withDefaultSettings(rawSettings);
@@ -721,7 +800,7 @@ export async function getSettingsRecord(): Promise<SettingsRecord> {
         normalized.profileName !== rawSettings.profileName ||
         normalized.currency !== rawSettings.currency
       ) {
-        await SettingsModel.findByIdAndUpdate(normalized.id, {
+        await SettingsModel.findOneAndUpdate(ownerFilter({ _id: normalized.id }), {
           allocations: normalized.allocations,
           theme: normalized.theme,
           profileName: normalized.profileName,
@@ -730,37 +809,45 @@ export async function getSettingsRecord(): Promise<SettingsRecord> {
       }
       return normalized;
     }
-    return withId(await SettingsModel.create(createEmptySettings()).then((record) => record.toObject())) as unknown as SettingsRecord;
+    return withId(await SettingsModel.create(withOwner(createEmptySettings())).then((record) => record.toObject())) as unknown as SettingsRecord;
   }
 
-  localSettings = withDefaultSettings(localSettings);
-  return localSettings;
+  const ownerId = currentOwnerId();
+  const current = localSettingsByUser.get(ownerId) ?? withOwner(createEmptySettings());
+  const normalized = withDefaultSettings(current);
+  localSettingsByUser.set(ownerId, normalized);
+  return normalized;
 }
 
 export async function updateSettingsRecord(input: Partial<SettingsRecord>): Promise<SettingsRecord> {
   if (isDatabaseConnected()) {
-    const existing = await SettingsModel.findOne();
+    const existing = await SettingsModel.findOne(ownerFilter());
     if (existing) {
       Object.assign(existing, input);
       return withId(await existing.save().then((record: { toObject: () => unknown }) => record.toObject())) as unknown as SettingsRecord;
     }
-    return withId(await SettingsModel.create({ ...createEmptySettings(), ...input }).then((record) => record.toObject())) as unknown as SettingsRecord;
+    return withId(await SettingsModel.create(withOwner({ ...createEmptySettings(), ...input })).then((record) => record.toObject())) as unknown as SettingsRecord;
   }
 
-  localSettings = { ...localSettings, ...input };
-  return localSettings;
+  const ownerId = currentOwnerId();
+  const current = localSettingsByUser.get(ownerId) ?? withOwner(createEmptySettings());
+  const next = { ...current, ...input, userId: ownerId };
+  localSettingsByUser.set(ownerId, next);
+  return next;
 }
 
 export async function resetSettingsRecord(): Promise<SettingsRecord> {
   const settings = createEmptySettings();
 
   if (isDatabaseConnected()) {
-    await SettingsModel.deleteMany({});
-    return withId(await SettingsModel.create(settings).then((record) => record.toObject())) as unknown as SettingsRecord;
+    await SettingsModel.deleteMany(ownerFilter());
+    return withId(await SettingsModel.create(withOwner(settings)).then((record) => record.toObject())) as unknown as SettingsRecord;
   }
 
-  localSettings = settings;
-  return localSettings;
+  const ownerId = currentOwnerId();
+  const next = { ...settings, userId: ownerId };
+  localSettingsByUser.set(ownerId, next);
+  return next;
 }
 
 export async function listAllocations(): Promise<AllocationRecord[]> {
@@ -798,9 +885,9 @@ export async function listCategories() {
 
 export async function listSnapshots(): Promise<SnapshotRecord[]> {
   if (isDatabaseConnected()) {
-    const snapshots = await SnapshotModel.find().sort({ date: 1 }).lean();
+    const snapshots = await SnapshotModel.find(ownerFilter()).sort({ date: 1 }).lean();
     return snapshots as unknown as SnapshotRecord[];
   }
 
-  return [...localSnapshots].sort((left, right) => new Date(left.date).getTime() - new Date(right.date).getTime());
+  return localSnapshots.filter(isOwned).sort((left, right) => new Date(left.date).getTime() - new Date(right.date).getTime());
 }

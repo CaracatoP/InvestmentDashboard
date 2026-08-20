@@ -35,7 +35,7 @@ function normalizeIntentText(message: string) {
 export function detectConversationIntent(message: string): AiConversationIntent {
   const text = normalizeIntentText(message);
   const isShortGreeting = /(oi|ola|bom dia|boa tarde|boa noite|ajuda|assistente)/.test(text) && text.length < 80;
-  const hasInvestmentSignal = /(invest|carteira|patrimonio|rentab|divid|aporte|ativo|posicao|lucro)/.test(text);
+  const hasInvestmentSignal = /(invest|carteira|patrimonio|rentab|divid|aporte|ativo|posicao|lucro|bitcoin|btc|ethereum|eth|solana|sol|cripto|criptomoeda|cotacao|preco)/.test(text);
 
   if (isShortGreeting && !hasInvestmentSignal) return "general";
   if (/(recorrent|assinatura|parcel|fixo)/.test(text)) return "recurring";
@@ -46,7 +46,7 @@ export function detectConversationIntent(message: string): AiConversationIntent 
   if (/(dividendo|rendimento|jcp|dy)/.test(text)) return "dividends";
   if (/(alocacao|rebalance|peso ideal|distribuicao|classe)/.test(text)) return "allocation";
   if (/(investimento|investimentos|investido|investidos|patrimonio|rentabilidade|rentavel|lucro|carteira|portfolio|ativos?|posicao|posicoes|quanto tenho investido|analise minha carteira|como estao meus investimentos)/.test(text)) return "investments";
-  if (/(ticker|preco|cotacao|performance)/.test(text)) return "asset_performance";
+  if (/(ticker|preco|cotacao|performance|bitcoin|btc|ethereum|eth|solana|sol|cripto|criptomoeda)/.test(text)) return "asset_performance";
   if (/(meta|objetivo)/.test(text)) return "goals";
   if (/(projec|simul|independencia|futuro)/.test(text)) return "projections";
   if (/(historico|timeline|moviment)/.test(text)) return "history";
@@ -76,8 +76,8 @@ export async function buildConversationContext(message: string) {
     return { intent, context: await buildPlanningContext(period.year, period.month, undefined, "compare") };
   }
 
-  if (intent === "investments") return { intent, context: await buildInvestmentContext("investments") };
-  if (intent === "portfolio" || intent === "asset_performance") return { intent, context: await buildInvestmentContext("portfolio") };
+  if (intent === "investments") return { intent, context: await buildInvestmentContext("investments", { spotlightMessage: message }) };
+  if (intent === "portfolio" || intent === "asset_performance") return { intent, context: await buildInvestmentContext("portfolio", { spotlightMessage: message }) };
   if (intent === "allocation") return { intent, context: await buildInvestmentContext("allocation") };
   if (intent === "dividends") return { intent, context: await buildInvestmentContext("dividends") };
   if (intent === "contributions") return { intent, context: await buildInvestmentContext("contributions") };

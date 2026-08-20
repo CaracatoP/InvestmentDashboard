@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { afterEach, test } from "node:test";
 import { app } from "../app";
+import { createAuthenticatedRequestContext } from "./helpers/authenticated-request";
 
 const originalFetch = global.fetch;
 
@@ -50,7 +51,9 @@ test("CDI status and manual refresh endpoints return the current source referenc
 
   try {
     const { port } = server.address() as AddressInfo;
-    const refreshResponse = await fetch(`http://127.0.0.1:${port}/api/cdi/refresh`, { method: "POST" });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const auth = await createAuthenticatedRequestContext(baseUrl, "cdi-status");
+    const refreshResponse = await fetch(`${baseUrl}/api/cdi/refresh`, { method: "POST", headers: auth.headers });
     const refreshPayload = (await refreshResponse.json()) as {
       success?: boolean;
       data?: {
@@ -66,7 +69,7 @@ test("CDI status and manual refresh endpoints return the current source referenc
       };
     };
 
-    const statusResponse = await fetch(`http://127.0.0.1:${port}/api/cdi/status`);
+    const statusResponse = await fetch(`${baseUrl}/api/cdi/status`, { headers: { Cookie: auth.cookieHeader } });
     const statusPayload = (await statusResponse.json()) as {
       success?: boolean;
       data?: {
@@ -118,9 +121,11 @@ test("manual CDI refresh endpoint coalesces simultaneous requests", async () => 
 
   try {
     const { port } = server.address() as AddressInfo;
-    const endpoint = `http://127.0.0.1:${port}/api/cdi/refresh`;
-    const first = fetch(endpoint, { method: "POST" });
-    const second = fetch(endpoint, { method: "POST" });
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const auth = await createAuthenticatedRequestContext(baseUrl, "cdi-dedup");
+    const endpoint = `${baseUrl}/api/cdi/refresh`;
+    const first = fetch(endpoint, { method: "POST", headers: auth.headers });
+    const second = fetch(endpoint, { method: "POST", headers: auth.headers });
 
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(bcbCalls, 1);
@@ -138,6 +143,27 @@ test("manual CDI refresh endpoint coalesces simultaneous requests", async () => 
     assert.equal(firstPayload.data?.rate?.source, "bcb");
     assert.equal(secondPayload.data?.rate?.source, "bcb");
     assert.equal(bcbCalls, 1);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("manual CDI refresh requires the CSRF header in addition to the session cookie", async () => {
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const auth = await createAuthenticatedRequestContext(baseUrl, "cdi-csrf");
+    const response = await fetch(`${baseUrl}/api/cdi/refresh`, {
+      method: "POST",
+      headers: { Cookie: auth.cookieHeader }
+    });
+    const payload = (await response.json()) as { success?: boolean; error?: { message?: string } };
+
+    assert.equal(response.status, 403);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error?.message, "CSRF token invalido.");
   } finally {
     await closeServer(server);
   }

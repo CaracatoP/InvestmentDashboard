@@ -1,5 +1,7 @@
 import { Router } from "express";
+import { adminRoutes } from "./admin.routes";
 import { assetsRoutes } from "./assets.routes";
+import { authRoutes } from "./auth.routes";
 import { calendarRoutes } from "./calendar.routes";
 import { contributionsRoutes } from "./contributions.routes";
 import { dashboardRoutes } from "./dashboard.routes";
@@ -13,12 +15,21 @@ import { settingsRoutes } from "./settings.routes";
 import { marketRoutes } from "./market.routes";
 import { cdiRoutes } from "./cdi.routes";
 import { healthRoutes } from "./health.routes";
+import { integrationsRoutes } from "./integrations.routes";
 import { monthlyPlanningRoutes } from "./monthly-planning.routes";
 import { aiRoutes } from "./ai.routes";
+import { requireAuth } from "../middlewares/auth.middleware";
+import { csrfProtection } from "../middlewares/csrf.middleware";
 
 export const apiRoutes = Router();
 
 apiRoutes.use("/health", healthRoutes);
+apiRoutes.use("/auth", authRoutes);
+
+apiRoutes.use(requireAuth);
+apiRoutes.use(csrfProtection);
+
+apiRoutes.use("/admin", adminRoutes);
 apiRoutes.use("/dashboard", dashboardRoutes);
 apiRoutes.use("/assets", assetsRoutes);
 apiRoutes.use("/operations", operationsRoutes);
@@ -30,6 +41,7 @@ apiRoutes.use("/goals", goalsRoutes);
 apiRoutes.use("/projections", projectionsRoutes);
 apiRoutes.use("/calendar", calendarRoutes);
 apiRoutes.use("/history", historyRoutes);
+apiRoutes.use("/integrations", integrationsRoutes);
 apiRoutes.use("/settings", settingsRoutes);
 apiRoutes.use("/market", marketRoutes);
 apiRoutes.use("/cdi", cdiRoutes);

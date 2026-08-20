@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { beforeEach, test } from "node:test";
 import { DisabledAiProvider } from "../ai/providers/disabled.provider";
 import { buildConversationContext, detectConversationIntent } from "../ai/builders/conversation-context.builder";
+import { env } from "../config/env";
 import { buildContextHash } from "../ai/utils/ai-context-hash";
 import { estimateAiTokens, stringifyContextForAi } from "../ai/utils/ai-context-budget";
 import { createFallbackAnalysis, parseAiAnalysis, parseAiAnalysisStrict, parseAiChatStructuredResponseStrict } from "../ai/utils/ai-response-parser";
@@ -10,8 +12,10 @@ import { handleOperationalChatMessage } from "../ai/tools/ai-action-tools";
 import { addAiChatMessage, findActiveAiPendingAction, updateAiPendingAction } from "../repositories/ai.repository";
 import { resetSettingsRecord } from "../repositories/investment.repository";
 import { listDividends, listOperations } from "../repositories/investment.repository";
-import { listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
+import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
+import { handleAssistantCommand } from "../services/assistant-command.service";
+import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { getSettings } from "../services/portfolio.service";
 
 beforeEach(async () => {
@@ -89,6 +93,7 @@ test("AI intent classifier routes common requests to specific contexts", () => {
   assert.equal(detectConversationIntent("analise minha carteira"), "investments");
   assert.equal(detectConversationIntent("como esta minha rentabilidade?"), "investments");
   assert.equal(detectConversationIntent("quanto tenho investido?"), "investments");
+  assert.equal(detectConversationIntent("quanto esta o bitcoin?"), "asset_performance");
   assert.equal(detectConversationIntent("ola"), "general");
 });
 
@@ -126,6 +131,42 @@ test("investment chat context provides compact portfolio summary", async () => {
   assert.match(serialized, /equityEvolution/);
   assert.ok(!serialized.includes("availableTopics"));
   assert.ok(estimateAiTokens(serialized) < 1300);
+});
+
+test("asset performance context includes CoinGecko spotlight for bitcoin questions", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousFetch = globalThis.fetch;
+  env.coingeckoApiKey = "demo-key";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify([
+        {
+          id: "bitcoin",
+          symbol: "btc",
+          name: "Bitcoin",
+          current_price: 620000,
+          price_change_percentage_24h: 2.5,
+          last_updated: "2026-08-20T12:00:00.000Z"
+        }
+      ]),
+      { status: 200 }
+    )) as typeof fetch;
+
+  try {
+    const { intent, context } = await buildConversationContext("Quanto esta o bitcoin hoje?");
+    const serialized = stringifyContextForAi(context, 1400);
+
+    assert.equal(intent, "asset_performance");
+    assert.match(serialized, /marketSpotlight/);
+    assert.match(serialized, /bitcoin/i);
+    assert.match(serialized, /620000/);
+  } finally {
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("settings chat context exposes safe configuration scope", async () => {
@@ -203,12 +244,52 @@ test("chat confirmation executes pending contribution once through internal tool
   assert.equal(confirmed.assistantMessage.structuredResponse?.responseType, "success");
 });
 
-test("operational chat asks for missing expense category", async () => {
+test("assistant command service deduplicates WhatsApp messages by external id", async () => {
+  const userId = `assistant-whatsapp-${randomUUID()}`;
+  const externalConversationId = `wa-conversation-${randomUUID()}`;
+  const externalMessageId = `wamid.${randomUUID()}`;
+
+  const first = await handleAssistantCommand({
+    userId,
+    channel: "whatsapp",
+    externalConversationId,
+    externalMessageId,
+    message: "Registre um aporte de R$ 20,00."
+  });
+
+  const duplicate = await handleAssistantCommand({
+    userId,
+    channel: "whatsapp",
+    externalConversationId,
+    externalMessageId,
+    message: "Registre um aporte de R$ 20,00."
+  });
+
+  const confirmation = await handleAssistantCommand({
+    userId,
+    channel: "whatsapp",
+    externalConversationId,
+    externalMessageId: `wamid.${randomUUID()}`,
+    message: "confirmo"
+  });
+
+  assert.equal(first.status, "processed");
+  assert.equal(first.userMessage?.externalMessageId, externalMessageId);
+  assert.equal(first.assistantMessage?.structuredResponse?.responseType, "confirmation");
+  assert.equal(duplicate.status, "duplicate");
+  assert.equal(duplicate.sessionId, first.sessionId);
+  assert.equal(confirmation.sessionId, first.sessionId);
+  assert.equal(confirmation.assistantMessage?.structuredResponse?.responseType, "success");
+});
+
+test("operational chat falls back to Outros when expense category is unclear", async () => {
   const result = await handleOperationalChatMessage({ sessionId: "ai-action-expense-test", message: "Gastei R$ 60,00 com item sem categoria agora." });
+  const action = await findActiveAiPendingAction("ai-action-expense-test");
 
   assert.equal(result.handled, true);
-  assert.equal(result.response.responseType, "form");
-  assert.equal(result.response.pendingAction?.status, "collecting");
+  assert.equal(result.response.responseType, "confirmation");
+  assert.equal(result.response.pendingAction?.status, "awaiting_confirmation");
+  assert.equal(action?.extractedFields.categoryId, "outros");
 });
 
 test("expense with gasoline extracts clean description and inferred category", async () => {
@@ -222,6 +303,66 @@ test("expense with gasoline extracts clean description and inferred category", a
   assert.equal(action?.extractedFields.amountInCents, 6000);
   assert.equal(action?.extractedFields.categoryId, "transporte");
   assert.equal("note" in (action?.extractedFields ?? {}), false);
+});
+
+test("expense category inference maps McDonalds to food and unknown merchants to Outros", async () => {
+  const foodSessionId = "ai-action-expense-mcdonalds";
+  const foodResult = await handleOperationalChatMessage({ sessionId: foodSessionId, message: "Gastei R$ 27,00 no McDonald's hoje." });
+  const foodAction = await findActiveAiPendingAction(foodSessionId);
+
+  assert.equal(foodResult.handled, true);
+  assert.equal(foodResult.response.responseType, "confirmation");
+  assert.equal(foodAction?.extractedFields.description, "McDonald's");
+  assert.equal(foodAction?.extractedFields.categoryId, "alimentacao");
+
+  const unknownSessionId = "ai-action-expense-unknown-merchant";
+  const unknownResult = await handleOperationalChatMessage({ sessionId: unknownSessionId, message: "Gastei R$ 50,00 com lugar XYZ hoje." });
+  const unknownAction = await findActiveAiPendingAction(unknownSessionId);
+
+  assert.equal(unknownResult.handled, true);
+  assert.equal(unknownResult.response.responseType, "confirmation");
+  assert.equal(unknownAction?.extractedFields.description, "Lugar XYZ");
+  assert.equal(unknownAction?.extractedFields.categoryId, "outros");
+});
+
+test("paying a planned matching expense asks to mark it paid instead of duplicating it", async () => {
+  const plan = await saveMonthlyPlan({
+    year: 2031,
+    month: 1,
+    incomeInCents: 500000,
+    categories: [
+      { id: "moradia", name: "Moradia", icon: "home", color: "#34d399", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "alimentacao", name: "Alimentacao", icon: "utensils", color: "#f97316", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "transporte", name: "Transporte", icon: "car", color: "#38bdf8", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "lazer", name: "Lazer", icon: "gamepad-2", color: "#a78bfa", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "investimentos", name: "Investimentos", icon: "trending-up", color: "#22c55e", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "saude", name: "Saude", icon: "heart-pulse", color: "#fb7185", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "assinaturas", name: "Assinaturas", icon: "repeat", color: "#facc15", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 },
+      { id: "educacao", name: "Educacao", icon: "book-open", color: "#60a5fa", budgetType: "fixed", percentage: 0, fixedAmountInCents: 50000 },
+      { id: "outros", name: "Outros", icon: "circle", color: "#94a3b8", budgetType: "fixed", percentage: 0, fixedAmountInCents: 0 }
+    ]
+  });
+  assert.ok(plan.id);
+  const planned = await addMonthlyExpense(plan.id, {
+    categoryId: "educacao",
+    description: "Faculdade",
+    amountInCents: 25000,
+    date: "2031-01-15",
+    time: "09:00",
+    expenseType: "single",
+    recurring: false,
+    status: "planned"
+  });
+
+  const sessionId = "ai-action-pay-existing-expense";
+  const result = await handleOperationalChatMessage({ sessionId, message: "paguei 250 da faculdade" });
+  const action = await findActiveAiPendingAction(sessionId);
+
+  assert.equal(result.handled, true);
+  assert.equal(result.response.responseType, "confirmation");
+  assert.equal(action?.toolName, "markExpenseAsCompleted");
+  assert.equal(action?.extractedFields.expenseId, planned.id);
+  assert.equal((await listAllMonthlyExpenses()).filter((expense) => expense.description === "Faculdade" && expense.amountInCents === 25000).length, 1);
 });
 
 test("monthly income does not invent description fields", async () => {

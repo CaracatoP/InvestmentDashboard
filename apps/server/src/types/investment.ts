@@ -1,8 +1,10 @@
 export interface AssetRecord {
   id?: string;
+  userId?: string;
   name: string;
   ticker: string;
   category: string;
+  coingeckoId?: string;
   subcategory?: string;
   sector?: string;
   currency: string;
@@ -16,6 +18,7 @@ export interface AssetRecord {
 
 export interface OperationRecord {
   id?: string;
+  userId?: string;
   assetId?: string;
   assetTicker?: string;
   type: "COMPRA" | "VENDA" | "BONIFICACAO" | "DESDOBRAMENTO" | "GRUPAMENTO" | string;
@@ -36,6 +39,7 @@ export interface OperationRecord {
 
 export interface DividendRecord {
   id?: string;
+  userId?: string;
   assetId?: string;
   assetTicker?: string;
   category?: string;
@@ -49,6 +53,7 @@ export interface DividendRecord {
   baseDate?: string | Date;
   exDate?: string | Date;
   paymentDate: string | Date;
+  receivedAt?: string | Date | null;
   referenceMonth?: string;
   status?: "announced" | "expected" | "received" | "cancelled" | string;
   source?: string;
@@ -57,6 +62,7 @@ export interface DividendRecord {
 
 export interface MarketQuoteRecord {
   id?: string;
+  assetKey?: string;
   ticker: string;
   price?: number | null;
   quotedAt: string | Date;
@@ -67,10 +73,15 @@ export interface MarketQuoteRecord {
   providerSymbol?: string;
   market?: string;
   assetKind?: string;
+  change24h?: number;
+  marketCap?: number;
+  volume24h?: number;
+  displayName?: string;
 }
 
 export interface PriceHistoryRecord {
   id?: string;
+  assetKey?: string;
   ticker: string;
   price: number;
   capturedAt: string | Date;
@@ -93,6 +104,7 @@ export interface PriceHistoryRecord {
 
 export interface ContributionRecord {
   id?: string;
+  userId?: string;
   date: string | Date;
   value: number;
   description?: string;
@@ -100,6 +112,7 @@ export interface ContributionRecord {
 
 export interface GoalRecord {
   id?: string;
+  userId?: string;
   title: string;
   description?: string;
   type: "wealth" | "dividend" | "shares" | "invested";
@@ -123,6 +136,8 @@ export interface AllocationRecord {
 }
 
 export interface SnapshotRecord {
+  id?: string;
+  userId?: string;
   date: string | Date;
   investedValue: number;
   currentValue: number;
@@ -132,6 +147,7 @@ export interface SnapshotRecord {
 
 export interface CashBoxRecord {
   id?: string;
+  userId?: string;
   categoryId?: string;
   name: string;
   type: string;
@@ -187,6 +203,7 @@ export interface CdiRateSnapshot {
 
 export interface CashBoxYieldRecord {
   id?: string;
+  userId?: string;
   cashBoxId: string;
   referenceDate: string;
   openingBalance: number;
@@ -201,6 +218,7 @@ export interface CashBoxYieldRecord {
 
 export interface SettingsRecord {
   id?: string;
+  userId?: string;
   theme: string;
   profileName: string;
   currency: string;
@@ -258,6 +276,7 @@ export interface MonthlyFinancialGoalRecord {
 
 export interface MonthlyPlanRecord {
   id?: string;
+  userId?: string;
   month: number;
   year: number;
   incomeInCents: number;
@@ -272,6 +291,7 @@ export interface MonthlyPlanRecord {
 
 export interface MonthlyExpenseRecord {
   id?: string;
+  userId?: string;
   planId: string;
   categoryId: string;
   description: string;
@@ -301,6 +321,7 @@ export interface MonthlyExpenseRecord {
 
 export interface MonthlyIncomeEntryRecord {
   id?: string;
+  userId?: string;
   planId: string;
   description: string;
   amountInCents: number;

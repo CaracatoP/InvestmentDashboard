@@ -2,6 +2,8 @@ import { InferSchemaType, Schema, model, models } from "mongoose";
 
 const aiActionAuditSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    channel: { type: String, enum: ["web", "whatsapp"], default: "web", index: true },
     sessionId: { type: String, required: true, index: true },
     messageId: { type: String, default: "" },
     pendingActionId: { type: String, required: true, index: true },
@@ -20,6 +22,8 @@ const aiActionAuditSchema = new Schema(
   },
   { versionKey: false }
 );
+
+aiActionAuditSchema.index({ userId: 1, createdAt: -1 });
 
 export type AiActionAuditDocument = InferSchemaType<typeof aiActionAuditSchema>;
 export const AiActionAuditModel = models.AiActionAudit ?? model("AiActionAudit", aiActionAuditSchema);

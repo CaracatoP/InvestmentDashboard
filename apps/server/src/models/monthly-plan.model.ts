@@ -29,6 +29,7 @@ const monthlyFinancialGoalSchema = new Schema(
 
 const monthlyPlanSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     month: { type: Number, required: true, min: 1, max: 12, index: true },
     year: { type: Number, required: true, min: 1970, max: 2200, index: true },
     incomeInCents: { type: Number, required: true, min: 0, default: 0 },
@@ -43,7 +44,7 @@ const monthlyPlanSchema = new Schema(
   { versionKey: false }
 );
 
-monthlyPlanSchema.index({ year: 1, month: 1 }, { unique: true });
+monthlyPlanSchema.index({ userId: 1, year: 1, month: 1 }, { unique: true });
 
 export type MonthlyPlanDocument = InferSchemaType<typeof monthlyPlanSchema>;
 export const MonthlyPlanModel = models.MonthlyPlan ?? model("MonthlyPlan", monthlyPlanSchema);

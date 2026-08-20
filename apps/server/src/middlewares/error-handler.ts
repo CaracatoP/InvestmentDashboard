@@ -2,6 +2,12 @@ import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { HttpError } from "../utils/http-error";
 
+function redactUrl(url?: string) {
+  return (url ?? "")
+    .replace(/(\/auth\/approvals\/)[^/]+(\/(?:approve|reject))/g, "$1[redacted]$2")
+    .replace(/([?&](?:token|approvalToken|resetToken)=)[^&]+/gi, "$1[redacted]");
+}
+
 function logUnexpectedError(error: unknown, request: Request) {
   if (process.env.NODE_ENV !== "development") return;
 
@@ -10,7 +16,7 @@ function logUnexpectedError(error: unknown, request: Request) {
     JSON.stringify({
       operation: "request-error",
       method: request.method,
-      path: request.originalUrl,
+      path: redactUrl(request.originalUrl),
       message
     })
   );
@@ -20,7 +26,7 @@ export function notFoundHandler(request: Request, response: Response) {
   response.status(404).json({
     success: false,
     error: {
-      message: `Route ${request.method} ${request.originalUrl} not found`
+      message: `Route ${request.method} ${redactUrl(request.originalUrl)} not found`
     }
   });
 }
@@ -48,21 +54,29 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
   }
 
   if ((error as { code?: unknown })?.code === 11000) {
+    const duplicateError = error as { keyPattern?: Record<string, unknown> };
+    const keyPattern = duplicateError.keyPattern ?? {};
+    const isLegacyMonthlyPlanConflict = "year" in keyPattern && "month" in keyPattern && !("userId" in keyPattern);
+    const isRecurrenceConflict = "recurrenceId" in keyPattern || "recurrenceOriginalDate" in keyPattern;
+
     response.status(409).json({
       success: false,
       error: {
-        message: "Nao foi possivel salvar este registro porque ja existe um conflito de recorrencia."
+        message: isLegacyMonthlyPlanConflict
+          ? "Nao foi possivel salvar este planejamento porque existe um conflito de indice legado para este mes."
+          : isRecurrenceConflict
+            ? "Nao foi possivel salvar este registro porque ja existe um conflito de recorrencia."
+            : "Nao foi possivel salvar este registro porque ja existe outro item com a mesma chave."
       }
     });
     return;
   }
 
-  const message = error instanceof Error ? error.message : "Unexpected server error";
   logUnexpectedError(error, _request);
   response.status(500).json({
     success: false,
     error: {
-      message
+      message: process.env.NODE_ENV === "development" && error instanceof Error ? error.message : "Unexpected server error"
     }
   });
 }

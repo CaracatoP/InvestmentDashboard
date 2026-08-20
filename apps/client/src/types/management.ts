@@ -10,10 +10,19 @@ export interface AssetRecord {
   name: string;
   ticker: string;
   category: AssetCategory;
+  coingeckoId?: string;
   subcategory?: string;
   sector?: string;
   currency: string;
   active: boolean;
+}
+
+export interface CryptoAssetSearchResult {
+  coingeckoId: string;
+  name: string;
+  symbol: string;
+  marketProvider: "coingecko";
+  imageUrl?: string;
 }
 
 export interface OperationRecord {
@@ -40,10 +49,22 @@ export interface DividendRecord {
   id?: string;
   assetId?: string;
   assetTicker?: string;
+  category?: string;
+  type?: "dividendo" | "jcp" | "rendimento" | "amortizacao" | "outro" | string;
   totalValue: number;
   valuePerShare: number;
+  amountPerShare?: number;
+  quantityEligible?: number;
+  grossAmount?: number;
+  netAmount?: number;
   baseDate?: string;
+  exDate?: string;
   paymentDate: string;
+  receivedAt?: string | null;
+  referenceMonth?: string;
+  status?: "announced" | "expected" | "received" | "cancelled" | string;
+  source?: string;
+  notes?: string;
 }
 
 export interface ContributionRecord {

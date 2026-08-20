@@ -2,6 +2,7 @@ import { Schema, model, models, InferSchemaType } from "mongoose";
 
 const monthlyIncomeEntrySchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     planId: { type: String, required: true, index: true },
     description: { type: String, required: true, trim: true },
     amountInCents: { type: Number, required: true, min: 1 },
@@ -31,10 +32,22 @@ const monthlyIncomeEntrySchema = new Schema(
   { versionKey: false }
 );
 
-monthlyIncomeEntrySchema.index({ planId: 1, date: -1, time: -1 });
-monthlyIncomeEntrySchema.index({ planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 });
-monthlyIncomeEntrySchema.index({ sourceType: 1, sourceId: 1 }, { sparse: true });
-monthlyIncomeEntrySchema.index({ idempotencyKey: 1 }, { sparse: true });
+monthlyIncomeEntrySchema.index({ userId: 1, planId: 1, date: -1, time: -1 });
+monthlyIncomeEntrySchema.index(
+  { userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1 },
+  {
+    unique: true,
+    name: "user_plan_recurrence_income_occurrence_unique",
+    partialFilterExpression: {
+      recurrenceId: { $type: "string", $gt: "" },
+      recurrenceOriginalDate: { $type: "string", $gt: "" },
+      recurrenceSourceId: { $type: "string", $gt: "" }
+    }
+  }
+);
+monthlyIncomeEntrySchema.index({ userId: 1, planId: 1, recurrenceId: 1, recurrenceOriginalDate: 1, recurrenceSourceId: 1 }, { name: "user_plan_recurrence_income_lookup" });
+monthlyIncomeEntrySchema.index({ userId: 1, sourceType: 1, sourceId: 1 }, { sparse: true });
+monthlyIncomeEntrySchema.index({ userId: 1, idempotencyKey: 1 }, { sparse: true });
 
 export type MonthlyIncomeEntryDocument = InferSchemaType<typeof monthlyIncomeEntrySchema>;
 export const MonthlyIncomeEntryModel = models.MonthlyIncomeEntry ?? model("MonthlyIncomeEntry", monthlyIncomeEntrySchema);

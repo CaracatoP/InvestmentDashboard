@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { runWithAuthContext } from "../auth/auth-context";
 import {
   buildRejectedQuote,
   clearAssetHistoryCacheForTests,
@@ -10,11 +12,12 @@ import {
   mapBrapiStockHistoricalResponse,
   normalizeHistoricalPricePoints,
   normalizeHistoryRange,
-  parseBrapiTimestamp
+  parseBrapiTimestamp,
+  refreshMarketQuotes
 } from "../services/market-data.service";
 import { getTickerProfile } from "../services/ticker.service";
 import { env } from "../config/env";
-import { createAsset, createPriceHistory } from "../repositories/investment.repository";
+import { createAsset, createPriceHistory, upsertMarketQuote } from "../repositories/investment.repository";
 import type { AssetRecord, MarketQuoteRecord } from "../types/investment";
 
 const asset: AssetRecord = {
@@ -25,6 +28,10 @@ const asset: AssetRecord = {
   currency: "BRL",
   active: true
 };
+
+function asUser<T>(userId: string, callback: () => Promise<T>) {
+  return runWithAuthContext({ userId, role: "user", channel: "web" }, callback);
+}
 
 test("MarketQuote with positive price is valid", () => {
   const quote: MarketQuoteRecord = {
@@ -413,6 +420,142 @@ test("historical service returns error when BRAPI fails without cache", async ()
   } finally {
     env.marketDataProvider = previousProvider;
     env.marketDataApiKey = previousKey;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("crypto quotes are fetched in batch from CoinGecko with BRL priority", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousProvider = env.marketDataProvider;
+  const previousProviderKey = env.marketDataApiKey;
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = "";
+
+  env.coingeckoApiKey = "demo-key";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  env.marketDataProvider = "";
+  env.marketDataApiKey = "";
+  globalThis.fetch = (async (input, init) => {
+    requestedUrl = String(input);
+    assert.match(requestedUrl, /\/coins\/markets\?/);
+    assert.equal((init?.headers as Record<string, string> | undefined)?.["x-cg-demo-api-key"], "demo-key");
+    return new Response(
+      JSON.stringify([
+        { id: "bitcoin", symbol: "btc", name: "Bitcoin", current_price: 620000, last_updated: "2026-08-20T12:00:00.000Z" },
+        { id: "ethereum", symbol: "eth", name: "Ethereum", current_price: 18000, last_updated: "2026-08-20T12:00:00.000Z" }
+      ]),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const suffix = randomUUID().slice(0, 6);
+    const result = await asUser(`coingecko-batch-${suffix}`, async () => {
+      await createAsset({ name: "Bitcoin", ticker: "BTC", category: "CRIPTO", coingeckoId: "bitcoin", currency: "BRL", active: true });
+      await createAsset({ name: "Ethereum", ticker: "ETH", category: "CRIPTO", coingeckoId: "ethereum", currency: "BRL", active: true });
+      return refreshMarketQuotes();
+    });
+
+    const btcQuote = result.quotes.find((quote) => quote.providerSymbol === "bitcoin");
+    const ethQuote = result.quotes.find((quote) => quote.providerSymbol === "ethereum");
+    assert.equal(result.updated >= 2, true);
+    assert.equal(btcQuote?.price, 620000);
+    assert.equal(ethQuote?.price, 18000);
+    assert.equal(btcQuote?.currency, "BRL");
+  } finally {
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
+    env.marketDataProvider = previousProvider;
+    env.marketDataApiKey = previousProviderKey;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("crypto refresh keeps last valid quote when CoinGecko is rate limited", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousFetch = globalThis.fetch;
+  env.coingeckoApiKey = "demo-key";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  globalThis.fetch = (async () => new Response(JSON.stringify({ status: { error_message: "rate limited" } }), { status: 429 })) as typeof fetch;
+
+  try {
+    const suffix = randomUUID().slice(0, 6);
+    const result = await asUser(`coingecko-stale-${suffix}`, async () => {
+      await createAsset({ name: "Bitcoin", ticker: "BTC", category: "CRIPTO", coingeckoId: "bitcoin", currency: "BRL", active: true });
+      await upsertMarketQuote({
+        assetKey: "crypto:bitcoin",
+        ticker: "BTC",
+        providerSymbol: "bitcoin",
+        price: 600000,
+        quotedAt: "2026-08-19T12:00:00.000Z",
+        source: "coingecko",
+        currency: "BRL",
+        status: "updated",
+        market: "crypto",
+        assetKind: "crypto"
+      });
+      return refreshMarketQuotes();
+    });
+
+    const btcQuote = result.quotes.find((quote) => quote.providerSymbol === "bitcoin");
+    assert.equal(btcQuote?.status, "stale");
+    assert.equal(btcQuote?.price, 600000);
+  } finally {
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("crypto historical prices are fetched from CoinGecko", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousFetch = globalThis.fetch;
+  env.coingeckoApiKey = "demo-key";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  globalThis.fetch = (async (input, init) => {
+    assert.match(String(input), /\/coins\/ethereum\/market_chart\?/);
+    assert.equal((init?.headers as Record<string, string> | undefined)?.["x-cg-demo-api-key"], "demo-key");
+    return new Response(
+      JSON.stringify({
+        prices: [
+          [1787083200000, 18000],
+          [1787169600000, 18100],
+          [1787256000000, 18250]
+        ],
+        total_volumes: [
+          [1787083200000, 1200000000],
+          [1787169600000, 1300000000],
+          [1787256000000, 1400000000]
+        ]
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const suffix = randomUUID().slice(0, 6);
+    const history = await asUser(`coingecko-history-${suffix}`, async () => {
+      const cryptoAsset = await createAsset({
+        name: "Ethereum",
+        ticker: "ETH",
+        category: "CRIPTO",
+        coingeckoId: "ethereum",
+        currency: "BRL",
+        active: true
+      });
+      return getAssetPriceHistory(cryptoAsset, "1mo");
+    });
+
+    assert.equal(history.status, "updated");
+    assert.equal(history.source, "coingecko");
+    assert.equal(history.currency, "BRL");
+    assert.equal(history.points.length >= 3, true);
+  } finally {
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
     globalThis.fetch = previousFetch;
   }
 });

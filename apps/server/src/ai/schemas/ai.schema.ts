@@ -166,6 +166,7 @@ export type AiToolName =
   | "createInvestmentSale"
   | "registerDividend"
   | "registerJCP"
+  | "markDividendReceived"
   | "registerBonus"
   | "registerSplit"
   | "registerReverseSplit"
@@ -175,7 +176,10 @@ export type AiToolName =
 
 export interface AiPendingActionRecord {
   id?: string;
+  userId?: string;
   sessionId: string;
+  channel?: "web" | "whatsapp";
+  externalMessageId?: string;
   actionType: string;
   toolName: AiToolName;
   extractedFields: Record<string, unknown>;
@@ -192,6 +196,8 @@ export interface AiPendingActionRecord {
 
 export interface AiActionAuditRecord {
   id?: string;
+  userId?: string;
+  channel?: "web" | "whatsapp";
   sessionId: string;
   messageId?: string;
   pendingActionId: string;
@@ -211,6 +217,7 @@ export interface AiActionAuditRecord {
 
 export interface AiStoredAnalysis {
   id?: string;
+  userId?: string;
   year: number;
   month: number;
   analysisType: AiAnalysisType;
@@ -228,6 +235,9 @@ export interface AiStoredAnalysis {
 
 export interface AiChatSessionRecord {
   id?: string;
+  userId?: string;
+  channel?: "web" | "whatsapp";
+  externalConversationId?: string;
   title: string;
   createdAt: string | Date;
   updatedAt: string | Date;
@@ -235,7 +245,10 @@ export interface AiChatSessionRecord {
 
 export interface AiChatMessageRecord {
   id?: string;
+  userId?: string;
   sessionId: string;
+  channel?: "web" | "whatsapp";
+  externalMessageId?: string;
   role: "user" | "assistant" | "system";
   content: string;
   structuredResponse?: AiChatStructuredResponse | null;

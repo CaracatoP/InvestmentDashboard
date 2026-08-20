@@ -4,6 +4,7 @@ export interface Asset {
   assetId?: string;
   name: string;
   ticker: string;
+  coingeckoId?: string;
   categoryId?: string;
   categoryLabel?: string;
   category: string;
@@ -169,9 +170,26 @@ export interface PortfolioResponse {
   allocation?: AllocationSummary;
 }
 
+export interface DividendListItem {
+  id?: string;
+  assetId?: string;
+  assetTicker: string;
+  category?: string;
+  type?: string;
+  date: string;
+  paymentDate?: string;
+  receivedAt?: string | null;
+  amount: number;
+  amountPerShare?: number;
+  shares: number;
+  status?: string;
+  source?: string;
+  notes?: string;
+}
+
 export interface AssetDetails extends Asset {
   priceHistory: Array<{ month: string; price: number }>;
-  dividends: Array<{ assetTicker: string; date: string; amount: number; amountPerShare?: number; shares: number; status?: string; source?: string; notes?: string }>;
+  dividends: DividendListItem[];
   operations: Array<{ assetTicker: string; type: string; date: string; quantity: number; price: number; total: number; notes: string }>;
 }
 
@@ -209,11 +227,11 @@ export interface DividendsResponse {
     monthlyAverage: number;
     biggestPayment: number;
   };
-  table: Array<{ assetTicker: string; date: string; amount: number; amountPerShare?: number; shares: number; status?: string; source?: string; notes?: string }>;
+  table: DividendListItem[];
   monthly: Array<{ month: string; value: number }>;
   annual: Array<{ year: string; value: number }>;
   byAsset: Array<{ ticker: string; value: number }>;
-  calendar: Array<{ assetTicker: string; date: string; amount: number; amountPerShare?: number; shares: number; status?: string; source?: string; notes?: string }>;
+  calendar: DividendListItem[];
 }
 
 export interface ContributionsResponse {

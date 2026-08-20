@@ -1,7 +1,8 @@
-import { Command, Menu, RefreshCw, X } from "lucide-react";
+import { Command, LogOut, Menu, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../../auth/AuthProvider";
 import { navigationItems } from "../../constants/navigation";
 import { refreshMarketData } from "../../services/api";
 import { useInvestmentStore } from "../../stores/useInvestmentStore";
@@ -12,6 +13,8 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout, user } = useAuth();
   const profileName = useInvestmentStore((state) => state.settings?.profile.name);
   const isLoading = useInvestmentStore((state) => state.isLoading);
   const error = useInvestmentStore((state) => state.error);
@@ -38,6 +41,11 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   async function handleRefresh() {
     await refreshMarketData();
+  }
+
+  async function handleLogout() {
+    await logout();
+    navigate("/login", { replace: true });
   }
 
   const navigation = (onNavigate?: () => void) => (
@@ -75,7 +83,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold">Invest Hub</p>
-            <p className="truncate text-xs text-muted">{profileName || "Carteira pessoal"}</p>
+            <p className="truncate text-xs text-muted">{profileName || user?.name || "Carteira pessoal"}</p>
           </div>
         </div>
         {navigation()}
@@ -92,7 +100,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">Invest Hub</p>
-                  <p className="truncate text-xs text-muted">{profileName || "Carteira pessoal"}</p>
+                  <p className="truncate text-xs text-muted">{profileName || user?.name || "Carteira pessoal"}</p>
                 </div>
               </div>
               <button
@@ -125,15 +133,26 @@ export function AppLayout({ children }: AppLayoutProps) {
               <p className="hidden truncate text-xs text-muted/70 xs:block">{error ? "Falha ao sincronizar" : "MongoDB conectado e dados sincronizados"}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleRefresh()}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-accent/50 hover:text-ink"
-            title="Atualizar dados"
-            aria-label="Atualizar dados"
-          >
-            <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRefresh()}
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-accent/50 hover:text-ink"
+              title="Atualizar dados"
+              aria-label="Atualizar dados"
+            >
+              <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-rose/50 hover:text-rose"
+              title="Sair"
+              aria-label="Sair"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </header>
 
         {error ? (

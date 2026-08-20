@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { getCurrentUserId, SYSTEM_USER_ID } from "../auth/auth-context";
 import { isDatabaseConnected } from "../config/database";
 import { MonthlyExpenseModel } from "../models/monthly-expense.model";
 import { MonthlyIncomeEntryModel } from "../models/monthly-income-entry.model";
@@ -10,6 +11,24 @@ let localMonthlyExpenses: MonthlyExpenseRecord[] = [];
 let localMonthlyIncomeEntries: MonthlyIncomeEntryRecord[] = [];
 const monthlyExpenseCreationLocks = new Map<string, Promise<{ expense: MonthlyExpenseRecord; created: boolean }>>();
 const monthlyIncomeEntryCreationLocks = new Map<string, Promise<{ incomeEntry: MonthlyIncomeEntryRecord; created: boolean }>>();
+const emptyMongoOwnerId = "000000000000000000000000";
+
+function currentOwnerId() {
+  const userId = getCurrentUserId();
+  return isDatabaseConnected() && userId === SYSTEM_USER_ID ? emptyMongoOwnerId : userId;
+}
+
+function ownerFilter<T extends object>(filter: T = {} as T) {
+  return { ...filter, userId: currentOwnerId() };
+}
+
+function withOwner<T extends object>(input: T) {
+  return { ...input, userId: currentOwnerId() };
+}
+
+function isOwned(record: { userId?: string }) {
+  return (record.userId ?? SYSTEM_USER_ID) === currentOwnerId();
+}
 
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
@@ -33,43 +52,44 @@ function sortIncomeEntries(left: MonthlyIncomeEntryRecord, right: MonthlyIncomeE
 
 export async function listMonthlyPlans(): Promise<MonthlyPlanRecord[]> {
   if (isDatabaseConnected()) {
-    const plans = await MonthlyPlanModel.find().sort({ year: -1, month: -1 }).lean();
+    const plans = await MonthlyPlanModel.find(ownerFilter()).sort({ year: -1, month: -1 }).lean();
     return plans.map((plan) => withId(plan)) as unknown as MonthlyPlanRecord[];
   }
 
-  return [...localMonthlyPlans].sort((left, right) => right.year - left.year || right.month - left.month);
+  return localMonthlyPlans.filter(isOwned).sort((left, right) => right.year - left.year || right.month - left.month);
 }
 
 export async function findMonthlyPlanByMonth(year: number, month: number): Promise<MonthlyPlanRecord | null> {
   if (isDatabaseConnected()) {
-    const plan = await MonthlyPlanModel.findOne({ year, month }).lean();
+    const plan = await MonthlyPlanModel.findOne(ownerFilter({ year, month })).lean();
     return plan ? (withId(plan) as unknown as MonthlyPlanRecord) : null;
   }
 
-  return localMonthlyPlans.find((plan) => plan.year === year && plan.month === month) ?? null;
+  return localMonthlyPlans.find((plan) => isOwned(plan) && plan.year === year && plan.month === month) ?? null;
 }
 
 export async function findMonthlyPlanById(id: string): Promise<MonthlyPlanRecord | null> {
   if (isDatabaseConnected()) {
-    const plan = await MonthlyPlanModel.findById(id).lean();
+    const plan = await MonthlyPlanModel.findOne(ownerFilter({ _id: id })).lean();
     return plan ? (withId(plan) as unknown as MonthlyPlanRecord) : null;
   }
 
-  return localMonthlyPlans.find((plan) => plan.id === id) ?? null;
+  return localMonthlyPlans.find((plan) => isOwned(plan) && plan.id === id) ?? null;
 }
 
 export async function upsertMonthlyPlan(input: MonthlyPlanRecord): Promise<MonthlyPlanRecord> {
+  const payload = withOwner(input);
   if (isDatabaseConnected()) {
     const plan = await MonthlyPlanModel.findOneAndUpdate(
-      { year: input.year, month: input.month },
-      input,
+      ownerFilter({ year: input.year, month: input.month }),
+      payload,
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
     return withId(plan) as unknown as MonthlyPlanRecord;
   }
 
-  const index = localMonthlyPlans.findIndex((plan) => plan.year === input.year && plan.month === input.month);
-  const plan = { ...input, id: localMonthlyPlans[index]?.id ?? input.id ?? randomUUID() };
+  const index = localMonthlyPlans.findIndex((plan) => isOwned(plan) && plan.year === input.year && plan.month === input.month);
+  const plan = { ...payload, id: localMonthlyPlans[index]?.id ?? input.id ?? randomUUID() };
   if (index >= 0) localMonthlyPlans[index] = plan;
   else localMonthlyPlans = [plan, ...localMonthlyPlans];
   return plan;
@@ -77,11 +97,11 @@ export async function upsertMonthlyPlan(input: MonthlyPlanRecord): Promise<Month
 
 export async function updateMonthlyPlan(id: string, input: Partial<MonthlyPlanRecord>): Promise<MonthlyPlanRecord | null> {
   if (isDatabaseConnected()) {
-    const plan = await MonthlyPlanModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const plan = await MonthlyPlanModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return plan ? (withId(plan) as unknown as MonthlyPlanRecord) : null;
   }
 
-  const index = localMonthlyPlans.findIndex((plan) => plan.id === id);
+  const index = localMonthlyPlans.findIndex((plan) => isOwned(plan) && plan.id === id);
   if (index < 0) return null;
   localMonthlyPlans[index] = { ...localMonthlyPlans[index], ...input };
   return localMonthlyPlans[index];
@@ -89,56 +109,56 @@ export async function updateMonthlyPlan(id: string, input: Partial<MonthlyPlanRe
 
 export async function listMonthlyExpenses(planId: string): Promise<MonthlyExpenseRecord[]> {
   if (isDatabaseConnected()) {
-    const expenses = await MonthlyExpenseModel.find({ planId }).sort({ date: -1, time: -1 }).lean();
+    const expenses = await MonthlyExpenseModel.find(ownerFilter({ planId })).sort({ date: -1, time: -1 }).lean();
     return expenses.map((expense) => withId(expense)) as unknown as MonthlyExpenseRecord[];
   }
 
-  return localMonthlyExpenses.filter((expense) => expense.planId === planId).sort(sortExpenses);
+  return localMonthlyExpenses.filter((expense) => isOwned(expense) && expense.planId === planId).sort(sortExpenses);
 }
 
 export async function listAllMonthlyExpenses(): Promise<MonthlyExpenseRecord[]> {
   if (isDatabaseConnected()) {
-    const expenses = await MonthlyExpenseModel.find().sort({ date: -1, time: -1 }).lean();
+    const expenses = await MonthlyExpenseModel.find(ownerFilter()).sort({ date: -1, time: -1 }).lean();
     return expenses.map((expense) => withId(expense)) as unknown as MonthlyExpenseRecord[];
   }
 
-  return [...localMonthlyExpenses].sort(sortExpenses);
+  return localMonthlyExpenses.filter(isOwned).sort(sortExpenses);
 }
 
 export async function listMonthlyIncomeEntries(planId: string): Promise<MonthlyIncomeEntryRecord[]> {
   if (isDatabaseConnected()) {
-    const entries = await MonthlyIncomeEntryModel.find({ planId }).sort({ date: -1, time: -1 }).lean();
+    const entries = await MonthlyIncomeEntryModel.find(ownerFilter({ planId })).sort({ date: -1, time: -1 }).lean();
     return entries.map((entry) => withId(entry)) as unknown as MonthlyIncomeEntryRecord[];
   }
 
-  return localMonthlyIncomeEntries.filter((entry) => entry.planId === planId).sort(sortIncomeEntries);
+  return localMonthlyIncomeEntries.filter((entry) => isOwned(entry) && entry.planId === planId).sort(sortIncomeEntries);
 }
 
 export async function listAllMonthlyIncomeEntries(): Promise<MonthlyIncomeEntryRecord[]> {
   if (isDatabaseConnected()) {
-    const entries = await MonthlyIncomeEntryModel.find().sort({ date: -1, time: -1 }).lean();
+    const entries = await MonthlyIncomeEntryModel.find(ownerFilter()).sort({ date: -1, time: -1 }).lean();
     return entries.map((entry) => withId(entry)) as unknown as MonthlyIncomeEntryRecord[];
   }
 
-  return [...localMonthlyIncomeEntries].sort(sortIncomeEntries);
+  return localMonthlyIncomeEntries.filter(isOwned).sort(sortIncomeEntries);
 }
 
 export async function findMonthlyIncomeEntryById(id: string): Promise<MonthlyIncomeEntryRecord | null> {
   if (isDatabaseConnected()) {
-    const entry = await MonthlyIncomeEntryModel.findById(id).lean();
+    const entry = await MonthlyIncomeEntryModel.findOne(ownerFilter({ _id: id })).lean();
     return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
   }
 
-  return localMonthlyIncomeEntries.find((entry) => entry.id === id) ?? null;
+  return localMonthlyIncomeEntries.find((entry) => isOwned(entry) && entry.id === id) ?? null;
 }
 
 export async function findMonthlyIncomeEntryByIdempotencyKey(idempotencyKey: string): Promise<MonthlyIncomeEntryRecord | null> {
   if (isDatabaseConnected()) {
-    const entry = await MonthlyIncomeEntryModel.findOne({ idempotencyKey }).lean();
+    const entry = await MonthlyIncomeEntryModel.findOne(ownerFilter({ idempotencyKey })).lean();
     return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
   }
 
-  return localMonthlyIncomeEntries.find((entry) => entry.idempotencyKey === idempotencyKey) ?? null;
+  return localMonthlyIncomeEntries.find((entry) => isOwned(entry) && entry.idempotencyKey === idempotencyKey) ?? null;
 }
 
 export async function findMonthlyIncomeEntryByRecurrenceOccurrence(
@@ -148,6 +168,7 @@ export async function findMonthlyIncomeEntryByRecurrenceOccurrence(
 ): Promise<MonthlyIncomeEntryRecord | null> {
   if (isDatabaseConnected()) {
     const entry = await MonthlyIncomeEntryModel.findOne({
+      userId: currentOwnerId(),
       planId,
       recurrenceId,
       recurrenceOriginalDate: occurrenceDate
@@ -159,6 +180,7 @@ export async function findMonthlyIncomeEntryByRecurrenceOccurrence(
     localMonthlyIncomeEntries.find(
       (entry) =>
         entry.planId === planId &&
+        isOwned(entry) &&
         entry.recurrenceId === recurrenceId &&
         (entry.recurrenceOriginalDate ?? entry.date) === occurrenceDate
     ) ?? null
@@ -167,20 +189,20 @@ export async function findMonthlyIncomeEntryByRecurrenceOccurrence(
 
 export async function findMonthlyExpenseById(id: string): Promise<MonthlyExpenseRecord | null> {
   if (isDatabaseConnected()) {
-    const expense = await MonthlyExpenseModel.findById(id).lean();
+    const expense = await MonthlyExpenseModel.findOne(ownerFilter({ _id: id })).lean();
     return expense ? (withId(expense) as unknown as MonthlyExpenseRecord) : null;
   }
 
-  return localMonthlyExpenses.find((expense) => expense.id === id) ?? null;
+  return localMonthlyExpenses.find((expense) => isOwned(expense) && expense.id === id) ?? null;
 }
 
 export async function findMonthlyExpenseByIdempotencyKey(idempotencyKey: string): Promise<MonthlyExpenseRecord | null> {
   if (isDatabaseConnected()) {
-    const expense = await MonthlyExpenseModel.findOne({ "integration.idempotencyKey": idempotencyKey }).lean();
+    const expense = await MonthlyExpenseModel.findOne(ownerFilter({ "integration.idempotencyKey": idempotencyKey })).lean();
     return expense ? (withId(expense) as unknown as MonthlyExpenseRecord) : null;
   }
 
-  return localMonthlyExpenses.find((expense) => expense.integration?.idempotencyKey === idempotencyKey) ?? null;
+  return localMonthlyExpenses.find((expense) => isOwned(expense) && expense.integration?.idempotencyKey === idempotencyKey) ?? null;
 }
 
 export async function findMonthlyExpenseByRecurrenceOccurrence(
@@ -190,6 +212,7 @@ export async function findMonthlyExpenseByRecurrenceOccurrence(
 ): Promise<MonthlyExpenseRecord | null> {
   if (isDatabaseConnected()) {
     const expense = await MonthlyExpenseModel.findOne({
+      userId: currentOwnerId(),
       planId,
       recurrenceId,
       recurrenceOriginalDate: occurrenceDate
@@ -201,6 +224,7 @@ export async function findMonthlyExpenseByRecurrenceOccurrence(
     localMonthlyExpenses.find(
       (expense) =>
         expense.planId === planId &&
+        isOwned(expense) &&
         expense.recurrenceId === recurrenceId &&
         (expense.recurrenceOriginalDate ?? expense.date) === occurrenceDate
     ) ?? null
@@ -209,11 +233,11 @@ export async function findMonthlyExpenseByRecurrenceOccurrence(
 
 export async function createMonthlyExpense(input: Omit<MonthlyExpenseRecord, "id">): Promise<MonthlyExpenseRecord> {
   if (isDatabaseConnected()) {
-    const expense = await MonthlyExpenseModel.create(input).then((record) => record.toObject());
+    const expense = await MonthlyExpenseModel.create(withOwner(input)).then((record) => record.toObject());
     return withId(expense) as unknown as MonthlyExpenseRecord;
   }
 
-  const expense = { ...input, id: randomUUID() };
+  const expense = { ...withOwner(input), id: randomUUID() };
   localMonthlyExpenses = [expense, ...localMonthlyExpenses];
   return expense;
 }
@@ -254,11 +278,11 @@ export async function createMonthlyExpenseIfMissing(input: Omit<MonthlyExpenseRe
 
 export async function createMonthlyIncomeEntry(input: Omit<MonthlyIncomeEntryRecord, "id">): Promise<MonthlyIncomeEntryRecord> {
   if (isDatabaseConnected()) {
-    const entry = await MonthlyIncomeEntryModel.create(input).then((record) => record.toObject());
+    const entry = await MonthlyIncomeEntryModel.create(withOwner(input)).then((record) => record.toObject());
     return withId(entry) as unknown as MonthlyIncomeEntryRecord;
   }
 
-  const entry = { ...input, id: randomUUID() };
+  const entry = { ...withOwner(input), id: randomUUID() };
   localMonthlyIncomeEntries = [entry, ...localMonthlyIncomeEntries];
   return entry;
 }
@@ -299,11 +323,11 @@ export async function createMonthlyIncomeEntryIfMissing(input: Omit<MonthlyIncom
 
 export async function updateMonthlyExpense(id: string, input: Partial<Omit<MonthlyExpenseRecord, "id">>): Promise<MonthlyExpenseRecord | null> {
   if (isDatabaseConnected()) {
-    const expense = await MonthlyExpenseModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const expense = await MonthlyExpenseModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return expense ? (withId(expense) as unknown as MonthlyExpenseRecord) : null;
   }
 
-  const index = localMonthlyExpenses.findIndex((expense) => expense.id === id);
+  const index = localMonthlyExpenses.findIndex((expense) => isOwned(expense) && expense.id === id);
   if (index < 0) return null;
   localMonthlyExpenses[index] = { ...localMonthlyExpenses[index], ...input };
   return localMonthlyExpenses[index];
@@ -311,11 +335,11 @@ export async function updateMonthlyExpense(id: string, input: Partial<Omit<Month
 
 export async function updateMonthlyIncomeEntry(id: string, input: Partial<Omit<MonthlyIncomeEntryRecord, "id">>): Promise<MonthlyIncomeEntryRecord | null> {
   if (isDatabaseConnected()) {
-    const entry = await MonthlyIncomeEntryModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const entry = await MonthlyIncomeEntryModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return entry ? (withId(entry) as unknown as MonthlyIncomeEntryRecord) : null;
   }
 
-  const index = localMonthlyIncomeEntries.findIndex((entry) => entry.id === id);
+  const index = localMonthlyIncomeEntries.findIndex((entry) => isOwned(entry) && entry.id === id);
   if (index < 0) return null;
   localMonthlyIncomeEntries[index] = { ...localMonthlyIncomeEntries[index], ...input };
   return localMonthlyIncomeEntries[index];
@@ -323,13 +347,13 @@ export async function updateMonthlyIncomeEntry(id: string, input: Partial<Omit<M
 
 export async function updateMonthlyIncomeEntriesByRecurrenceId(recurrenceId: string, input: Partial<Omit<MonthlyIncomeEntryRecord, "id">>): Promise<number> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyIncomeEntryModel.updateMany({ recurrenceId }, input);
+    const result = await MonthlyIncomeEntryModel.updateMany(ownerFilter({ recurrenceId }), input);
     return result.modifiedCount;
   }
 
   let updated = 0;
   localMonthlyIncomeEntries = localMonthlyIncomeEntries.map((entry) => {
-    if (entry.recurrenceId !== recurrenceId) return entry;
+    if (!isOwned(entry) || entry.recurrenceId !== recurrenceId) return entry;
     updated += 1;
     return { ...entry, ...input };
   });
@@ -338,13 +362,13 @@ export async function updateMonthlyIncomeEntriesByRecurrenceId(recurrenceId: str
 
 export async function updateMonthlyExpensesByRecurrenceId(recurrenceId: string, input: Partial<Omit<MonthlyExpenseRecord, "id">>): Promise<number> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyExpenseModel.updateMany({ recurrenceId }, input);
+    const result = await MonthlyExpenseModel.updateMany(ownerFilter({ recurrenceId }), input);
     return result.modifiedCount;
   }
 
   let updated = 0;
   localMonthlyExpenses = localMonthlyExpenses.map((expense) => {
-    if (expense.recurrenceId !== recurrenceId) return expense;
+    if (!isOwned(expense) || expense.recurrenceId !== recurrenceId) return expense;
     updated += 1;
     return { ...expense, ...input };
   });
@@ -353,44 +377,44 @@ export async function updateMonthlyExpensesByRecurrenceId(recurrenceId: string, 
 
 export async function deleteMonthlyExpense(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyExpenseModel.findByIdAndDelete(id);
+    const result = await MonthlyExpenseModel.findOneAndDelete(ownerFilter({ _id: id }));
     return Boolean(result);
   }
 
   const before = localMonthlyExpenses.length;
-  localMonthlyExpenses = localMonthlyExpenses.filter((expense) => expense.id !== id);
+  localMonthlyExpenses = localMonthlyExpenses.filter((expense) => !(isOwned(expense) && expense.id === id));
   return localMonthlyExpenses.length < before;
 }
 
 export async function deleteMonthlyExpensesByRecurrenceId(recurrenceId: string): Promise<number> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyExpenseModel.deleteMany({ recurrenceId });
+    const result = await MonthlyExpenseModel.deleteMany(ownerFilter({ recurrenceId }));
     return result.deletedCount;
   }
 
   const before = localMonthlyExpenses.length;
-  localMonthlyExpenses = localMonthlyExpenses.filter((expense) => expense.recurrenceId !== recurrenceId);
+  localMonthlyExpenses = localMonthlyExpenses.filter((expense) => !(isOwned(expense) && expense.recurrenceId === recurrenceId));
   return before - localMonthlyExpenses.length;
 }
 
 export async function deleteMonthlyIncomeEntry(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyIncomeEntryModel.findByIdAndDelete(id);
+    const result = await MonthlyIncomeEntryModel.findOneAndDelete(ownerFilter({ _id: id }));
     return Boolean(result);
   }
 
   const before = localMonthlyIncomeEntries.length;
-  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => entry.id !== id);
+  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => !(isOwned(entry) && entry.id === id));
   return localMonthlyIncomeEntries.length < before;
 }
 
 export async function deleteMonthlyIncomeEntriesByRecurrenceId(recurrenceId: string): Promise<number> {
   if (isDatabaseConnected()) {
-    const result = await MonthlyIncomeEntryModel.deleteMany({ recurrenceId });
+    const result = await MonthlyIncomeEntryModel.deleteMany(ownerFilter({ recurrenceId }));
     return result.deletedCount;
   }
 
   const before = localMonthlyIncomeEntries.length;
-  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => entry.recurrenceId !== recurrenceId);
+  localMonthlyIncomeEntries = localMonthlyIncomeEntries.filter((entry) => !(isOwned(entry) && entry.recurrenceId === recurrenceId));
   return before - localMonthlyIncomeEntries.length;
 }

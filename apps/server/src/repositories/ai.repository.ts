@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { getCurrentChannel, getCurrentUserId, SYSTEM_USER_ID } from "../auth/auth-context";
 import { isDatabaseConnected } from "../config/database";
 import { AiChatMessageModel } from "../models/ai-chat-message.model";
 import { AiChatSessionModel } from "../models/ai-chat-session.model";
@@ -20,6 +21,33 @@ let localChatSessions: AiChatSessionRecord[] = [];
 let localChatMessages: AiChatMessageRecord[] = [];
 let localPendingActions: AiPendingActionRecord[] = [];
 let localActionAudits: AiActionAuditRecord[] = [];
+const emptyMongoOwnerId = "000000000000000000000000";
+
+function currentOwnerId() {
+  const userId = getCurrentUserId();
+  return isDatabaseConnected() && userId === SYSTEM_USER_ID ? emptyMongoOwnerId : userId;
+}
+
+function currentAssistantChannel(): "web" | "whatsapp" {
+  const channel = getCurrentChannel("web");
+  return channel === "whatsapp" ? "whatsapp" : "web";
+}
+
+function ownerFilter<T extends object>(filter: T = {} as T) {
+  return { ...filter, userId: currentOwnerId() };
+}
+
+function withOwner<T extends object>(input: T) {
+  return { ...input, userId: currentOwnerId() };
+}
+
+function withAssistantContext<T extends object>(input: T) {
+  return { ...withOwner(input), channel: currentAssistantChannel() };
+}
+
+function isOwned(record: { userId?: string }) {
+  return (record.userId ?? SYSTEM_USER_ID) === currentOwnerId();
+}
 
 function withId(record: unknown) {
   const plain = record as Record<string, unknown> & { _id?: { toString: () => string } };
@@ -45,6 +73,7 @@ export async function findCachedAiAnalysis(input: {
   contextHash: string;
 }): Promise<AiStoredAnalysis | null> {
   const query = {
+    userId: currentOwnerId(),
     year: input.year,
     month: input.month,
     analysisType: input.analysisType,
@@ -63,6 +92,7 @@ export async function findCachedAiAnalysis(input: {
       .filter(
         (analysis) =>
           analysis.year === query.year &&
+          isOwned(analysis) &&
           analysis.month === query.month &&
           analysis.analysisType === query.analysisType &&
           (analysis.categoryId ?? null) === query.categoryId &&
@@ -75,13 +105,14 @@ export async function findCachedAiAnalysis(input: {
 
 export async function saveAiAnalysis(input: Omit<AiStoredAnalysis, "id" | "createdAt" | "updatedAt">): Promise<AiStoredAnalysis> {
   if (isDatabaseConnected()) {
-    const analysis = await FinancialAiAnalysisModel.create(input).then((record) => record.toObject());
+    const analysis = await FinancialAiAnalysisModel.create(withOwner(input)).then((record) => record.toObject());
     return normalizeAnalysis(analysis);
   }
 
   const timestamp = new Date();
   const analysis = {
     ...input,
+    userId: currentOwnerId(),
     id: randomUUID(),
     createdAt: timestamp,
     updatedAt: timestamp
@@ -92,16 +123,16 @@ export async function saveAiAnalysis(input: Omit<AiStoredAnalysis, "id" | "creat
 
 export async function listAiAnalyses(limit = 20): Promise<AiStoredAnalysis[]> {
   if (isDatabaseConnected()) {
-    const analyses = await FinancialAiAnalysisModel.find().sort({ generatedAt: -1 }).limit(limit).lean();
+    const analyses = await FinancialAiAnalysisModel.find(ownerFilter()).sort({ generatedAt: -1 }).limit(limit).lean();
     return analyses.map(normalizeAnalysis);
   }
 
-  return [...localAnalyses].sort((left, right) => new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime()).slice(0, limit);
+  return localAnalyses.filter(isOwned).sort((left, right) => new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime()).slice(0, limit);
 }
 
-export async function createAiChatSession(title: string): Promise<AiChatSessionRecord> {
+export async function createAiChatSession(title: string, options: { externalConversationId?: string } = {}): Promise<AiChatSessionRecord> {
   const now = new Date();
-  const input = { title, createdAt: now, updatedAt: now };
+  const input = withAssistantContext({ title, externalConversationId: options.externalConversationId ?? "", createdAt: now, updatedAt: now });
 
   if (isDatabaseConnected()) {
     const session = await AiChatSessionModel.create(input).then((record) => record.toObject());
@@ -115,29 +146,48 @@ export async function createAiChatSession(title: string): Promise<AiChatSessionR
 
 export async function listAiChatSessions(): Promise<AiChatSessionRecord[]> {
   if (isDatabaseConnected()) {
-    const sessions = await AiChatSessionModel.find().sort({ updatedAt: -1 }).lean();
+    const sessions = await AiChatSessionModel.find(ownerFilter()).sort({ updatedAt: -1 }).lean();
     return sessions.map((session) => withId(session)) as unknown as AiChatSessionRecord[];
   }
 
-  return [...localChatSessions].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  return localChatSessions.filter(isOwned).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
 }
 
 export async function findAiChatSessionById(id: string): Promise<AiChatSessionRecord | null> {
   if (isDatabaseConnected()) {
-    const session = await AiChatSessionModel.findById(id).lean();
+    const session = await AiChatSessionModel.findOne(ownerFilter({ _id: id })).lean();
     return session ? (withId(session) as unknown as AiChatSessionRecord) : null;
   }
 
-  return localChatSessions.find((session) => session.id === id) ?? null;
+  return localChatSessions.find((session) => isOwned(session) && session.id === id) ?? null;
+}
+
+export async function findAiChatSessionByExternalConversationId(channel: "web" | "whatsapp", externalConversationId: string): Promise<AiChatSessionRecord | null> {
+  const normalizedExternalConversationId = externalConversationId.trim();
+  if (!normalizedExternalConversationId) return null;
+
+  if (isDatabaseConnected()) {
+    const session = await AiChatSessionModel.findOne(ownerFilter({ channel, externalConversationId: normalizedExternalConversationId }))
+      .sort({ updatedAt: -1 })
+      .lean();
+    return session ? (withId(session) as unknown as AiChatSessionRecord) : null;
+  }
+
+  return (
+    localChatSessions
+      .filter(isOwned)
+      .filter((session) => session.channel === channel && session.externalConversationId === normalizedExternalConversationId)
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())[0] ?? null
+  );
 }
 
 export async function updateAiChatSession(id: string, input: Partial<Omit<AiChatSessionRecord, "id">>): Promise<AiChatSessionRecord | null> {
   if (isDatabaseConnected()) {
-    const session = await AiChatSessionModel.findByIdAndUpdate(id, input, { new: true }).lean();
+    const session = await AiChatSessionModel.findOneAndUpdate(ownerFilter({ _id: id }), input, { new: true }).lean();
     return session ? (withId(session) as unknown as AiChatSessionRecord) : null;
   }
 
-  const index = localChatSessions.findIndex((session) => session.id === id);
+  const index = localChatSessions.findIndex((session) => isOwned(session) && session.id === id);
   if (index < 0) return null;
   localChatSessions[index] = { ...localChatSessions[index], ...input };
   return localChatSessions[index];
@@ -145,19 +195,19 @@ export async function updateAiChatSession(id: string, input: Partial<Omit<AiChat
 
 export async function deleteAiChatSession(id: string): Promise<boolean> {
   if (isDatabaseConnected()) {
-    const deleted = await AiChatSessionModel.findByIdAndDelete(id);
-    await AiChatMessageModel.deleteMany({ sessionId: id });
+    const deleted = await AiChatSessionModel.findOneAndDelete(ownerFilter({ _id: id }));
+    await AiChatMessageModel.deleteMany(ownerFilter({ sessionId: id }));
     return Boolean(deleted);
   }
 
   const before = localChatSessions.length;
-  localChatSessions = localChatSessions.filter((session) => session.id !== id);
-  localChatMessages = localChatMessages.filter((message) => message.sessionId !== id);
+  localChatSessions = localChatSessions.filter((session) => !(isOwned(session) && session.id === id));
+  localChatMessages = localChatMessages.filter((message) => !(isOwned(message) && message.sessionId === id));
   return localChatSessions.length < before;
 }
 
 export async function addAiChatMessage(input: Omit<AiChatMessageRecord, "id" | "createdAt"> & { createdAt?: string | Date }): Promise<AiChatMessageRecord> {
-  const messageInput = { ...input, createdAt: input.createdAt ?? new Date() };
+  const messageInput = withAssistantContext({ ...input, createdAt: input.createdAt ?? new Date() });
 
   if (isDatabaseConnected()) {
     const message = await AiChatMessageModel.create(messageInput).then((record) => record.toObject());
@@ -169,9 +219,21 @@ export async function addAiChatMessage(input: Omit<AiChatMessageRecord, "id" | "
   return message;
 }
 
+export async function findAiChatMessageByExternalMessageId(channel: "web" | "whatsapp", externalMessageId: string): Promise<AiChatMessageRecord | null> {
+  const normalizedExternalMessageId = externalMessageId.trim();
+  if (!normalizedExternalMessageId) return null;
+
+  if (isDatabaseConnected()) {
+    const message = await AiChatMessageModel.findOne(ownerFilter({ channel, externalMessageId: normalizedExternalMessageId })).lean();
+    return message ? (withId(message) as unknown as AiChatMessageRecord) : null;
+  }
+
+  return localChatMessages.find((message) => isOwned(message) && message.channel === channel && message.externalMessageId === normalizedExternalMessageId) ?? null;
+}
+
 export async function listAiChatMessages(sessionId: string, limit?: number): Promise<AiChatMessageRecord[]> {
   if (isDatabaseConnected()) {
-    const query = AiChatMessageModel.find({ sessionId }).sort({ createdAt: 1 });
+    const query = AiChatMessageModel.find(ownerFilter({ sessionId })).sort({ createdAt: 1 });
     if (limit) query.limit(limit);
     const messages = await query.lean();
     return messages.map((message) => withId(message)) as unknown as AiChatMessageRecord[];
@@ -179,13 +241,14 @@ export async function listAiChatMessages(sessionId: string, limit?: number): Pro
 
   const messages = localChatMessages
     .filter((message) => message.sessionId === sessionId)
+    .filter(isOwned)
     .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
   return limit ? messages.slice(-limit) : messages;
 }
 
 export async function createAiPendingAction(input: Omit<AiPendingActionRecord, "id" | "createdAt" | "updatedAt">): Promise<AiPendingActionRecord> {
   const now = new Date();
-  const payload = { ...input, createdAt: now, updatedAt: now };
+  const payload = withAssistantContext({ ...input, createdAt: now, updatedAt: now });
 
   if (isDatabaseConnected()) {
     const action = await AiPendingActionModel.create(payload).then((record) => record.toObject());
@@ -199,11 +262,11 @@ export async function createAiPendingAction(input: Omit<AiPendingActionRecord, "
 
 export async function findAiPendingActionById(id: string): Promise<AiPendingActionRecord | null> {
   if (isDatabaseConnected()) {
-    const action = await AiPendingActionModel.findById(id).lean();
+    const action = await AiPendingActionModel.findOne(ownerFilter({ _id: id })).lean();
     return action ? (withId(action) as unknown as AiPendingActionRecord) : null;
   }
 
-  return localPendingActions.find((action) => action.id === id) ?? null;
+  return localPendingActions.find((action) => isOwned(action) && action.id === id) ?? null;
 }
 
 export async function findActiveAiPendingAction(sessionId: string): Promise<AiPendingActionRecord | null> {
@@ -212,6 +275,7 @@ export async function findActiveAiPendingAction(sessionId: string): Promise<AiPe
 
   if (isDatabaseConnected()) {
     const action = await AiPendingActionModel.findOne({
+      userId: currentOwnerId(),
       sessionId,
       status: { $in: activeStatuses },
       expiresAt: { $gt: now }
@@ -221,36 +285,36 @@ export async function findActiveAiPendingAction(sessionId: string): Promise<AiPe
 
   return (
     localPendingActions
-      .filter((action) => action.sessionId === sessionId && activeStatuses.includes(action.status) && new Date(action.expiresAt).getTime() > now.getTime())
+      .filter((action) => isOwned(action) && action.sessionId === sessionId && activeStatuses.includes(action.status) && new Date(action.expiresAt).getTime() > now.getTime())
       .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0] ?? null
   );
 }
 
 export async function findExecutedAiPendingActionByIdempotencyKey(idempotencyKey: string): Promise<AiPendingActionRecord | null> {
   if (isDatabaseConnected()) {
-    const action = await AiPendingActionModel.findOne({ idempotencyKey, status: "executed" }).lean();
+    const action = await AiPendingActionModel.findOne(ownerFilter({ idempotencyKey, status: "executed" })).lean();
     return action ? (withId(action) as unknown as AiPendingActionRecord) : null;
   }
 
-  return localPendingActions.find((action) => action.idempotencyKey === idempotencyKey && action.status === "executed") ?? null;
+  return localPendingActions.find((action) => isOwned(action) && action.idempotencyKey === idempotencyKey && action.status === "executed") ?? null;
 }
 
 export async function updateAiPendingAction(id: string, input: Partial<Omit<AiPendingActionRecord, "id" | "createdAt">>): Promise<AiPendingActionRecord | null> {
   const payload = { ...input, updatedAt: new Date() };
 
   if (isDatabaseConnected()) {
-    const action = await AiPendingActionModel.findByIdAndUpdate(id, payload, { new: true }).lean();
+    const action = await AiPendingActionModel.findOneAndUpdate(ownerFilter({ _id: id }), payload, { new: true }).lean();
     return action ? (withId(action) as unknown as AiPendingActionRecord) : null;
   }
 
-  const index = localPendingActions.findIndex((action) => action.id === id);
+  const index = localPendingActions.findIndex((action) => isOwned(action) && action.id === id);
   if (index < 0) return null;
   localPendingActions[index] = { ...localPendingActions[index], ...payload };
   return localPendingActions[index];
 }
 
 export async function appendAiActionAudit(input: Omit<AiActionAuditRecord, "id" | "createdAt"> & { createdAt?: string | Date }): Promise<AiActionAuditRecord> {
-  const payload = { ...input, createdAt: input.createdAt ?? new Date() };
+  const payload = withAssistantContext({ ...input, createdAt: input.createdAt ?? new Date() });
 
   if (isDatabaseConnected()) {
     const audit = await AiActionAuditModel.create(payload).then((record) => record.toObject());

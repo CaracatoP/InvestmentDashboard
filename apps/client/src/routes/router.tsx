@@ -1,7 +1,12 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { App } from "../App";
+import { ProtectedRoute, PublicOnlyRoute } from "../components/auth/RouteGuards";
 
+const LoginPage = lazy(() => import("../pages/LoginPage").then((module) => ({ default: module.LoginPage })));
+const RegisterPage = lazy(() => import("../pages/RegisterPage").then((module) => ({ default: module.RegisterPage })));
+const ForgotPasswordPage = lazy(() => import("../pages/ForgotPasswordPage").then((module) => ({ default: module.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import("../pages/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
 const DashboardPage = lazy(() => import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const PortfolioPage = lazy(() => import("../pages/PortfolioPage").then((module) => ({ default: module.PortfolioPage })));
 const AssetsPage = lazy(() => import("../pages/AssetsPage").then((module) => ({ default: module.AssetsPage })));
@@ -39,9 +44,13 @@ function lazyPage(page: ReactNode) {
 }
 
 export const router = createBrowserRouter([
+  { path: "/login", element: lazyPage(<PublicOnlyRoute><LoginPage /></PublicOnlyRoute>) },
+  { path: "/cadastro", element: lazyPage(<PublicOnlyRoute><RegisterPage /></PublicOnlyRoute>) },
+  { path: "/esqueci-minha-senha", element: lazyPage(<PublicOnlyRoute><ForgotPasswordPage /></PublicOnlyRoute>) },
+  { path: "/redefinir-senha", element: lazyPage(<PublicOnlyRoute><ResetPasswordPage /></PublicOnlyRoute>) },
   {
     path: "/",
-    element: <App />,
+    element: <ProtectedRoute><App /></ProtectedRoute>,
     children: [
       { index: true, element: lazyPage(<DashboardPage />) },
       { path: "investimentos", element: lazyPage(<InvestmentsOverviewPage />) },

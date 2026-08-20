@@ -6,12 +6,13 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { MobileDataCard } from "../components/ui/Responsive";
 import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { assetRecordsApi } from "../services/api";
-import type { AssetCategory, AssetRecord } from "../types/management";
+import type { AssetCategory, AssetRecord, CryptoAssetSearchResult } from "../types/management";
 
 const emptyAsset: AssetRecord = {
   name: "",
   ticker: "",
   category: "FII",
+  coingeckoId: "",
   subcategory: "",
   sector: "",
   currency: "BRL",
@@ -35,6 +36,12 @@ export function AssetsPage() {
   const [form, setForm] = useState<AssetRecord>(emptyAsset);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AssetRecord | null>(null);
+  const [cryptoSearch, setCryptoSearch] = useState("");
+  const [cryptoResults, setCryptoResults] = useState<CryptoAssetSearchResult[]>([]);
+  const [isCryptoSearching, setIsCryptoSearching] = useState(false);
+  const [cryptoSearchError, setCryptoSearchError] = useState("");
+
+  const isCryptoCategory = form.category === "CRIPTO";
 
   async function loadAssets() {
     setAssets(sortAssets(await assetRecordsApi.list()));
@@ -46,26 +53,92 @@ export function AssetsPage() {
 
   useWorkspaceInvalidation(["assets", "portfolio"], () => loadAssets());
 
+  useEffect(() => {
+    if (!isModalOpen || !isCryptoCategory) {
+      setCryptoResults([]);
+      setIsCryptoSearching(false);
+      setCryptoSearchError("");
+      return;
+    }
+
+    const query = cryptoSearch.trim();
+    if (query.length < 2) {
+      setCryptoResults([]);
+      setIsCryptoSearching(false);
+      setCryptoSearchError("");
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsCryptoSearching(true);
+      setCryptoSearchError("");
+
+      try {
+        const results = await assetRecordsApi.searchCrypto(query);
+        if (cancelled) return;
+        setCryptoResults(results);
+      } catch (error) {
+        if (cancelled) return;
+        setCryptoResults([]);
+        setCryptoSearchError(error instanceof Error ? error.message : "Nao foi possivel buscar criptomoedas.");
+      } finally {
+        if (!cancelled) setIsCryptoSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [cryptoSearch, isCryptoCategory, isModalOpen]);
+
   const categories = useMemo(() => ["Todos", ...Array.from(new Set(assets.map((asset) => asset.category)))], [assets]);
   const filteredAssets = useMemo(() => {
     const term = search.trim().toLowerCase();
     return assets.filter((asset) => {
-      const matchesSearch = [asset.name, asset.ticker, asset.sector, asset.subcategory].some((value) => value?.toLowerCase().includes(term));
+      const matchesSearch = [asset.name, asset.ticker, asset.coingeckoId, asset.sector, asset.subcategory].some((value) => value?.toLowerCase().includes(term));
       const matchesCategory = category === "Todos" || asset.category === category;
       return matchesSearch && matchesCategory;
     });
   }, [assets, category, search]);
 
+  function resetCryptoSearch() {
+    setCryptoSearch("");
+    setCryptoResults([]);
+    setIsCryptoSearching(false);
+    setCryptoSearchError("");
+  }
+
   function openCreate() {
     setEditing(null);
     setForm(emptyAsset);
+    resetCryptoSearch();
     setIsModalOpen(true);
   }
 
   function openEdit(asset: AssetRecord) {
     setEditing(asset);
-    setForm(asset);
+    setForm({
+      ...asset,
+      coingeckoId: asset.coingeckoId ?? ""
+    });
+    setCryptoSearch(asset.category === "CRIPTO" ? asset.name : "");
+    setCryptoResults([]);
+    setCryptoSearchError("");
     setIsModalOpen(true);
+  }
+
+  function selectCryptoResult(result: CryptoAssetSearchResult) {
+    setForm((current) => ({
+      ...current,
+      name: result.name,
+      ticker: result.symbol,
+      coingeckoId: result.coingeckoId,
+      currency: "BRL"
+    }));
+    setCryptoSearch(result.name);
+    setCryptoSearchError("");
   }
 
   function assetDetailsPath(asset: AssetRecord) {
@@ -95,7 +168,18 @@ export function AssetsPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const payload = { ...form, ticker: form.ticker.toUpperCase() };
+
+    if (isCryptoCategory && !form.coingeckoId) {
+      setCryptoSearchError("Selecione uma criptomoeda retornada pela CoinGecko antes de salvar.");
+      return;
+    }
+
+    const payload: AssetRecord = {
+      ...form,
+      ticker: form.ticker.toUpperCase(),
+      coingeckoId: form.coingeckoId?.trim().toLowerCase(),
+      currency: isCryptoCategory ? "BRL" : form.currency.toUpperCase()
+    };
     const saved = editing?.id || editing?.ticker
       ? await assetRecordsApi.update(editing.id ?? editing.ticker, payload)
       : await assetRecordsApi.create(payload);
@@ -103,6 +187,7 @@ export function AssetsPage() {
     setAssets((current) => sortAssets([...current.filter((asset) => assetIdentity(asset) !== assetIdentity(saved)), saved]));
     setEditing(null);
     setForm(emptyAsset);
+    resetCryptoSearch();
     setIsModalOpen(false);
   }
 
@@ -169,6 +254,7 @@ export function AssetsPage() {
                 <p className="font-medium text-ink">{asset.currency}</p>
               </div>
             </div>
+            {asset.coingeckoId ? <p className="mt-3 text-xs text-muted">CoinGecko ID: <span className="font-medium text-ink">{asset.coingeckoId}</span></p> : null}
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               <Link
                 to={assetDetailsPath(asset)}
@@ -224,19 +310,96 @@ export function AssetsPage() {
         )}
       />
 
-      <ManagementModal title={editing ? "Editar ativo" : "Novo ativo"} isOpen={isModalOpen} onClose={() => { setEditing(null); setForm(emptyAsset); setIsModalOpen(false); }} onSubmit={handleSubmit}>
-        <input required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome" />
-        <input required value={form.ticker} onChange={(event) => setForm((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ticker" />
-        <select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value as AssetCategory }))} className={fieldClass}>
+      <ManagementModal
+        title={editing ? "Editar ativo" : "Novo ativo"}
+        isOpen={isModalOpen}
+        onClose={() => {
+          setEditing(null);
+          setForm(emptyAsset);
+          resetCryptoSearch();
+          setIsModalOpen(false);
+        }}
+        onSubmit={handleSubmit}
+      >
+        <select
+          value={form.category}
+          onChange={(event) => {
+            const nextCategory = event.target.value as AssetCategory;
+            setForm((current) => ({
+              ...current,
+              category: nextCategory,
+              currency: nextCategory === "CRIPTO" ? "BRL" : current.currency,
+              coingeckoId: nextCategory === "CRIPTO" ? current.coingeckoId ?? "" : ""
+            }));
+            if (nextCategory !== "CRIPTO") resetCryptoSearch();
+          }}
+          className={fieldClass}
+        >
           <option value="FII">FII</option>
           <option value="ACAO">ACAO</option>
           <option value="ETF">ETF</option>
           <option value="CRIPTO">CRIPTO</option>
           <option value="RENDA_FIXA">RENDA_FIXA</option>
         </select>
+
+        {isCryptoCategory ? (
+          <>
+            <div className="rounded-2xl border border-line bg-elevated/60 p-4">
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted">Buscar criptomoeda</p>
+              <input
+                value={cryptoSearch}
+                onChange={(event) => setCryptoSearch(event.target.value)}
+                className={`${fieldClass} mt-3`}
+                placeholder="Bitcoin, BTC, Ethereum..."
+              />
+              <p className="mt-2 text-xs text-muted">Pesquise por nome, simbolo ou CoinGecko ID. O ativo sera salvo usando o identificador oficial da CoinGecko.</p>
+
+              {isCryptoSearching ? <p className="mt-3 text-xs text-muted">Buscando resultados...</p> : null}
+              {cryptoSearchError ? <p className="mt-3 text-xs text-rose-400">{cryptoSearchError}</p> : null}
+
+              {cryptoResults.length > 0 ? (
+                <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                  {cryptoResults.map((result) => {
+                    const selected = form.coingeckoId === result.coingeckoId;
+                    return (
+                      <button
+                        key={result.coingeckoId}
+                        type="button"
+                        onClick={() => selectCryptoResult(result)}
+                        className={[
+                          "flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-3 text-left transition",
+                          selected ? "border-accent bg-accent/10" : "border-line bg-panel hover:border-accent/40"
+                        ].join(" ")}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium text-ink">{result.name} <span className="text-muted">({result.symbol})</span></p>
+                          <p className="truncate text-xs text-muted">{result.coingeckoId}</p>
+                        </div>
+                        <span className="text-xs font-medium text-accent">CoinGecko</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : cryptoSearch.trim().length >= 2 && !isCryptoSearching && !cryptoSearchError ? (
+                <p className="mt-3 text-xs text-muted">Nenhum criptoativo encontrado para essa busca.</p>
+              ) : null}
+            </div>
+
+            <input readOnly value={form.name} className={fieldClass} placeholder="Nome" />
+            <input readOnly value={form.ticker} className={fieldClass} placeholder="Ticker" />
+            <input readOnly value={form.coingeckoId ?? ""} className={fieldClass} placeholder="CoinGecko ID" />
+            <input readOnly value="BRL" className={fieldClass} placeholder="Moeda" />
+          </>
+        ) : (
+          <>
+            <input required value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className={fieldClass} placeholder="Nome" />
+            <input required value={form.ticker} onChange={(event) => setForm((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ticker" />
+            <input value={form.currency} onChange={(event) => setForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Moeda" />
+          </>
+        )}
+
         <input value={form.subcategory ?? ""} onChange={(event) => setForm((current) => ({ ...current, subcategory: event.target.value }))} className={fieldClass} placeholder="Subcategoria" />
         <input value={form.sector ?? ""} onChange={(event) => setForm((current) => ({ ...current, sector: event.target.value }))} className={fieldClass} placeholder="Setor" />
-        <input value={form.currency} onChange={(event) => setForm((current) => ({ ...current, currency: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Moeda" />
       </ManagementModal>
 
       <ConfirmDelete isOpen={deleteTarget !== null} title={`Excluir ${deleteTarget?.ticker ?? "ativo"}?`} onCancel={() => setDeleteTarget(null)} onConfirm={() => void confirmDelete()} />

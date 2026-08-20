@@ -5,7 +5,9 @@ import { app } from "../app";
 import { buildAllowedOrigins, isOriginAllowed } from "../config/cors";
 import { env, parseBoolean, parsePort } from "../config/env";
 import { createAsset } from "../repositories/investment.repository";
+import { runWithAuthContext } from "../auth/auth-context";
 import { redactSensitiveText } from "../utils/logging";
+import { createAuthenticatedRequestContext } from "./helpers/authenticated-request";
 
 async function listenForTest() {
   const server = app.listen(0, "127.0.0.1");
@@ -80,19 +82,23 @@ test("asset price history endpoint returns a standardized response", async () =>
   env.marketDataProvider = "";
   env.marketDataApiKey = "";
 
-  const asset = await createAsset({
-    name: "Fundo Endpoint",
-    ticker: "E2EH11",
-    category: "FII",
-    currency: "BRL",
-    active: true
-  });
   const server = await listenForTest();
 
   try {
     const { port } = server.address() as AddressInfo;
-    const response = await fetch(`http://127.0.0.1:${port}/api/assets/${asset.ticker}/price-history?range=1A`);
-    const newEndpointResponse = await fetch(`http://127.0.0.1:${port}/api/assets/${asset.ticker}/history?period=1A`);
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const auth = await createAuthenticatedRequestContext(baseUrl, "asset-history");
+    const asset = await runWithAuthContext({ userId: auth.user.id, role: auth.user.role, email: auth.user.email, channel: "web" }, () =>
+      createAsset({
+        name: "Fundo Endpoint",
+        ticker: "E2EH11",
+        category: "FII",
+        currency: "BRL",
+        active: true
+      })
+    );
+    const response = await fetch(`${baseUrl}/api/assets/${asset.ticker}/price-history?range=1A`, { headers: { Cookie: auth.cookieHeader } });
+    const newEndpointResponse = await fetch(`${baseUrl}/api/assets/${asset.ticker}/history?period=1A`, { headers: { Cookie: auth.cookieHeader } });
     const payload = (await response.json()) as {
       data?: {
         ticker?: string;

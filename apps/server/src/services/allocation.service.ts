@@ -44,7 +44,7 @@ const categoryLabels: Record<string, string> = {
   FII: "FIIs",
   ACAO: "Acoes Brasileiras",
   ETF: "ETFs",
-  CRIPTO: "Bitcoin",
+  CRIPTO: "Criptomoedas",
   RENDA_FIXA: "Renda Fixa",
   cash: "Caixinha"
 };

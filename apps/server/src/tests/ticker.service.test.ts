@@ -24,8 +24,9 @@ test("getTickerProfile identifies ETF as B3 asset", () => {
 });
 
 test("getTickerProfile identifies BTC as crypto", () => {
-  const profile = getTickerProfile({ ticker: "BTC-BRL", category: "CRIPTO" });
+  const profile = getTickerProfile({ ticker: "BTC-BRL", category: "CRIPTO", coingeckoId: "bitcoin" });
   assert.equal(profile.internalTicker, "BTC");
   assert.equal(profile.market, "crypto");
-  assert.equal(profile.providerSymbol, "BTC");
+  assert.equal(profile.providerSymbol, "bitcoin");
+  assert.equal(profile.marketKey, "crypto:bitcoin");
 });
