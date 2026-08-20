@@ -41,7 +41,7 @@ export function detectConversationIntent(message: string): AiConversationIntent 
   if (isShortGreeting && !hasInvestmentSignal) return "general";
   if (/(recorrent|assinatura|parcel|fixo)/.test(text)) return "recurring";
   if (/(cartao|pix|debito|credito|pagamento)/.test(text)) return "payment_methods";
-  if (/(gastei|gasto|despesa|orcamento|planejamento|categoria|setor|livre pra gastar|livre para gastar)/.test(text)) return "expenses";
+  if (/(gastei|gasto|despesa|orcamento|planejamento|categoria|setor|livre pra gastar|livre para gastar|saldo|disponivel|quanto ganhei|quanto recebi esse mes|quanto recebi neste mes|receitas?|renda total|entradas? do mes|entradas? desse mes)/.test(text)) return "expenses";
   if (/(dados atualizados|ver dados atualizados|ficaram meus aportes|meus aportes)/.test(text)) return "contributions";
   if (/(aporte|deposit)/.test(text)) return "contributions";
   if (/(dividendo|rendimento|jcp|dy)/.test(text)) return "dividends";

@@ -62,9 +62,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: Boolean(user),
     isLoading,
     login: async (input) => {
-      const result = await authApi.login(input);
-      applyUser(result.user);
-      return result.user;
+      try {
+        await authApi.login(input);
+      } catch (error) {
+        applyUser(null);
+        if (error instanceof Error) {
+          throw error;
+        }
+        throw new Error("Nao foi possivel concluir o login.");
+      }
+
+      try {
+        const confirmed = await authApi.me();
+        if (!confirmed.user) {
+          applyUser(null);
+          throw new Error("Sessao autenticada sem usuario associado.");
+        }
+        applyUser(confirmed.user);
+        return confirmed.user;
+      } catch (error) {
+        applyUser(null);
+        throw new Error("Login aceito, mas a sessao nao foi confirmada na requisicao seguinte. Verifique o dominio/API publicado e tente novamente.");
+      }
     },
     register: authApi.register,
     logout: async () => {

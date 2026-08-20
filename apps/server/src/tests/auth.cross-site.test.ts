@@ -131,6 +131,46 @@ test("cross-site auth issues secure cookies, exposes the CSRF token, and keeps t
   }
 });
 
+test("same-origin auth keeps the session across /auth/me and private endpoints without CORS headers", async () => {
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const email = `same-origin-${randomUUID()}@example.com`;
+    await createBootstrapAdmin({ email, password });
+
+    const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ email, password })
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const cookieHeader = buildCookieHeader(loginResponse);
+    const csrfToken = loginResponse.headers.get("x-csrf-token");
+    assert.ok(csrfToken);
+
+    const meResponse = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: {
+        Cookie: cookieHeader
+      }
+    });
+    assert.equal(meResponse.status, 200);
+
+    const settingsResponse = await fetch(`${baseUrl}/api/settings`, {
+      headers: {
+        Cookie: cookieHeader
+      }
+    });
+    assert.equal(settingsResponse.status, 200);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("cross-site auth rejects unsafe requests without the CSRF header", async () => {
   const server = await listenForTest();
 
@@ -161,6 +201,40 @@ test("cross-site auth rejects unsafe requests without the CSRF header", async ()
     assert.equal(logoutResponse.status, 403);
     const payload = await logoutResponse.json() as { error?: { message?: string } };
     assert.equal(payload.error?.message, "CSRF token invalido.");
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("private requests fail without credentials even after a successful login", async () => {
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const email = `cross-site-missing-cookie-${randomUUID()}@example.com`;
+    await createBootstrapAdmin({ email, password });
+
+    const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        Origin: allowedOrigin,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ email, password })
+    });
+
+    assert.equal(loginResponse.status, 200);
+
+    const missingCookieResponse = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: {
+        Origin: allowedOrigin
+      }
+    });
+
+    assert.equal(missingCookieResponse.status, 401);
+    const payload = await missingCookieResponse.json() as { error?: { message?: string } };
+    assert.equal(payload.error?.message, "Autenticacao obrigatoria.");
   } finally {
     await closeServer(server);
   }

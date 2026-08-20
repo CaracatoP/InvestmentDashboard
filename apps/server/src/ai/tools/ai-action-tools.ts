@@ -207,6 +207,8 @@ const explicitWriteSwitchPattern = /^(gastei|gasto|despesa|recebi|vou receber|re
 const shortSelectionReplyPattern = /^(?:\d+|o\s+primeiro|o\s+segundo|o\s+terceiro|o\s+quarto|o\s+quinto|o\s+sexto|o\s+setimo|o\s+oitavo|primeiro|segundo|terceiro|quarto|quinto|sexto|setimo|s[eé]timo|oitavo|esse|esse\s+mes|desse\s+mes|o\s+desse\s+mes)$/i;
 const spendingReadPattern = /\b(quanto\s+(?:ja\s+)?gastei|gastei\s+quanto|total\s+gasto|gastos?\s+deste?\s+mes)\b/i;
 const availableBudgetReadPattern = /\b(livre\s+pra\s+gastar|livre\s+para\s+gastar|quanto\s+tenho\s+livre|quanto\s+ainda\s+posso\s+gastar|posso\s+gastar\s+por\s+dia)\b/i;
+const incomeReadPattern = /\b(quanto\s+(?:eu\s+)?ganhei|quanto\s+recebi\s+(?:nesse|neste|esse|este)\s+mes|receitas?\s+deste?\s+mes|renda\s+total\s+deste?\s+mes|entradas?\s+deste?\s+mes)\b/i;
+const balanceReadPattern = /\b(qual\s+e\s+(?:o\s+)?meu\s+saldo|meu\s+saldo|saldo\s+atual|saldo\s+disponivel|quanto\s+tenho\s+disponivel)\b/i;
 
 const semanticCategoryGroups = [
   {
@@ -1628,6 +1630,14 @@ function hasPlanningData(overview: Awaited<ReturnType<typeof getMonthlyPlanningO
   return overview.plan.incomeInCents > 0 || overview.expenses.length > 0 || overview.incomeEntries.length > 0;
 }
 
+function buildPlanningEmptyResponse(title: string, message: string) {
+  return createStructuredResponse({
+    responseType: "summary",
+    title,
+    message
+  });
+}
+
 async function buildSpentSummaryResponse(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
   const period = parseTargetMonth(message, timeZone);
   const overview = await getMonthlyPlanningOverview(period.year, period.month);
@@ -1640,11 +1650,10 @@ async function buildSpentSummaryResponse(message: string, timeZone = DEFAULT_APP
   });
 
   if (!hasPlanningData(overview)) {
-    return createStructuredResponse({
-      responseType: "summary",
-      title: `Gastos de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
-      message: "Ainda nao encontrei dados financeiros suficientes nesse periodo para calcular seus gastos com seguranca."
-    });
+    return buildPlanningEmptyResponse(
+      `Gastos de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      "Ainda nao encontrei dados financeiros suficientes nesse periodo para calcular seus gastos com seguranca."
+    );
   }
 
   const title = `Gastos de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`;
@@ -1695,11 +1704,10 @@ async function buildAvailableBudgetSummaryResponse(message: string, timeZone = D
   });
 
   if (!hasPlanningData(overview)) {
-    return createStructuredResponse({
-      responseType: "summary",
-      title: `Disponivel em ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
-      message: "Ainda nao encontrei dados suficientes nesse periodo para calcular quanto esta livre para gastar."
-    });
+    return buildPlanningEmptyResponse(
+      `Disponivel em ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      "Ainda nao encontrei dados suficientes nesse periodo para calcular quanto esta livre para gastar."
+    );
   }
 
   const title = `Disponivel em ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`;
@@ -1727,6 +1735,87 @@ async function buildAvailableBudgetSummaryResponse(message: string, timeZone = D
   });
 }
 
+async function buildIncomeSummaryResponse(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const period = parseTargetMonth(message, timeZone);
+  const overview = await getMonthlyPlanningOverview(period.year, period.month);
+  logAssistantDiagnostic("assistant-planning-read", {
+    kind: "income",
+    period: `${period.year}-${pad(period.month)}`,
+    timezone: timeZone,
+    hasData: hasPlanningData(overview),
+    currentTotalIncomeInCents: overview.summary.currentTotalIncomeInCents
+  });
+
+  if (!hasPlanningData(overview)) {
+    return buildPlanningEmptyResponse(
+      `Receitas de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      "Ainda nao encontrei dados financeiros suficientes nesse periodo para calcular suas receitas com seguranca."
+    );
+  }
+
+  const totalIncome = overview.summary.currentTotalIncomeInCents;
+  const dividendDetail = overview.plan.includeDividendsAsIncome
+    ? `, incluindo ${formatCurrencyFromCents(overview.summary.dividendIncomeInCents)} de dividendos recebidos`
+    : "";
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title: `Receitas de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+    message: `Neste periodo, sua renda total considerada pelo planejamento esta em ${formatCurrencyFromCents(totalIncome)}. Isso inclui ${formatCurrencyFromCents(overview.summary.baseIncomeInCents)} de renda base e ${formatCurrencyFromCents(overview.summary.completedExtraIncomeInCents)} de entradas extras recebidas${dividendDetail}.`,
+    sections: [
+      {
+        type: "metrics",
+        title: "Resumo",
+        metrics: [
+          { label: "Renda total", value: formatCurrencyFromCents(totalIncome), format: "currency" },
+          { label: "Renda base", value: formatCurrencyFromCents(overview.summary.baseIncomeInCents), format: "currency" },
+          { label: "Entradas extras recebidas", value: formatCurrencyFromCents(overview.summary.completedExtraIncomeInCents), format: "currency" },
+          { label: "Entradas extras previstas", value: formatCurrencyFromCents(overview.summary.plannedExtraIncomeInCents), format: "currency" }
+        ]
+      }
+    ],
+    suggestions: ["Qual meu saldo?", "Quanto tenho livre pra gastar?"]
+  });
+}
+
+async function buildBalanceSummaryResponse(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const period = parseTargetMonth(message, timeZone);
+  const overview = await getMonthlyPlanningOverview(period.year, period.month);
+  logAssistantDiagnostic("assistant-planning-read", {
+    kind: "balance",
+    period: `${period.year}-${pad(period.month)}`,
+    timezone: timeZone,
+    hasData: hasPlanningData(overview),
+    remainingIncomeInCents: overview.summary.remainingIncomeInCents,
+    remainingIncomeAfterPlannedInCents: overview.summary.remainingIncomeAfterPlannedInCents
+  });
+
+  if (!hasPlanningData(overview)) {
+    return buildPlanningEmptyResponse(
+      `Saldo de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      "Ainda nao encontrei dados suficientes nesse periodo para calcular seu saldo com seguranca."
+    );
+  }
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title: `Saldo de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+    message: `Hoje seu saldo atual esta em ${formatCurrencyFromCents(overview.summary.remainingIncomeInCents)}. Considerando tambem os gastos e entradas previstos do periodo, o saldo apos previstos fica em ${formatCurrencyFromCents(overview.summary.remainingIncomeAfterPlannedInCents)}.`,
+    sections: [
+      {
+        type: "metrics",
+        title: "Resumo",
+        metrics: [
+          { label: "Saldo atual", value: formatCurrencyFromCents(overview.summary.remainingIncomeInCents), format: "currency" },
+          { label: "Saldo apos previstos", value: formatCurrencyFromCents(overview.summary.remainingIncomeAfterPlannedInCents), format: "currency" },
+          { label: "Livre para investir", value: formatCurrencyFromCents(overview.summary.availableToInvestInCents), format: "currency" }
+        ]
+      }
+    ],
+    suggestions: ["Quanto ganhei esse mes?", "Quanto tenho livre pra gastar?"]
+  });
+}
+
 async function handlePlanningReadMessage(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
   const normalized = normalizeText(message);
   if (spendingReadPattern.test(normalized)) {
@@ -1735,6 +1824,14 @@ async function handlePlanningReadMessage(message: string, timeZone = DEFAULT_APP
 
   if (availableBudgetReadPattern.test(normalized)) {
     return buildAvailableBudgetSummaryResponse(message, timeZone);
+  }
+
+  if (incomeReadPattern.test(normalized)) {
+    return buildIncomeSummaryResponse(message, timeZone);
+  }
+
+  if (balanceReadPattern.test(normalized)) {
+    return buildBalanceSummaryResponse(message, timeZone);
   }
 
   return null;

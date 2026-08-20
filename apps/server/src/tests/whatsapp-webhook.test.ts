@@ -8,7 +8,7 @@ import { runWithAuthContext } from "../auth/auth-context";
 import { listDividends } from "../repositories/investment.repository";
 import { listAllMonthlyExpenses } from "../repositories/monthly-planning.repository";
 import { createBootstrapAdmin, getUserForAuthContext } from "../services/auth.service";
-import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
+import { addMonthlyExpense, addMonthlyIncomeEntry, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { createWhatsAppConnectionCode, disconnectWhatsAppIntegration } from "../services/whatsapp-link.service";
 
 const originalFetch = globalThis.fetch;
@@ -429,15 +429,31 @@ test("whatsapp webhook answers planning reads with real August 2026 data", async
         recurring: false,
         status: "planned"
       });
+      await addMonthlyIncomeEntry(plan.id, {
+        description: "Freelance",
+        amountInCents: 80000,
+        category: "Freelance",
+        date: "2026-08-20",
+        time: "18:00",
+        status: "received",
+        incomeType: "single",
+        recurring: false
+      });
     });
 
     const spent = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "quanto gastei esse mes?"));
     const available = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "quanto tenho livre pra gastar ainda?"));
+    const earned = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "quanto ganhei esse mes?"));
+    const balance = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "qual meu saldo?"));
     const payloadBodies = sentMessages.map((message) => JSON.stringify(message));
 
     assert.equal(spent.status, 200);
     assert.equal(available.status, 200);
+    assert.equal(earned.status, 200);
+    assert.equal(balance.status, 200);
     assert.equal(payloadBodies.some((body) => body.includes("Voce ja gastou R$ 100,00")), true);
+    assert.equal(payloadBodies.some((body) => body.includes("renda total considerada pelo planejamento esta em R$ 5.800,00")), true);
+    assert.equal(payloadBodies.some((body) => body.includes("saldo atual esta em R$ 5.700,00")), true);
     assert.equal(payloadBodies.some((body) => body.includes("Ainda nao encontrei dados")), false);
   } finally {
     restore();

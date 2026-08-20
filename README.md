@@ -238,13 +238,15 @@ Recommended Vercel configuration:
 
 Required variable:
 
-- `VITE_API_URL=https://YOUR-RAILWAY-DOMAIN`
+- `VITE_API_URL=https://YOUR-VERCEL-DOMAIN`
 
 Do not add backend secrets to Vercel. After Vercel deploys, copy the Vercel domain and update `FRONTEND_URL` in Railway. If you use explicit preview URLs, add them to `FRONTEND_URLS` as a comma-separated list.
 
-When the frontend is hosted on a different site than the API, such as Vercel calling Railway, keep backend authentication cookies on `SameSite=None` with `Secure=true`. The backend also exposes `X-CSRF-Token` for the SPA so authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests keep CSRF protection without exposing the session cookie.
+For production, configure the SPA to call its own Vercel origin and let `apps/client/vercel.json` proxy `/api/*` to Railway. This keeps session and CSRF cookies first-party in the browser, which is important for Safari/iOS.
 
-`apps/client/vercel.json` rewrites every route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` work with React Router.
+Keep backend authentication cookies on `SameSite=None` with `Secure=true`. The backend also exposes `X-CSRF-Token` for the SPA so authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests keep CSRF protection without exposing the session cookie.
+
+`apps/client/vercel.json` proxies `/api/*` to Railway before rewriting every other route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` still work with React Router.
 
 ## Favicon E Cache
 
@@ -265,7 +267,7 @@ The Vite frontend serves favicon files from `apps/client/public`, and Vercel cop
 6. Generate or copy the Railway public domain.
 7. Test `GET /api/health`.
 8. Create the Vercel project with root `apps/client`.
-9. Add `VITE_API_URL=https://YOUR-RAILWAY-DOMAIN`.
+9. Add `VITE_API_URL=https://YOUR-VERCEL-DOMAIN`.
 10. Deploy the frontend.
 11. Copy the Vercel production domain.
 12. Update `FRONTEND_URL` in Railway with the Vercel domain.

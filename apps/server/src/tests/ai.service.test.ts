@@ -17,7 +17,7 @@ import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../reposito
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
 import { handleAssistantCommand } from "../services/assistant-command.service";
 import { createDividendRecord } from "../services/dividend.service";
-import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
+import { addMonthlyExpense, addMonthlyIncomeEntry, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { getSettings } from "../services/portfolio.service";
 import { clearCoinGeckoCachesForTests } from "../services/coingecko-client";
 
@@ -164,6 +164,8 @@ test("AI intent classifier routes common requests to specific contexts", () => {
   assert.equal(detectConversationIntent("como estao meus aportes?"), "contributions");
   assert.equal(detectConversationIntent("como estao meus investimentos?"), "investments");
   assert.equal(detectConversationIntent("quanto gastei esse mes?"), "expenses");
+  assert.equal(detectConversationIntent("qual meu saldo?"), "expenses");
+  assert.equal(detectConversationIntent("quanto ganhei esse mes?"), "expenses");
   assert.equal(detectConversationIntent("analise minha carteira"), "investments");
   assert.equal(detectConversationIntent("como esta minha rentabilidade?"), "investments");
   assert.equal(detectConversationIntent("quanto tenho investido?"), "investments");
@@ -498,7 +500,7 @@ test("expense command infers lunch description, category and Sao Paulo local tim
   });
 });
 
-test("planning read queries use authoritative monthly overview data", async () => {
+test("planning read queries use authoritative monthly overview data for spending, income and balance", async () => {
   const userId = `assistant-planning-read-${randomUUID()}`;
 
   await asUser(userId, async () => {
@@ -524,9 +526,21 @@ test("planning read queries use authoritative monthly overview data", async () =
       recurring: false,
       status: "planned"
     });
+    await addMonthlyIncomeEntry(plan.id, {
+      description: "Freelance",
+      amountInCents: 80000,
+      category: "Freelance",
+      date: "2026-08-20",
+      time: "18:00",
+      status: "received",
+      incomeType: "single",
+      recurring: false
+    });
 
     const spent = await handleOperationalChatMessage({ sessionId: `planning-read-spent-${randomUUID()}`, message: "quanto gastei esse mes?" });
     const available = await handleOperationalChatMessage({ sessionId: `planning-read-available-${randomUUID()}`, message: "quanto tenho livre pra gastar ainda?" });
+    const earned = await handleOperationalChatMessage({ sessionId: `planning-read-earned-${randomUUID()}`, message: "quanto ganhei esse mes?" });
+    const balance = await handleOperationalChatMessage({ sessionId: `planning-read-balance-${randomUUID()}`, message: "qual meu saldo?" });
 
     assert.equal(spent.handled, true);
     assert.equal(spent.response.responseType, "summary");
@@ -537,6 +551,16 @@ test("planning read queries use authoritative monthly overview data", async () =
     assert.equal(available.response.responseType, "summary");
     assert.match(available.response.message, /R\$/);
     assert.doesNotMatch(available.response.message, /nao encontrei dados|ainda nao/i);
+
+    assert.equal(earned.handled, true);
+    assert.equal(earned.response.responseType, "summary");
+    assert.match(earned.response.message, /R\$\s?5\.800,00/);
+    assert.match(JSON.stringify(earned.response.sections), /Entradas extras recebidas/);
+
+    assert.equal(balance.handled, true);
+    assert.equal(balance.response.responseType, "summary");
+    assert.match(balance.response.message, /saldo atual/i);
+    assert.match(JSON.stringify(balance.response.sections), /Saldo apos previstos/);
   });
 });
 
@@ -585,6 +609,68 @@ test("planning read queries stay isolated per user", async () => {
   assert.doesNotMatch(userAResponse.response.message, /R\$\s?300,00/);
   assert.match(userBResponse.response.message, /R\$\s?300,00/);
   assert.doesNotMatch(userBResponse.response.message, /R\$\s?100,00/);
+});
+
+test("planning read queries return empty only for the user without data", async () => {
+  const userA = `assistant-planning-empty-a-${randomUUID()}`;
+  const userB = `assistant-planning-empty-b-${randomUUID()}`;
+
+  await asUser(userA, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 420000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+  });
+
+  const userAResponse = expectHandled(
+    await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-income-a-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
+  );
+  const userBResponse = expectHandled(
+    await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-income-b-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
+  );
+
+  assert.doesNotMatch(userAResponse.response.message, /ainda nao encontrei dados/i);
+  assert.match(userBResponse.response.message, /ainda nao encontrei dados/i);
+});
+
+test("planning read queries respect the Sao Paulo month near the UTC month boundary", async () => {
+  const userId = `assistant-planning-timezone-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 300000, categories: monthlyPlanCategories() });
+    const septemberPlan = await saveMonthlyPlan({ year: 2026, month: 9, incomeInCents: 300000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    assert.ok(septemberPlan.id);
+
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "alimentacao",
+      description: "Jantar de agosto",
+      amountInCents: 9000,
+      date: "2026-08-20",
+      time: "09:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+
+    await addMonthlyExpense(septemberPlan.id, {
+      categoryId: "alimentacao",
+      description: "Cafe de setembro",
+      amountInCents: 1500,
+      date: "2026-09-01",
+      time: "09:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+  });
+
+  await withMockedDate("2026-09-01T01:30:00.000Z", async () => {
+    const response = expectHandled(
+      await asUser(userId, () => handleOperationalChatMessage({ sessionId: `planning-read-timezone-${randomUUID()}`, message: "quanto gastei esse mes?" }))
+    );
+
+    assert.match(response.response.message, /R\$\s?90,00/);
+    assert.doesNotMatch(response.response.message, /R\$\s?15,00/);
+  });
 });
 
 test("paying a planned matching expense asks to mark it paid instead of duplicating it", async () => {
