@@ -249,7 +249,20 @@ function renderSections(lines: string[], structured: AiChatStructuredResponse) {
 }
 
 function renderSuggestions(lines: string[], structured: AiChatStructuredResponse) {
-  const suggestions = (structured.suggestions ?? []).map((suggestion) => compact(suggestion)).filter(Boolean).slice(0, 4);
+  const title = compact(structured.title).toLowerCase();
+  const message = compact(structured.message).toLowerCase();
+  const suggestions = (structured.suggestions ?? [])
+    .map((suggestion) => compact(suggestion))
+    .filter(Boolean)
+    .filter((suggestion) => {
+      const normalized = suggestion.toLowerCase();
+      if (normalized === title || normalized === message) return false;
+      if (/^(qual informacao voce precisa|qual informação você precisa|como posso ajudar|o que voce quer ver|o que você quer ver)\??$/i.test(suggestion)) {
+        return false;
+      }
+      return true;
+    })
+    .slice(0, 4);
   if (suggestions.length === 0) return;
   if (
     structured.pendingAction?.status === "collecting" &&

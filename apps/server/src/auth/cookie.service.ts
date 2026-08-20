@@ -36,11 +36,22 @@ function normalizeOrigin(origin: string) {
   return origin.trim().replace(/\/+$/, "");
 }
 
+function resolveRequestProtocol(request: Request) {
+  return (readHeaderValue(request.headers["x-forwarded-proto"]) || request.protocol || "http")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+}
+
 function resolveRequestOrigin(request: Request) {
-  const protocol = readHeaderValue(request.headers["x-forwarded-proto"]) || request.protocol || "http";
+  const protocol = resolveRequestProtocol(request);
   const host = readHeaderValue(request.headers["x-forwarded-host"]) || readHeaderValue(request.headers.host);
   if (!host) return "";
   return normalizeOrigin(`${protocol}://${host}`);
+}
+
+function isSecureRequest(request: Request) {
+  return resolveRequestProtocol(request) === "https";
 }
 
 function shouldUseCrossSiteCookiePolicy(request: Request) {
@@ -58,7 +69,7 @@ function resolveCookiePolicy(request: Request) {
   }
 
   return {
-    secure: env.authCookieSecure,
+    secure: env.authCookieSecure || isSecureRequest(request),
     sameSite: env.authCookieSameSite
   };
 }

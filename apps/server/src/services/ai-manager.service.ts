@@ -33,6 +33,7 @@ import {
 import { badRequest, notFound, HttpError } from "../utils/http-error";
 import { handleOperationalChatMessage } from "../ai/tools/ai-action-tools";
 import { createErrorResponse, createStructuredResponse, createTextResponse } from "../ai/utils/ai-structured-response";
+import { resolveAssistantConversationState } from "../ai/orchestrator/assistant-conversation-state";
 
 const analysisContextTokenBudget = 1900;
 const chatContextTokenBudget = 1500;
@@ -346,7 +347,12 @@ export async function sendChatMessage(sessionId: string, content: string, option
   }
 
   const userMessage = await addAiChatMessage({ sessionId, role: "user", content, externalMessageId: options.externalMessageId ?? "" });
-  const operational = await handleOperationalChatMessage({ sessionId, message: content, messageId: userMessage.id });
+  const operational = await handleOperationalChatMessage({
+    sessionId,
+    message: content,
+    messageId: userMessage.id,
+    conversationState: resolveAssistantConversationState(session.assistantContext ?? null)
+  });
   if (operational.handled) {
     const assistantMessage = await addAiChatMessage({
       sessionId,
@@ -358,7 +364,11 @@ export async function sendChatMessage(sessionId: string, content: string, option
       model: "deterministic",
       durationMs: 0
     });
-    await updateAiChatSession(sessionId, { title: session.title === "Nova conversa" ? buildSessionTitle(content) : session.title, updatedAt: new Date() });
+    await updateAiChatSession(sessionId, {
+      title: session.title === "Nova conversa" ? buildSessionTitle(content) : session.title,
+      updatedAt: new Date(),
+      assistantContext: operational.sessionContext ?? null
+    });
     return {
       userMessage,
       assistantMessage,
@@ -446,7 +456,11 @@ export async function sendChatMessage(sessionId: string, content: string, option
     }
   }
 
-  await updateAiChatSession(sessionId, { title: session.title === "Nova conversa" ? buildSessionTitle(content) : session.title, updatedAt: new Date() });
+  await updateAiChatSession(sessionId, {
+    title: session.title === "Nova conversa" ? buildSessionTitle(content) : session.title,
+    updatedAt: new Date(),
+    assistantContext: null
+  });
   return {
     userMessage,
     assistantMessage,

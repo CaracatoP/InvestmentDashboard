@@ -82,7 +82,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return confirmed.user;
       } catch (error) {
         applyUser(null);
-        throw new Error("Login aceito, mas a sessao nao foi confirmada na requisicao seguinte. Verifique o dominio/API publicado e tente novamente.");
+        console.error("Login session confirmation failed after successful /auth/login.", error);
+        throw new Error(import.meta.env.PROD
+          ? "Nao foi possivel confirmar sua sessao agora. Tente novamente."
+          : "Login aceito, mas a sessao nao foi confirmada na requisicao seguinte. Verifique o dominio/API publicado e tente novamente.");
       }
     },
     register: authApi.register,

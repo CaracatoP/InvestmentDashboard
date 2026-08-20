@@ -180,7 +180,7 @@ Required variables:
 - `FRONTEND_URLS` optional for explicit preview URLs
 - `API_PUBLIC_URL=https://YOUR-RAILWAY-DOMAIN`
 - `AUTH_COOKIE_SECURE=true`
-- `AUTH_COOKIE_SAMESITE=none`
+- `AUTH_COOKIE_SAMESITE=lax`
 - `MARKET_DATA_PROVIDER=brapi`
 - `MARKET_DATA_API_KEY`
 - `MARKET_TIMEZONE=America/Sao_Paulo`
@@ -236,15 +236,15 @@ Recommended Vercel configuration:
 - Build Command: `npm run build`
 - Output Directory: `dist`
 
-Required variable:
+Recommended variable:
 
-- `VITE_API_URL=https://YOUR-VERCEL-DOMAIN`
+- `VITE_API_URL=` or `https://YOUR-VERCEL-DOMAIN`
 
 Do not add backend secrets to Vercel. After Vercel deploys, copy the Vercel domain and update `FRONTEND_URL` in Railway. If you use explicit preview URLs, add them to `FRONTEND_URLS` as a comma-separated list.
 
-For production, configure the SPA to call its own Vercel origin and let `apps/client/vercel.json` proxy `/api/*` to Railway. This keeps session and CSRF cookies first-party in the browser, which is important for Safari/iOS.
+For production, keep the SPA on its own Vercel origin and let `apps/client/vercel.json` proxy `/api/*` to Railway. The client prefers the current browser origin in production, even if an old cross-origin `VITE_API_URL` was left behind. This keeps session and CSRF cookies first-party in the browser, which is important for Safari/iOS.
 
-Keep backend authentication cookies on `SameSite=None` with `Secure=true`. The backend also exposes `X-CSRF-Token` for the SPA so authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests keep CSRF protection without exposing the session cookie.
+Keep backend authentication cookies on `Secure=true`. Use `AUTH_COOKIE_SAMESITE=lax` for the normal same-origin browser flow; the backend automatically upgrades to `SameSite=None` only when a request is truly cross-site. The backend also exposes `X-CSRF-Token` for the SPA so authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests keep CSRF protection without exposing the session cookie.
 
 `apps/client/vercel.json` proxies `/api/*` to Railway before rewriting every other route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` still work with React Router.
 
@@ -267,10 +267,10 @@ The Vite frontend serves favicon files from `apps/client/public`, and Vercel cop
 6. Generate or copy the Railway public domain.
 7. Test `GET /api/health`.
 8. Create the Vercel project with root `apps/client`.
-9. Add `VITE_API_URL=https://YOUR-VERCEL-DOMAIN`.
+9. Remove old `VITE_API_URL` values that point to Railway. Optionally set `VITE_API_URL=https://YOUR-VERCEL-DOMAIN`, or leave it empty to use the current origin automatically.
 10. Deploy the frontend.
 11. Copy the Vercel production domain.
-12. Update `FRONTEND_URL` in Railway with the Vercel domain.
+12. Update `FRONTEND_URL` in Railway with the Vercel domain and keep `NODE_ENV=production`.
 13. Redeploy the backend.
 14. Test the complete system in the browser.
 

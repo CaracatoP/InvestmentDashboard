@@ -6,6 +6,7 @@ const aiChatSessionSchema = new Schema(
     channel: { type: String, enum: ["web", "whatsapp"], default: "web", index: true },
     externalConversationId: { type: String, default: "", index: true },
     title: { type: String, required: true, trim: true },
+    assistantContext: { type: Schema.Types.Mixed, default: null },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true }
   },

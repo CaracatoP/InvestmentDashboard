@@ -44,10 +44,13 @@ import { createErrorResponse, createStructuredResponse } from "../utils/ai-struc
 import { DEFAULT_APP_TIME_ZONE, getTimeZoneNowFields, shiftDateKey } from "../../utils/timezone";
 import { aiToolCatalog, getAiToolCatalogEntry, getAiToolPrimaryRoute } from "./ai-tool-catalog";
 import { findKnownCryptoByQuery } from "../../services/ticker.service";
+import { orchestrateAssistantRead } from "../orchestrator/assistant-read-orchestrator";
+import type { AssistantConversationState } from "../orchestrator/assistant-conversation-state";
 
 type PreparedAction = {
   handled: true;
   response: AiChatStructuredResponse;
+  sessionContext?: AssistantConversationState | null;
 };
 
 type NoAction = {
@@ -58,6 +61,7 @@ type ToolInput = {
   sessionId: string;
   message: string;
   messageId?: string;
+  conversationState?: AssistantConversationState | null;
 };
 
 type ExtractedFields = Record<string, unknown>;
@@ -202,13 +206,16 @@ const selectionSearchStopWords = new Set([
   "agora", "hoje", "ontem"
 ]);
 
-const explicitReadIntentPattern = /^(quanto|como|quais|qual|analise|mostre|liste|listar|ver)\b/i;
+const explicitReadIntentPattern = /^(quanto|quantos|quantas|como|quais|qual|analise|mostre|liste|listar|ver)\b/i;
 const explicitWriteSwitchPattern = /^(gastei|gasto|despesa|recebi|vou receber|receber|registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|paguei|pagar|comprei|compre|vendi|venda|mude|troque|altere|atualize|minha renda|renda mensal)\b/i;
 const shortSelectionReplyPattern = /^(?:\d+|o\s+primeiro|o\s+segundo|o\s+terceiro|o\s+quarto|o\s+quinto|o\s+sexto|o\s+setimo|o\s+oitavo|primeiro|segundo|terceiro|quarto|quinto|sexto|setimo|s[eé]timo|oitavo|esse|esse\s+mes|desse\s+mes|o\s+desse\s+mes)$/i;
 const spendingReadPattern = /\b(quanto\s+(?:ja\s+)?gastei|gastei\s+quanto|total\s+gasto|gastos?\s+deste?\s+mes)\b/i;
 const availableBudgetReadPattern = /\b(livre\s+pra\s+gastar|livre\s+para\s+gastar|quanto\s+tenho\s+livre|quanto\s+ainda\s+posso\s+gastar|posso\s+gastar\s+por\s+dia)\b/i;
 const incomeReadPattern = /\b(quanto\s+(?:eu\s+)?ganhei|quanto\s+recebi\s+(?:nesse|neste|esse|este)\s+mes|receitas?\s+deste?\s+mes|renda\s+total\s+deste?\s+mes|entradas?\s+deste?\s+mes)\b/i;
 const balanceReadPattern = /\b(qual\s+e\s+(?:o\s+)?meu\s+saldo|meu\s+saldo|saldo\s+atual|saldo\s+disponivel|quanto\s+tenho\s+disponivel)\b/i;
+const summaryReadIntentPattern = /^(me\s+resume|minha\s+situacao\s+financeira|resumo\s+financeiro)\b/i;
+const followUpReadIntentPattern = /^(e|e em|e no|e na|e do|e da|e mes|e mês|e ano|e agora|e quanto|e qual)\b/i;
+const paymentStatusReadPattern = /\bja\s+paguei\b|\best[aá]\s+pago\b/i;
 
 const semanticCategoryGroups = [
   {
@@ -2764,6 +2771,19 @@ function isExplicitIntentSwitchDuringCollection(message: string) {
   return explicitWriteSwitchPattern.test(normalized);
 }
 
+function shouldAttemptDeterministicRead(message: string, conversationState?: AssistantConversationState | null) {
+  const normalized = normalizeText(message.trim());
+  if (!normalized) return false;
+  if (followUpReadIntentPattern.test(normalized)) return Boolean(conversationState);
+  if (/^se eu\b/.test(normalized)) return true;
+  if (summaryReadIntentPattern.test(normalized)) return true;
+  if (explicitReadIntentPattern.test(normalized)) return true;
+  if (spendingReadPattern.test(normalized) || availableBudgetReadPattern.test(normalized) || incomeReadPattern.test(normalized) || balanceReadPattern.test(normalized)) {
+    return true;
+  }
+  return paymentStatusReadPattern.test(normalized);
+}
+
 async function updateCollectingAction(action: AiPendingActionRecord, message: string) {
   if (!action.id) return createErrorResponse("Acao pendente invalida.");
   const timeZone = await resolveCurrentAssistantTimeZone();
@@ -3115,7 +3135,7 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   const normalized = normalizeText(input.message);
 
   if (!activeAction && confirmationPattern.test(input.message)) {
-    return { handled: true, response: createErrorResponse("Nao ha uma acao pendente ativa para confirmar. Envie o pedido novamente.") };
+    return { handled: true, response: createErrorResponse("Nao ha uma acao pendente ativa para confirmar. Envie o pedido novamente."), sessionContext: null };
   }
 
   if (activeAction && cancelPattern.test(input.message)) {
@@ -3129,15 +3149,15 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
       sanitizedInput: activeAction.extractedFields,
       status: "cancelled"
     });
-    return { handled: true, response: createStructuredResponse({ responseType: "text", message: "Operacao cancelada com seguranca." }) };
+    return { handled: true, response: createStructuredResponse({ responseType: "text", message: "Operacao cancelada com seguranca." }), sessionContext: null };
   }
 
   if (activeAction && confirmationPattern.test(input.message) && activeAction.status === "awaiting_confirmation") {
-    return { handled: true, response: await executeTool(activeAction, input.messageId) };
+    return { handled: true, response: await executeTool(activeAction, input.messageId), sessionContext: null };
   }
 
   if (activeAction && confirmationPattern.test(input.message)) {
-    return { handled: true, response: actionResponse(activeAction, "Ainda faltam campos obrigatorios antes da confirmacao.") };
+    return { handled: true, response: actionResponse(activeAction, "Ainda faltam campos obrigatorios antes da confirmacao."), sessionContext: null };
   }
 
   if (activeAction?.status === "collecting") {
@@ -3148,19 +3168,41 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
         toolName: activeAction.toolName
       });
     } else {
-      return { handled: true, response: await updateCollectingAction(activeAction, input.message) };
+      return { handled: true, response: await updateCollectingAction(activeAction, input.message), sessionContext: null };
     }
   }
 
   const timeZone = await resolveCurrentAssistantTimeZone();
+  if (shouldAttemptDeterministicRead(input.message, input.conversationState ?? null)) {
+    const orchestratedRead = await orchestrateAssistantRead({
+      message: input.message,
+      timeZone,
+      conversationState: input.conversationState ?? null
+    });
+    if (orchestratedRead) {
+      logAssistantDiagnostic("assistant-read-plan", {
+        queryKind: orchestratedRead.plan.queryKind,
+        topic: orchestratedRead.plan.topic,
+        toolCount: orchestratedRead.capabilityNames.length,
+        tools: orchestratedRead.capabilityNames,
+        period: orchestratedRead.plan.period?.label ?? null,
+        entityType: orchestratedRead.plan.marketEntityType ?? orchestratedRead.plan.assetClass ?? orchestratedRead.plan.categoryId ?? null
+      });
+      return {
+        handled: true,
+        response: orchestratedRead.response,
+        sessionContext: orchestratedRead.conversationState
+      };
+    }
+  }
   const planningReadResponse = await handlePlanningReadMessage(input.message, timeZone);
   if (planningReadResponse) {
-    return { handled: true, response: planningReadResponse };
+    return { handled: true, response: planningReadResponse, sessionContext: null };
   }
 
   const cryptoReadResponse = await handleCryptoReadMessage(input.message);
   if (cryptoReadResponse) {
-    return { handled: true, response: cryptoReadResponse };
+    return { handled: true, response: cryptoReadResponse, sessionContext: null };
   }
 
   if (explicitReadIntentPattern.test(normalized)) return { handled: false };
@@ -3172,7 +3214,8 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
       response: actionResponse(
         activeAction,
         "Ja existe uma operacao aguardando confirmacao. Confirme ou cancele essa acao antes de criar outra."
-      )
+      ),
+      sessionContext: null
     };
   }
 
@@ -3197,5 +3240,5 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   else if (/(meta|objetivo)/.test(normalized)) response = await prepareGoal(input.sessionId, input.message);
   else if (/(gastei|gasto|despesa|assinatura|gasolina|spotify|mercado|uber)/.test(normalized)) response = await prepareExpense(input.sessionId, input.message);
 
-  return response ? { handled: true, response } : { handled: false };
+  return response ? { handled: true, response, sessionContext: null } : { handled: false };
 }

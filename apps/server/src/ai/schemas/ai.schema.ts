@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AssistantConversationState } from "../orchestrator/assistant-conversation-state";
 
 export const aiAnalysisTypes = ["complete", "planning", "investments", "category", "goals", "projections"] as const;
 export type AiAnalysisType = (typeof aiAnalysisTypes)[number];
@@ -239,6 +240,7 @@ export interface AiChatSessionRecord {
   channel?: "web" | "whatsapp";
   externalConversationId?: string;
   title: string;
+  assistantContext?: AssistantConversationState | null;
   createdAt: string | Date;
   updatedAt: string | Date;
 }

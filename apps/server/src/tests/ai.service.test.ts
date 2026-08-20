@@ -1418,10 +1418,13 @@ test("assistant reuses an expected dividend from the same month even without an 
   });
 });
 
-test("investment read questions remain non-operational", async () => {
+test("investment read questions are answered deterministically without creating pending actions", async () => {
   const result = await handleOperationalChatMessage({ sessionId: "ai-action-read-dividends", message: "Quanto recebi de dividendos recentemente?" });
+  const action = await findActiveAiPendingAction("ai-action-read-dividends");
 
-  assert.equal(result.handled, false);
+  assert.equal(result.handled, true);
+  assert.equal(result.response.responseType, "summary");
+  assert.equal(action, null);
 });
 
 test("manual average price update is rejected without pending action", async () => {

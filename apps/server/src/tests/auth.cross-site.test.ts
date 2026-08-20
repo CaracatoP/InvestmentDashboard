@@ -73,8 +73,12 @@ test("cross-site auth issues secure cookies, exposes the CSRF token, and keeps t
     assert.match(sessionCookie, /HttpOnly/i);
     assert.match(sessionCookie, /Secure/i);
     assert.match(sessionCookie, /SameSite=None/i);
+    assert.match(sessionCookie, /Path=\//i);
+    assert.doesNotMatch(sessionCookie, /;\s*Domain=/i);
     assert.match(csrfCookie, /Secure/i);
     assert.match(csrfCookie, /SameSite=None/i);
+    assert.match(csrfCookie, /Path=\//i);
+    assert.doesNotMatch(csrfCookie, /;\s*Domain=/i);
 
     const cookieHeader = buildCookieHeader(loginResponse);
     const csrfToken = loginResponse.headers.get("x-csrf-token");
@@ -131,7 +135,7 @@ test("cross-site auth issues secure cookies, exposes the CSRF token, and keeps t
   }
 });
 
-test("same-origin auth keeps the session across /auth/me and private endpoints without CORS headers", async () => {
+test("same-origin proxy auth keeps host-only secure cookies across /auth/me and private endpoints", async () => {
   const server = await listenForTest();
 
   try {
@@ -143,26 +147,46 @@ test("same-origin auth keeps the session across /auth/me and private endpoints w
     const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: {
-        "content-type": "application/json"
+        "content-type": "application/json",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "investment-dashboard-client.vercel.app"
       },
       body: JSON.stringify({ email, password })
     });
 
     assert.equal(loginResponse.status, 200);
+    const cookies = getSetCookies(loginResponse);
+    const sessionCookie = cookies.find((cookie) => cookie.startsWith("invest_hub_session="));
+    const csrfCookie = cookies.find((cookie) => cookie.startsWith("invest_hub_csrf="));
+    assert.ok(sessionCookie);
+    assert.ok(csrfCookie);
+    assert.match(sessionCookie, /HttpOnly/i);
+    assert.match(sessionCookie, /Secure/i);
+    assert.match(sessionCookie, /SameSite=Lax/i);
+    assert.match(sessionCookie, /Path=\//i);
+    assert.doesNotMatch(sessionCookie, /;\s*Domain=/i);
+    assert.match(csrfCookie, /Secure/i);
+    assert.match(csrfCookie, /SameSite=Lax/i);
+    assert.match(csrfCookie, /Path=\//i);
+    assert.doesNotMatch(csrfCookie, /;\s*Domain=/i);
     const cookieHeader = buildCookieHeader(loginResponse);
     const csrfToken = loginResponse.headers.get("x-csrf-token");
     assert.ok(csrfToken);
 
     const meResponse = await fetch(`${baseUrl}/api/auth/me`, {
       headers: {
-        Cookie: cookieHeader
+        Cookie: cookieHeader,
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "investment-dashboard-client.vercel.app"
       }
     });
     assert.equal(meResponse.status, 200);
 
     const settingsResponse = await fetch(`${baseUrl}/api/settings`, {
       headers: {
-        Cookie: cookieHeader
+        Cookie: cookieHeader,
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "investment-dashboard-client.vercel.app"
       }
     });
     assert.equal(settingsResponse.status, 200);
