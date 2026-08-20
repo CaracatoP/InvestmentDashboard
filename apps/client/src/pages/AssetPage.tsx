@@ -9,7 +9,7 @@ import { StatCard } from "../components/ui/StatCard";
 import { fetchAsset, fetchAssetPriceHistory, prefetchAssetPriceHistory } from "../services/api";
 import { onWorkspaceCacheInvalidated } from "../services/cache-invalidation";
 import type { AssetDetails, AssetPriceHistoryResponse } from "../types/investments";
-import { formatCurrency, formatPercentage } from "../utils/formatters";
+import { formatCurrency, formatPercentage, formatQuantity } from "../utils/formatters";
 import { BadgePercent, Coins, Layers3, TrendingUp, Wallet } from "lucide-react";
 
 const priceRanges = [
@@ -146,12 +146,12 @@ export function AssetPage() {
       </p>
 
       <section className="stat-card-grid">
-        <StatCard label="Preco medio" value={formatCurrency(asset.averagePrice)} detail={`${asset.quantity} unidades`} icon={<TrendingUp size={18} />} tone="blue" />
+        <StatCard label="Preco medio" value={formatCurrency(asset.averagePrice)} detail={`${formatQuantity(asset.quantity)} unidades`} icon={<TrendingUp size={18} />} tone="blue" />
         <StatCard label="Preco atual" value={currentPrice} detail={currentValue} icon={<Wallet size={18} />} />
         <StatCard label="Lucro" value={profit !== null && profit !== undefined ? formatCurrency(profit) : "Indisponivel"} detail={profitability !== null && profitability !== undefined ? formatPercentage(profitability) : "Indisponivel"} icon={<BadgePercent size={18} />} tone="violet" />
         <StatCard label="Rentabilidade" value={profitability !== null && profitability !== undefined ? formatPercentage(profitability) : "Indisponivel"} detail={`${formatPercentage(asset.weightPercent ?? asset.portfolioWeight)} da carteira`} icon={<BadgePercent size={18} />} tone="amber" />
         <StatCard label="Dividendos recebidos" value={formatCurrency(asset.dividendsReceived)} detail={formatPercentage(asset.dividendYield)} icon={<Coins size={18} />} />
-        <StatCard label="Quantidade" value={String(asset.quantity)} detail="Posicao atual" icon={<Layers3 size={18} />} tone="blue" />
+        <StatCard label="Quantidade" value={formatQuantity(asset.quantity)} detail="Posicao atual" icon={<Layers3 size={18} />} tone="blue" />
         <StatCard label="Valor investido" value={formatCurrency(asset.totalInvested ?? asset.investedValue)} detail="Calculado por operacoes" icon={<Wallet size={18} />} tone="violet" />
         <StatCard label="Valor atual" value={currentValue} detail="Quantidade x preco atual" icon={<TrendingUp size={18} />} />
       </section>

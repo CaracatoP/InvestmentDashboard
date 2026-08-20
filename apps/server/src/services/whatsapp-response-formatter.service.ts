@@ -126,6 +126,8 @@ function renderPrimaryMessage(lines: string[], structured: AiChatStructuredRespo
 }
 
 function renderPendingFields(lines: string[], structured: AiChatStructuredResponse) {
+  if (!structured.pendingAction || structured.pendingAction.status === "executed") return;
+  if (!["confirmation", "form"].includes(structured.responseType)) return;
   const fields = structured.pendingAction?.fields ?? [];
   if (fields.length === 0) return;
 
@@ -138,6 +140,7 @@ function renderPendingFields(lines: string[], structured: AiChatStructuredRespon
 }
 
 function renderPendingSelection(lines: string[], structured: AiChatStructuredResponse) {
+  if (!structured.pendingAction || structured.pendingAction.status === "executed") return;
   const missingField = structured.pendingAction?.missingFields?.[0];
   if (!missingField) return;
 
@@ -152,6 +155,10 @@ function renderPendingSelection(lines: string[], structured: AiChatStructuredRes
     return;
   }
 
+  if (compact(structured.message).toLowerCase().includes(compact(missingField.label).toLowerCase())) {
+    return;
+  }
+
   lines.push("");
   lines.push(`Informe: ${missingField.label}`);
 }
@@ -162,8 +169,40 @@ function renderSectionTitle(lines: string[], title?: string) {
   lines.push(`*${compact(title)}*`);
 }
 
+function isBoilerplatePendingAlert(section: NonNullable<AiChatStructuredResponse["sections"]>[number], structured: AiChatStructuredResponse) {
+  if (section.type !== "alert") return false;
+  const firstItem = section.items?.[0];
+  if (!firstItem) return false;
+  return compact(firstItem.title).toLowerCase() === "campo pendente" && compact(firstItem.description) === compact(structured.message);
+}
+
+function isDuplicatePendingList(section: NonNullable<AiChatStructuredResponse["sections"]>[number], structured: AiChatStructuredResponse) {
+  if (section.type !== "list") return false;
+  const missingField = structured.pendingAction?.missingFields?.[0];
+  const optionLabels = (missingField?.options ?? []).map((option) => compact(option.label));
+  const itemLabels = (section.items ?? []).map((item) => compact(item.title));
+  return optionLabels.length > 0 && optionLabels.join("|") === itemLabels.join("|");
+}
+
+function isDuplicatePendingMetrics(section: NonNullable<AiChatStructuredResponse["sections"]>[number], structured: AiChatStructuredResponse) {
+  if (section.type !== "metrics") return false;
+  if (structured.pendingAction?.status === "executed") return false;
+  const pendingFields = structured.pendingAction?.fields ?? [];
+  const metrics = section.metrics ?? [];
+  if (pendingFields.length === 0 || metrics.length === 0 || pendingFields.length !== metrics.length) return false;
+
+  return pendingFields.every((field, index) => {
+    const metric = metrics[index];
+    return compact(field.label) === compact(metric.label) && compact(field.value) === compact(metric.value);
+  });
+}
+
 function renderSections(lines: string[], structured: AiChatStructuredResponse) {
   for (const section of structured.sections ?? []) {
+    if (isBoilerplatePendingAlert(section, structured)) continue;
+    if (isDuplicatePendingList(section, structured)) continue;
+    if (isDuplicatePendingMetrics(section, structured)) continue;
+
     if (section.type === "text" && section.content) {
       renderSectionTitle(lines, section.title);
       lines.push(compact(section.content));
@@ -212,6 +251,12 @@ function renderSections(lines: string[], structured: AiChatStructuredResponse) {
 function renderSuggestions(lines: string[], structured: AiChatStructuredResponse) {
   const suggestions = (structured.suggestions ?? []).map((suggestion) => compact(suggestion)).filter(Boolean).slice(0, 4);
   if (suggestions.length === 0) return;
+  if (
+    structured.pendingAction?.status === "collecting" &&
+    suggestions.every((suggestion) => ["responda com o numero ou com o nome", "cancelar"].includes(suggestion.toLowerCase()))
+  ) {
+    return;
+  }
 
   lines.push("");
   lines.push("*Sugestoes*");

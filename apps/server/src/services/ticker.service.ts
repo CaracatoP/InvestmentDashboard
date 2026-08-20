@@ -117,19 +117,20 @@ export function resolveKnownCryptoIdentity(input: { ticker?: string | null; name
   const normalizedTicker = input.ticker ? normalizeTicker(input.ticker) : "";
   const normalizedName = input.name ? normalizeText(input.name) : "";
 
-  return (
-    knownCryptoAssets.find((asset) => {
-      if (normalizedTicker && asset.symbol === normalizedTicker) {
-        return !normalizedName || normalizeText(asset.name) === normalizedName;
-      }
+  const tickerMatch = normalizedTicker
+    ? knownCryptoAssets.find((asset) => asset.symbol === normalizedTicker)
+    : null;
+  if (tickerMatch) {
+    const knownNames = [tickerMatch.name, tickerMatch.symbol, tickerMatch.coingeckoId, ...tickerMatch.aliases].map(normalizeText);
+    if (!normalizedName || knownNames.includes(normalizedName)) return tickerMatch;
+  }
 
-      if (normalizedName && normalizeText(asset.name) === normalizedName) {
-        return !normalizedTicker || asset.symbol === normalizedTicker;
-      }
+  const nameMatch = normalizedName
+    ? knownCryptoAssets.find((asset) => [asset.name, asset.symbol, asset.coingeckoId, ...asset.aliases].map(normalizeText).includes(normalizedName))
+    : null;
+  if (nameMatch && (!normalizedTicker || nameMatch.symbol === normalizedTicker)) return nameMatch;
 
-      return false;
-    }) ?? null
-  );
+  return null;
 }
 
 export function findKnownCryptoByQuery(query: string) {

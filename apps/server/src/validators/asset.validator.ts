@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveKnownCryptoIdentity } from "../services/ticker.service";
 
 const assetBaseSchema = z.object({
   name: z.string().min(2),
@@ -11,7 +12,13 @@ const assetBaseSchema = z.object({
   active: z.boolean().default(true)
 });
 
-export const assetSchema = assetBaseSchema.superRefine((input, context) => {
+function withKnownCryptoIdentity<T extends z.infer<typeof assetBaseSchema>>(input: T): T {
+  if (input.category !== "CRIPTO" || input.coingeckoId) return input;
+  const known = resolveKnownCryptoIdentity({ ticker: input.ticker, name: input.name });
+  return known ? { ...input, coingeckoId: known.coingeckoId } : input;
+}
+
+export const assetSchema = assetBaseSchema.transform(withKnownCryptoIdentity).superRefine((input, context) => {
   if (input.category === "CRIPTO" && !input.coingeckoId) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -21,7 +28,11 @@ export const assetSchema = assetBaseSchema.superRefine((input, context) => {
   }
 });
 
-export const assetUpdateSchema = assetBaseSchema.partial().superRefine((input, context) => {
+export const assetUpdateSchema = assetBaseSchema.partial().transform((input) => {
+  if (input.category !== "CRIPTO" || input.coingeckoId || !input.ticker) return input;
+  const known = resolveKnownCryptoIdentity({ ticker: input.ticker, name: input.name });
+  return known ? { ...input, coingeckoId: known.coingeckoId } : input;
+}).superRefine((input, context) => {
   if (input.category === "CRIPTO" && !input.coingeckoId) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

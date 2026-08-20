@@ -60,6 +60,7 @@ export const env = {
   marketDataApiKey: process.env.MARKET_DATA_API_KEY ?? "",
   coingeckoApiKey: process.env.COINGECKO_API_KEY ?? "",
   coingeckoApiBaseUrl: process.env.COINGECKO_API_BASE_URL ?? "https://api.coingecko.com/api/v3",
+  coingeckoPriceCacheTtlSeconds: parseNumber(process.env.COINGECKO_PRICE_CACHE_TTL_SECONDS, 60),
   marketTimezone: process.env.MARKET_TIMEZONE ?? "America/Sao_Paulo",
   marketRefreshHours: parseList(process.env.MARKET_REFRESH_HOURS ?? "10:00,12:00,14:00,17:00"),
   marketHistoryCacheTtlMinutes: parseNumber(process.env.MARKET_HISTORY_CACHE_TTL_MINUTES, -1),

@@ -67,6 +67,13 @@ export function formatPercentage(value: number) {
   return percentFormatter.format(value / 100);
 }
 
+export function formatQuantity(value: number, maximumFractionDigits = 8) {
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits
+  }).format(value);
+}
+
 export function toDateKey(value: string | Date) {
   if (typeof value === "string") {
     const match = value.match(/^(\d{4}-\d{2}-\d{2})/);

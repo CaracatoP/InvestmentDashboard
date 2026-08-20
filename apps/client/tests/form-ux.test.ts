@@ -76,3 +76,12 @@ test("destructive flows include contextual confirmation copy", () => {
   assert.match(settingsSource, /title="Desconectar WhatsApp\?"/);
   assert.match(settingsSource, /confirmLabel="Desconectar WhatsApp"/);
 });
+
+test("settings exposes the official Invest Hub WhatsApp CTA through a centralized link", () => {
+  const settingsSource = readSource("src/pages/SettingsPage.tsx");
+  const linksSource = readSource("src/constants/external-links.ts");
+
+  assert.match(linksSource, /export const INVEST_HUB_WHATSAPP_URL = "https:\/\/w\.app\/cky5ld";/);
+  assert.match(settingsSource, /INVEST_HUB_WHATSAPP_URL/);
+  assert.match(settingsSource, /Abrir WhatsApp do Invest Hub/);
+});

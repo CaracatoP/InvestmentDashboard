@@ -5,11 +5,16 @@ import {
   completeMonthlyExpense,
   completeMonthlyIncomeEntry,
   getLocalTimestampWithOffset,
+  getMonthlyPlanningOverview,
   getOrCreateMonthlyPlan,
+  parseLocalExpenseDate,
   saveMonthlyPlan
 } from "../../services/monthly-planning.service";
-import { registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
+import { getAuthContext, SYSTEM_USER_ID } from "../../auth/auth-context";
+import { getUserForAuthContext } from "../../services/auth.service";
+import { getPortfolio, registerContribution, registerGoal, updateSettings } from "../../services/portfolio.service";
 import { findMatchingExpectedDividend, markDividendReceived, registerReceivedDividend } from "../../services/dividend.service";
+import { getCryptoMarketQuoteByQuery } from "../../services/market-data.service";
 import { findMonthlyPlanById, listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../../repositories/monthly-planning.repository";
 import {
   createOperation,
@@ -36,7 +41,9 @@ import type {
   AiToolName
 } from "../schemas/ai.schema";
 import { createErrorResponse, createStructuredResponse } from "../utils/ai-structured-response";
+import { DEFAULT_APP_TIME_ZONE, getTimeZoneNowFields, shiftDateKey } from "../../utils/timezone";
 import { aiToolCatalog, getAiToolCatalogEntry, getAiToolPrimaryRoute } from "./ai-tool-catalog";
+import { findKnownCryptoByQuery } from "../../services/ticker.service";
 
 type PreparedAction = {
   handled: true;
@@ -56,6 +63,31 @@ type ToolInput = {
 type ExtractedFields = Record<string, unknown>;
 type MissingField = AiPendingActionRecord["missingFields"][number];
 type AiAffectedEntity = NonNullable<AiChatStructuredResponse["metadata"]["affectedEntities"]>[number];
+type TimeZoneNow = ReturnType<typeof getTimeZoneNowFields>;
+
+type PendingExpenseCandidate = {
+  id: string;
+  label: string;
+  description: string;
+  amountInCents: number;
+  date: string;
+  categoryName: string;
+  recurrenceId?: string | null;
+  recurrenceOriginalDate?: string | null;
+  recurrenceSourceId?: string | null;
+};
+
+type PendingIncomeCandidate = {
+  id: string;
+  label: string;
+  description: string;
+  amountInCents: number;
+  date: string;
+  category: string;
+  recurrenceId?: string | null;
+  recurrenceOriginalDate?: string | null;
+  recurrenceSourceId?: string | null;
+};
 
 const pendingActionTtlMs = 15 * 60 * 1000;
 const confirmationPattern = /^(confirmo|pode registrar|pode confirmar|confirmar|sim,?\s*pode|sim pode|ok pode|pode executar)(\s|$)/i;
@@ -170,6 +202,60 @@ const selectionSearchStopWords = new Set([
   "agora", "hoje", "ontem"
 ]);
 
+const explicitReadIntentPattern = /^(quanto|como|quais|qual|analise|mostre|liste|listar|ver)\b/i;
+const explicitWriteSwitchPattern = /^(gastei|gasto|despesa|recebi|vou receber|receber|registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|paguei|pagar|comprei|compre|vendi|venda|mude|troque|altere|atualize|minha renda|renda mensal)\b/i;
+const shortSelectionReplyPattern = /^(?:\d+|o\s+primeiro|o\s+segundo|o\s+terceiro|o\s+quarto|o\s+quinto|o\s+sexto|o\s+setimo|o\s+oitavo|primeiro|segundo|terceiro|quarto|quinto|sexto|setimo|s[eé]timo|oitavo|esse|esse\s+mes|desse\s+mes|o\s+desse\s+mes)$/i;
+const spendingReadPattern = /\b(quanto\s+(?:ja\s+)?gastei|gastei\s+quanto|total\s+gasto|gastos?\s+deste?\s+mes)\b/i;
+const availableBudgetReadPattern = /\b(livre\s+pra\s+gastar|livre\s+para\s+gastar|quanto\s+tenho\s+livre|quanto\s+ainda\s+posso\s+gastar|posso\s+gastar\s+por\s+dia)\b/i;
+
+const semanticCategoryGroups = [
+  {
+    key: "alimentacao",
+    aliases: ["alimentacao", "alimentar", "comida", "refeicao", "restaurante", "mercado", "supermercado"],
+    keywords: ["almoco", "jantar", "lanche", "cafe", "cafeteria", "restaurante", "ifood", "pizza", "hamburguer", "hamburger", "mercado", "supermercado", "padaria", "comida", "refeicao", "mcdonald", "mcdonald", "mc donald"]
+  },
+  {
+    key: "transporte",
+    aliases: ["transporte", "mobilidade", "locomocao", "combustivel", "combustivel"],
+    keywords: ["gasolina", "etanol", "diesel", "combustivel", "combustível", "posto", "uber", "taxi", "taxi", "onibus", "ônibus", "metro", "metrô", "estacionamento", "pedagio", "pedágio", "99", "passagem"]
+  },
+  {
+    key: "assinaturas",
+    aliases: ["assinaturas", "assinatura", "servicos", "servicos recorrentes", "recorrentes"],
+    keywords: ["spotify", "netflix", "youtube premium", "prime video", "deezer", "apple music", "amazon prime", "railway", "vercel", "hosting", "dominio", "domínio", "chatgpt"]
+  },
+  {
+    key: "moradia",
+    aliases: ["moradia", "casa", "residencia", "residência"],
+    keywords: ["aluguel", "condominio", "condomínio", "energia", "luz", "agua", "água", "internet", "aluguer"]
+  },
+  {
+    key: "saude",
+    aliases: ["saude", "saúde", "medico", "médico", "farmacia", "farmácia"],
+    keywords: ["farmacia", "farmácia", "medico", "médico", "consulta", "exame", "dentista", "remedio", "remédio", "plano de saude"]
+  },
+  {
+    key: "educacao",
+    aliases: ["educacao", "educação", "estudos", "faculdade", "curso"],
+    keywords: ["faculdade", "curso", "escola", "livro", "mensalidade", "educacao", "educação"]
+  },
+  {
+    key: "lazer",
+    aliases: ["lazer", "entretenimento", "diversao", "diversão"],
+    keywords: ["cinema", "show", "viagem", "passeio", "festa", "jogo", "lazer"]
+  },
+  {
+    key: "investimentos",
+    aliases: ["investimentos", "investimento", "aporte", "carteira", "caixinha"],
+    keywords: ["aporte", "investimento", "investir", "ativo", "fii", "acao", "ação", "caixinha", "carteira"]
+  },
+  {
+    key: "outros",
+    aliases: ["outros", "outras", "diversos"],
+    keywords: []
+  }
+] as const;
+
 type RankedExpenseCandidate = {
   expense: Awaited<ReturnType<typeof listAllMonthlyExpenses>>[number];
   score: number;
@@ -191,14 +277,64 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-function nowFields() {
-  const now = new Date();
-  return {
-    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
-    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
-    year: now.getFullYear(),
-    month: now.getMonth() + 1
+async function resolveCurrentAssistantTimeZone() {
+  const auth = getAuthContext();
+  if (!auth?.userId || auth.userId === SYSTEM_USER_ID) {
+    return DEFAULT_APP_TIME_ZONE;
+  }
+
+  const user = await getUserForAuthContext(auth.userId);
+  return typeof user?.timezone === "string" && user.timezone.trim().length > 0
+    ? user.timezone.trim()
+    : DEFAULT_APP_TIME_ZONE;
+}
+
+function nowFields(timeZone = DEFAULT_APP_TIME_ZONE, referenceDate = new Date()) {
+  return getTimeZoneNowFields(referenceDate, timeZone);
+}
+
+function logAssistantDiagnostic(event: string, details: Record<string, unknown>) {
+  const auth = getAuthContext();
+  console.info(
+    JSON.stringify({
+      operation: "assistant-diagnostic",
+      event,
+      userId: auth?.userId ?? null,
+      channel: auth?.channel ?? null,
+      ...details
+    })
+  );
+}
+
+function shiftMonthPeriod(year: number, month: number, delta: number) {
+  const reference = new Date(Date.UTC(year, month - 1 + delta, 1, 12, 0, 0, 0));
+  return { year: reference.getUTCFullYear(), month: reference.getUTCMonth() + 1 };
+}
+
+function parseSelectionIndex(message: string, maxOptions: number) {
+  const normalized = normalizeText(message);
+  const numeric = normalized.match(/\b([1-9]\d*)\b/)?.[1];
+  const ordinalMap: Record<string, number> = {
+    primeiro: 1,
+    segunda: 2,
+    segundo: 2,
+    terceira: 3,
+    terceiro: 3,
+    quarta: 4,
+    quarto: 4,
+    quinta: 5,
+    quinto: 5,
+    sexta: 6,
+    sexto: 6,
+    setima: 7,
+    setimo: 7,
+    oitava: 8,
+    oitavo: 8
   };
+  const ordinal = Object.entries(ordinalMap).find(([label]) => new RegExp(`\\b${label}\\b`).test(normalized))?.[1];
+  const resolved = numeric ? Number(numeric) : ordinal ?? null;
+  if (!resolved || resolved < 1 || resolved > maxOptions) return null;
+  return resolved - 1;
 }
 
 function normalizeText(value: string) {
@@ -251,7 +387,7 @@ function parseFeesToCents(message: string) {
 }
 
 function extractTicker(message: string) {
-  const match = message.toUpperCase().match(/\b([A-Z]{4}\d{1,2}F?|[A-Z]{3,5}11|BTC|ETH)\b/);
+  const match = message.toUpperCase().match(/\b([A-Z]{4}\d{1,2}F?|[A-Z]{3,5}11|BTC|ETH|SOL)\b/);
   return match?.[1] ?? null;
 }
 
@@ -270,24 +406,47 @@ function formatCurrencyFromCents(valueInCents: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(valueInCents / 100);
 }
 
+function formatMarketCurrency(value: number, currency = "BRL") {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function formatQuantity(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8
+  }).format(value);
+}
+
+function formatSignedPercent(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Indisponivel";
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    signDisplay: "exceptZero"
+  }).format(value) + "%";
+}
+
 function formatDateBr(date: string) {
   const [year, month, day] = date.split("-");
   return `${day}/${month}/${year}`;
 }
 
-function parseTargetMonth(message: string) {
+function parseTargetMonth(message: string, timeZone = DEFAULT_APP_TIME_ZONE, referenceDate = new Date()) {
   const normalized = normalizeText(message);
-  const now = nowFields();
+  const now = nowFields(timeZone, referenceDate);
   if (/\b(esse|este|desse|deste)\s+mes\b/.test(normalized)) {
     return { year: now.year, month: now.month };
   }
   if (/\b(mes|mês)\s+passado\b|\bultimo\s+mes\b|\búltimo\s+m[eê]s\b/.test(normalized)) {
-    const reference = new Date(now.year, now.month - 2, 1);
-    return { year: reference.getFullYear(), month: reference.getMonth() + 1 };
+    return shiftMonthPeriod(now.year, now.month, -1);
   }
   if (/\bproximo\s+mes\b|\bpr[oó]ximo\s+m[eê]s\b|\bmes\s+que\s+vem\b|\bm[eê]s\s+seguinte\b/.test(normalized)) {
-    const reference = new Date(now.year, now.month, 1);
-    return { year: reference.getFullYear(), month: reference.getMonth() + 1 };
+    return shiftMonthPeriod(now.year, now.month, 1);
   }
   for (const [name, month] of Object.entries(monthNames)) {
     if (normalized.includes(normalizeText(name))) {
@@ -451,11 +610,66 @@ function buildSettingsPreviewFields(fields: ExtractedFields) {
   ];
 }
 
+function resolveSemanticGroups(message: string, description?: string | null) {
+  const searchable = normalizeText([message, description ?? ""].filter(Boolean).join(" "));
+  return semanticCategoryGroups.filter((group) => group.keywords.some((keyword) => searchable.includes(normalizeText(keyword))));
+}
+
+function resolveCategoryScore(category: { id: string; name: string }, message: string, description?: string | null) {
+  const searchable = normalizeText([message, description ?? ""].filter(Boolean).join(" "));
+  const categoryText = normalizeText(`${category.id} ${category.name}`);
+  const categoryTokens = tokenizeSelectionSearch(categoryText);
+  let score = 0;
+
+  if (searchable.includes(normalizeText(category.name))) score += 140;
+  if (searchable.includes(normalizeText(category.id))) score += 120;
+  score += categoryTokens.filter((token) => searchable.includes(token)).length * 22;
+
+  for (const group of resolveSemanticGroups(message, description)) {
+    if (group.aliases.some((alias) => categoryText.includes(normalizeText(alias)))) {
+      score += 95;
+    }
+  }
+
+  return score;
+}
+
+function resolvePlanCategoryFromMessage(
+  categories: Array<{ id: string; name: string }>,
+  message: string,
+  description?: string | null
+) {
+  const scored = categories
+    .map((category) => ({ category, score: resolveCategoryScore(category, message, description) }))
+    .sort((left, right) => right.score - left.score || left.category.name.localeCompare(right.category.name));
+
+  if ((scored[0]?.score ?? 0) > 0) {
+    return { category: scored[0].category, reason: "semantic" as const };
+  }
+
+  const fallback = categories.find((category) => /(^| )(outros|outras|diversos)( |$)/.test(normalizeText(`${category.id} ${category.name}`)));
+  if (fallback) {
+    return { category: fallback, reason: "fallback" as const };
+  }
+
+  return { category: null, reason: "missing" as const };
+}
+
 function extractExpenseDescription(message: string) {
   const withoutControl = stripControlInstructions(message);
-  const withMatch = withoutControl.match(/\bcom\s+(.+?)(?:,|\s+agora\b|\s+hoje\b|\s+ontem\b|$)/i);
-  if (withMatch) return sanitizeExtractedDescription(withMatch[1]);
+  const contextualMatch =
+    withoutControl.match(/\bcom\s+(.+?)(?:,|\s+agora\b|\s+hoje\b|\s+ontem\b|\s+amanh[aã]\b|$)/i) ??
+    withoutControl.match(/\b(?:no|na|num|numa)\s+(.+?)(?:,|\s+agora\b|\s+hoje\b|\s+ontem\b|\s+amanh[aã]\b|$)/i) ??
+    withoutControl.match(/\b(?:de|da|do)\s+(.+?)(?:,|\s+agora\b|\s+hoje\b|\s+ontem\b|\s+amanh[aã]\b|$)/i);
+  if (contextualMatch) {
+    const description = sanitizeExtractedDescription(contextualMatch[1]);
+    if (description) return description;
+  }
   const normalized = normalizeText(withoutControl);
+  if (/\balmoco\b/.test(normalized)) return "Almoco";
+  if (/\bjantar\b/.test(normalized)) return "Jantar";
+  if (/\blanche\b/.test(normalized)) return "Lanche";
+  if (/\bifood\b/.test(normalized)) return "Ifood";
   if (normalized.includes("gasolina")) return "Gasolina";
   if (normalized.includes("spotify")) return "Spotify";
   if (normalized.includes("mercado")) return "Mercado";
@@ -472,12 +686,17 @@ function extractExpenseNote(message: string, description?: string | null) {
   return normalizeText(note) === normalizeText(description ?? "") ? null : note;
 }
 
-function inferCategoryName(message: string) {
-  const normalized = normalizeText(message);
-  if (/(gasolina|uber|transporte|combustivel|combustivel)/.test(normalized)) return "Transporte";
-  if (/(spotify|netflix|assinatura)/.test(normalized)) return "Assinaturas";
-  if (/(mercado|alimentacao|comida|restaurante|mcdonald|mc donald)/.test(normalized)) return "Alimentacao";
-  if (/(investimento|investir|aporte|aplicar|caixinha|carteira)/.test(normalized)) return "Investimentos";
+function inferCategoryName(message: string, description?: string | null) {
+  const matchedGroup = resolveSemanticGroups(message, description)[0];
+  if (!matchedGroup) return "";
+  if (matchedGroup.key === "alimentacao") return "Alimentacao";
+  if (matchedGroup.key === "transporte") return "Transporte";
+  if (matchedGroup.key === "assinaturas") return "Assinaturas";
+  if (matchedGroup.key === "investimentos") return "Investimentos";
+  if (matchedGroup.key === "moradia") return "Moradia";
+  if (matchedGroup.key === "saude") return "Saude";
+  if (matchedGroup.key === "educacao") return "Educacao";
+  if (matchedGroup.key === "lazer") return "Lazer";
   return "";
 }
 
@@ -509,17 +728,132 @@ async function buildExpenseCategoryNameMap(expenses: Awaited<ReturnType<typeof l
   return categoryNames;
 }
 
-async function rankExpenseCompletionCandidates(message: string, expenses: Awaited<ReturnType<typeof listAllMonthlyExpenses>>) {
+function compareRankedExpenseCandidates(left: RankedExpenseCandidate, right: RankedExpenseCandidate) {
+  return right.score - left.score || left.expense.date.localeCompare(right.expense.date) || left.expense.description.localeCompare(right.expense.description);
+}
+
+function compareRankedIncomeCandidates(left: RankedIncomeEntryCandidate, right: RankedIncomeEntryCandidate) {
+  return right.score - left.score || left.entry.date.localeCompare(right.entry.date) || left.entry.description.localeCompare(right.entry.description);
+}
+
+function buildPendingExpenseCandidate(candidate: RankedExpenseCandidate): PendingExpenseCandidate {
+  return {
+    id: candidate.expense.id ?? "",
+    label: buildSelectionOptionLabel([
+      candidate.expense.description,
+      formatCurrencyFromCents(candidate.expense.amountInCents),
+      formatShortDateBr(candidate.expense.date),
+      candidate.categoryName || null
+    ]),
+    description: candidate.expense.description,
+    amountInCents: candidate.expense.amountInCents,
+    date: candidate.expense.date,
+    categoryName: candidate.categoryName,
+    recurrenceId: candidate.expense.recurrenceId ?? null,
+    recurrenceOriginalDate: candidate.expense.recurrenceOriginalDate ?? candidate.expense.date,
+    recurrenceSourceId: candidate.expense.recurrenceSourceId ?? null
+  };
+}
+
+function buildPendingIncomeCandidate(candidate: RankedIncomeEntryCandidate): PendingIncomeCandidate {
+  return {
+    id: candidate.entry.id ?? "",
+    label: buildSelectionOptionLabel([
+      candidate.entry.description,
+      formatCurrencyFromCents(candidate.entry.amountInCents),
+      formatShortDateBr(candidate.entry.date),
+      candidate.entry.category
+    ]),
+    description: candidate.entry.description,
+    amountInCents: candidate.entry.amountInCents,
+    date: candidate.entry.date,
+    category: candidate.entry.category,
+    recurrenceId: candidate.entry.recurrenceId ?? null,
+    recurrenceOriginalDate: candidate.entry.recurrenceOriginalDate ?? candidate.entry.date,
+    recurrenceSourceId: candidate.entry.recurrenceSourceId ?? null
+  };
+}
+
+function expenseCandidateOccurrenceKey(candidate: RankedExpenseCandidate) {
+  if (candidate.expense.recurrenceId && (candidate.expense.recurrenceOriginalDate ?? candidate.expense.date)) {
+    return `${candidate.expense.recurrenceId}:${candidate.expense.recurrenceOriginalDate ?? candidate.expense.date}`;
+  }
+
+  return candidate.expense.id ?? `expense:${candidate.expense.description}:${candidate.expense.date}:${candidate.expense.amountInCents}`;
+}
+
+function incomeCandidateOccurrenceKey(candidate: RankedIncomeEntryCandidate) {
+  if (candidate.entry.recurrenceId && (candidate.entry.recurrenceOriginalDate ?? candidate.entry.date)) {
+    return `${candidate.entry.recurrenceId}:${candidate.entry.recurrenceOriginalDate ?? candidate.entry.date}`;
+  }
+
+  return candidate.entry.id ?? `income:${candidate.entry.description}:${candidate.entry.date}:${candidate.entry.amountInCents}`;
+}
+
+function shouldReplaceExpenseCandidate(current: RankedExpenseCandidate, next: RankedExpenseCandidate) {
+  const currentPreference = Number(Boolean(current.expense.recurrenceSourceId)) * 40 + current.score;
+  const nextPreference = Number(Boolean(next.expense.recurrenceSourceId)) * 40 + next.score;
+  return nextPreference > currentPreference;
+}
+
+function dedupeRankedExpenseCandidates(candidates: RankedExpenseCandidate[]) {
+  const deduped = new Map<string, RankedExpenseCandidate>();
+  const duplicateGroups = new Map<string, string[]>();
+
+  for (const candidate of candidates) {
+    const key = expenseCandidateOccurrenceKey(candidate);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, candidate);
+      duplicateGroups.set(key, [candidate.expense.id ?? ""]);
+      continue;
+    }
+
+    duplicateGroups.get(key)?.push(candidate.expense.id ?? "");
+    if (shouldReplaceExpenseCandidate(existing, candidate)) {
+      deduped.set(key, candidate);
+    }
+  }
+
+  const duplicatedKeys = [...duplicateGroups.entries()].filter(([, ids]) => ids.filter(Boolean).length > 1);
+  if (duplicatedKeys.length > 0) {
+    logAssistantDiagnostic("expense-candidate-duplicates-collapsed", {
+      duplicateGroups: duplicatedKeys.map(([key, ids]) => ({ key, ids }))
+    });
+  }
+
+  return [...deduped.values()].sort(compareRankedExpenseCandidates);
+}
+
+function dedupeRankedIncomeCandidates(candidates: RankedIncomeEntryCandidate[]) {
+  const deduped = new Map<string, RankedIncomeEntryCandidate>();
+
+  for (const candidate of candidates) {
+    const key = incomeCandidateOccurrenceKey(candidate);
+    const existing = deduped.get(key);
+    if (!existing || candidate.score > existing.score) {
+      deduped.set(key, candidate);
+    }
+  }
+
+  return [...deduped.values()].sort(compareRankedIncomeCandidates);
+}
+
+async function rankExpenseCompletionCandidates(
+  message: string,
+  expenses: Awaited<ReturnType<typeof listAllMonthlyExpenses>>,
+  timeZone = DEFAULT_APP_TIME_ZONE
+) {
   const normalized = normalizeText(message);
   const candidateText = buildPendingExpenseSearchText(message);
   const tokens = tokenizeSelectionSearch(candidateText);
   const amountInCents = parseMoneyToCents(message);
-  const period = parseTargetMonth(message);
+  const period = parseTargetMonth(message, timeZone);
   const targetPeriodKey = monthKey(period.year, period.month);
-  const now = nowFields();
+  const now = nowFields(timeZone);
   const categoryNames = await buildExpenseCategoryNameMap(expenses);
 
-  return expenses
+  const ranked = expenses
     .filter((expense) => expense.status !== "completed" && !expense.recurrenceCancelled)
     .map((expense) => {
       const categoryName = categoryNames.get(expense.id ?? "") ?? "";
@@ -545,21 +879,18 @@ async function rankExpenseCompletionCandidates(message: string, expenses: Awaite
       return { expense, score, samePeriod, directMatch, matchedTokens, categoryName } satisfies RankedExpenseCandidate;
     })
     .filter((candidate): candidate is RankedExpenseCandidate => candidate !== null)
-    .sort((left, right) => right.score - left.score || left.expense.date.localeCompare(right.expense.date) || left.expense.description.localeCompare(right.expense.description));
+    .sort(compareRankedExpenseCandidates);
+
+  return dedupeRankedExpenseCandidates(ranked);
 }
 
 function buildExpenseSelectionMissingField(candidates: RankedExpenseCandidate[]): MissingField {
   return {
     ...fieldDefinition("expenseId"),
-    options: candidates.slice(0, 8).map((candidate) => ({
-      value: candidate.expense.id ?? "",
-      label: buildSelectionOptionLabel([
-        candidate.expense.description,
-        formatCurrencyFromCents(candidate.expense.amountInCents),
-        formatShortDateBr(candidate.expense.date),
-        candidate.categoryName || null
-      ])
-    }))
+    options: candidates.slice(0, 8).map((candidate) => {
+      const pendingCandidate = buildPendingExpenseCandidate(candidate);
+      return { value: pendingCandidate.id, label: pendingCandidate.label };
+    })
   };
 }
 
@@ -584,6 +915,7 @@ async function updateExpenseSelectionAction(
     ...(action.extractedFields as Record<string, unknown>),
     expenseId: null,
     candidateExpenseIds: candidates.map((candidate) => candidate.expense.id).filter(Boolean),
+    candidateExpenses: candidates.map(buildPendingExpenseCandidate),
     ...(completedAt ? { completedAt } : {})
   };
   const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status: "collecting" });
@@ -606,6 +938,7 @@ async function finalizeExpenseCompletionSelection(action: AiPendingActionRecord,
     expenseDate: candidate.expense.date,
     categoryName: candidate.categoryName,
     candidateExpenseIds: [candidate.expense.id].filter(Boolean),
+    candidateExpenses: [buildPendingExpenseCandidate(candidate)],
     ...(completedAt ? { completedAt } : {})
   };
   const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
@@ -625,17 +958,21 @@ function buildPendingIncomeSearchText(message: string) {
   ).join(" ");
 }
 
-function rankIncomeEntryCandidates(message: string, entries: Awaited<ReturnType<typeof listAllMonthlyIncomeEntries>>) {
+function rankIncomeEntryCandidates(
+  message: string,
+  entries: Awaited<ReturnType<typeof listAllMonthlyIncomeEntries>>,
+  timeZone = DEFAULT_APP_TIME_ZONE
+) {
   const normalized = normalizeText(message);
   const candidateText = buildPendingIncomeSearchText(message);
   const tokens = tokenizeSelectionSearch(candidateText);
   const amountInCents = parseMoneyToCents(message);
   const category = inferIncomeCategory(message);
-  const period = parseTargetMonth(message);
+  const period = parseTargetMonth(message, timeZone);
   const targetPeriodKey = monthKey(period.year, period.month);
-  const now = nowFields();
+  const now = nowFields(timeZone);
 
-  return entries
+  const ranked = entries
     .filter((entry) => entry.status === "planned" && !entry.recurrenceCancelled)
     .map((entry) => {
       const searchable = normalizeText([entry.description, entry.category, entry.note ?? ""].filter(Boolean).join(" "));
@@ -662,21 +999,18 @@ function rankIncomeEntryCandidates(message: string, entries: Awaited<ReturnType<
       return { entry, score, samePeriod, directMatch, matchedTokens } satisfies RankedIncomeEntryCandidate;
     })
     .filter((candidate): candidate is RankedIncomeEntryCandidate => candidate !== null)
-    .sort((left, right) => right.score - left.score || left.entry.date.localeCompare(right.entry.date) || left.entry.description.localeCompare(right.entry.description));
+    .sort(compareRankedIncomeCandidates);
+
+  return dedupeRankedIncomeCandidates(ranked);
 }
 
 function buildIncomeEntrySelectionMissingField(candidates: RankedIncomeEntryCandidate[]): MissingField {
   return {
     ...fieldDefinition("incomeEntryId"),
-    options: candidates.slice(0, 8).map((candidate) => ({
-      value: candidate.entry.id ?? "",
-      label: buildSelectionOptionLabel([
-        candidate.entry.description,
-        formatCurrencyFromCents(candidate.entry.amountInCents),
-        formatShortDateBr(candidate.entry.date),
-        candidate.entry.category
-      ])
-    }))
+    options: candidates.slice(0, 8).map((candidate) => {
+      const pendingCandidate = buildPendingIncomeCandidate(candidate);
+      return { value: pendingCandidate.id, label: pendingCandidate.label };
+    })
   };
 }
 
@@ -701,6 +1035,7 @@ async function updateIncomeEntrySelectionAction(
     ...(action.extractedFields as Record<string, unknown>),
     incomeEntryId: null,
     candidateIncomeEntryIds: candidates.map((candidate) => candidate.entry.id).filter(Boolean),
+    candidateIncomeEntries: candidates.map(buildPendingIncomeCandidate),
     ...(receivedAt ? { receivedAt } : {})
   };
   const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status: "collecting" });
@@ -723,6 +1058,7 @@ async function finalizeIncomeEntrySelection(action: AiPendingActionRecord, candi
     amountInCents: candidate.entry.amountInCents,
     incomeDate: candidate.entry.date,
     candidateIncomeEntryIds: [candidate.entry.id].filter(Boolean),
+    candidateIncomeEntries: [buildPendingIncomeCandidate(candidate)],
     ...(receivedAt ? { receivedAt } : {})
   };
   const missingFields = getMissingRequiredFields(action.toolName, extractedFields);
@@ -734,14 +1070,26 @@ async function finalizeIncomeEntrySelection(action: AiPendingActionRecord, candi
   return actionResponse(withPreview ?? { ...updated, preview }, "Confirme para marcar esta entrada como recebida.");
 }
 
-async function resolveBudgetCategory(year: number, month: number, message: string) {
+async function resolveBudgetCategory(year: number, month: number, message: string, description?: string | null) {
   const plan = await getOrCreateMonthlyPlan(year, month);
-  const preferredName = inferCategoryName(message);
-  const fallbackName = preferredName || "Outros";
-  const normalizedPreferred = normalizeText(fallbackName);
-  const matches = plan.categories.filter((category) => normalizeText(category.name) === normalizedPreferred);
-  const exact = matches.length === 1 ? matches[0] : null;
-  if (exact) return { plan, categoryId: exact.id, missing: [] };
+  const resolved = resolvePlanCategoryFromMessage(plan.categories, message, description);
+  if (resolved.category) {
+    logAssistantDiagnostic("assistant-category-resolution", {
+      period: `${year}-${pad(month)}`,
+      description: description ?? null,
+      categoryId: resolved.category.id,
+      categoryName: resolved.category.name,
+      resolution: resolved.reason
+    });
+    return { plan, categoryId: resolved.category.id, missing: [] };
+  }
+
+  logAssistantDiagnostic("assistant-category-resolution", {
+    period: `${year}-${pad(month)}`,
+    description: description ?? null,
+    categoryId: null,
+    resolution: "missing"
+  });
 
   return {
     plan,
@@ -791,8 +1139,9 @@ async function cashBoxMissingField(): Promise<MissingField> {
   };
 }
 
-async function expenseCustomMissingFields(fields: ExtractedFields) {
-  const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
+async function expenseCustomMissingFields(fields: ExtractedFields, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const currentPeriod = nowFields(timeZone);
+  const plan = await getOrCreateMonthlyPlan(currentPeriod.year, currentPeriod.month);
   if (!isInvestmentPlanCategory(plan, fields.categoryId)) return [];
 
   const destination = typeof fields.investmentDestination === "string" ? fields.investmentDestination : "";
@@ -1265,10 +1614,137 @@ function successResponse(message: string, action: AiPendingActionRecord, result:
   });
 }
 
+function formatMonthPeriodLabel(year: number, month: number, timeZone = DEFAULT_APP_TIME_ZONE) {
+  return titleCaseDescription(
+    new Intl.DateTimeFormat("pt-BR", {
+      month: "long",
+      year: "numeric",
+      timeZone
+    }).format(new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0)))
+  );
+}
+
+function hasPlanningData(overview: Awaited<ReturnType<typeof getMonthlyPlanningOverview>>) {
+  return overview.plan.incomeInCents > 0 || overview.expenses.length > 0 || overview.incomeEntries.length > 0;
+}
+
+async function buildSpentSummaryResponse(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const period = parseTargetMonth(message, timeZone);
+  const overview = await getMonthlyPlanningOverview(period.year, period.month);
+  logAssistantDiagnostic("assistant-planning-read", {
+    kind: "spent",
+    period: `${period.year}-${pad(period.month)}`,
+    timezone: timeZone,
+    hasData: hasPlanningData(overview),
+    expenseCount: overview.expenses.length
+  });
+
+  if (!hasPlanningData(overview)) {
+    return createStructuredResponse({
+      responseType: "summary",
+      title: `Gastos de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      message: "Ainda nao encontrei dados financeiros suficientes nesse periodo para calcular seus gastos com seguranca."
+    });
+  }
+
+  const title = `Gastos de ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`;
+  const topCategories = overview.categories
+    .filter((category) => category.completedInCents > 0)
+    .sort((left, right) => right.completedInCents - left.completedInCents)
+    .slice(0, 3);
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title,
+    message: `Voce ja gastou ${formatCurrencyFromCents(overview.summary.completedConsumptionInCents)} no periodo consultado.`,
+    sections: [
+      {
+        type: "metrics",
+        title: "Resumo",
+        metrics: [
+          { label: "Gasto realizado", value: formatCurrencyFromCents(overview.summary.completedConsumptionInCents), format: "currency" },
+          { label: "Previstos restantes", value: formatCurrencyFromCents(overview.summary.plannedConsumptionInCents), format: "currency" },
+          { label: "Restante atual", value: formatCurrencyFromCents(overview.summary.remainingIncomeInCents), format: "currency" }
+        ]
+      },
+      ...(topCategories.length > 0
+        ? [{
+            type: "list" as const,
+            title: "Categorias com mais gasto",
+            items: topCategories.map((category) => ({
+              title: category.name,
+              description: formatCurrencyFromCents(category.completedInCents),
+              severity: "info" as const
+            }))
+          }]
+        : [])
+    ],
+    suggestions: ["Quanto tenho livre pra gastar ainda?", "Mostrar gastos previstos"]
+  });
+}
+
+async function buildAvailableBudgetSummaryResponse(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const period = parseTargetMonth(message, timeZone);
+  const overview = await getMonthlyPlanningOverview(period.year, period.month);
+  logAssistantDiagnostic("assistant-planning-read", {
+    kind: "available-budget",
+    period: `${period.year}-${pad(period.month)}`,
+    timezone: timeZone,
+    hasData: hasPlanningData(overview),
+    remainingIncomeAfterPlannedInCents: overview.summary.remainingIncomeAfterPlannedInCents
+  });
+
+  if (!hasPlanningData(overview)) {
+    return createStructuredResponse({
+      responseType: "summary",
+      title: `Disponivel em ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`,
+      message: "Ainda nao encontrei dados suficientes nesse periodo para calcular quanto esta livre para gastar."
+    });
+  }
+
+  const title = `Disponivel em ${formatMonthPeriodLabel(period.year, period.month, timeZone)}`;
+  const available = overview.summary.remainingIncomeAfterPlannedInCents;
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title,
+    message:
+      available >= 0
+        ? `Voce ainda tem ${formatCurrencyFromCents(available)} livres apos considerar o que ja aconteceu e o que ainda esta previsto.`
+        : `Seu planejamento esta ${formatCurrencyFromCents(Math.abs(available))} acima do saldo disponivel quando considero realizados e previstos.`,
+    sections: [
+      {
+        type: "metrics",
+        title: "Resumo",
+        metrics: [
+          { label: "Livre para gastar", value: formatCurrencyFromCents(available), format: "currency" },
+          { label: "Pode gastar por dia", value: formatCurrencyFromCents(overview.summary.canSpendPerDayInCents), format: "currency" },
+          { label: "Dias restantes", value: String(overview.summary.remainingDays), format: "number" }
+        ]
+      }
+    ],
+    suggestions: ["Quanto gastei esse mes?", "Mostrar maiores gastos"]
+  });
+}
+
+async function handlePlanningReadMessage(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  const normalized = normalizeText(message);
+  if (spendingReadPattern.test(normalized)) {
+    return buildSpentSummaryResponse(message, timeZone);
+  }
+
+  if (availableBudgetReadPattern.test(normalized)) {
+    return buildAvailableBudgetSummaryResponse(message, timeZone);
+  }
+
+  return null;
+}
+
 async function prepareContribution(sessionId: string, message: string) {
   const amountInCents = parseMoneyToCents(message);
   if (!amountInCents) return null;
-  const now = nowFields();
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const now = nowFields(timeZone);
   const description = extractExplicitContributionDescription(message);
   const fields = {
     amountInCents,
@@ -1293,9 +1769,10 @@ async function prepareContribution(sessionId: string, message: string) {
 async function prepareExpense(sessionId: string, message: string) {
   const amountInCents = parseMoneyToCents(message);
   if (!amountInCents) return null;
-  const now = nowFields();
-  const category = await resolveBudgetCategory(now.year, now.month, message);
   const description = extractExpenseDescription(message);
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const now = nowFields(timeZone);
+  const category = await resolveBudgetCategory(now.year, now.month, message, description);
   const note = extractExpenseNote(message, description);
   const fields = {
     planId: category.plan.id,
@@ -1310,7 +1787,7 @@ async function prepareExpense(sessionId: string, message: string) {
     status: "completed",
     ...(note ? { note } : {})
   };
-  const customMissing = [...category.missing, ...(await expenseCustomMissingFields(fields))];
+  const customMissing = [...category.missing, ...(await expenseCustomMissingFields(fields, timeZone))];
   const action = await createPendingAction({
     sessionId,
     actionType: "create_monthly_expense",
@@ -1369,9 +1846,9 @@ function extractIncomeEntryDescription(message: string, category: string) {
   return category === "Outros" ? "Entrada extra" : category;
 }
 
-function isPlannedIncomeMessage(message: string, date: string) {
+function isPlannedIncomeMessage(message: string, date: string, timeZone = DEFAULT_APP_TIME_ZONE) {
   const normalized = normalizeText(message);
-  const today = nowFields().date;
+  const today = nowFields(timeZone).date;
   return date > today || /(vou receber|receberei|irei receber|previsto|prevista|agendad|amanha|proximo|proxima)/.test(normalized);
 }
 
@@ -1379,14 +1856,15 @@ async function prepareIncomeEntry(sessionId: string, message: string) {
   const amountInCents = parseMoneyToCents(message);
   if (!amountInCents) return null;
 
-  const period = parseTargetMonth(message);
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const period = parseTargetMonth(message, timeZone);
   const plan = await getOrCreateMonthlyPlan(period.year, period.month);
-  const now = nowFields();
+  const now = nowFields(timeZone);
   const category = inferIncomeCategory(message);
   const description = extractIncomeEntryDescription(message, category);
-  const date = parseDateInput(message) ?? now.date;
+  const date = parseDateInput(message, timeZone) ?? now.date;
   const time = now.time;
-  const status = isPlannedIncomeMessage(message, date) ? "planned" : "received";
+  const status = isPlannedIncomeMessage(message, date, timeZone) ? "planned" : "received";
   const recurring = /recorrent|todo mes|mensal/i.test(message);
   const fields = {
     planId: plan.id,
@@ -1403,7 +1881,7 @@ async function prepareIncomeEntry(sessionId: string, message: string) {
     recurrenceDayOfMonth: recurring ? Number(date.slice(8, 10)) : null,
     recurrenceStartDate: recurring ? date : null,
     recurrenceEndDate: null,
-    receivedAt: status === "received" ? getLocalTimestampWithOffset() : null
+    receivedAt: status === "received" ? getLocalTimestampWithOffset(new Date(), timeZone) : null
   };
 
   const action = await createPendingAction({
@@ -1426,7 +1904,8 @@ async function prepareIncomeEntry(sessionId: string, message: string) {
 async function prepareIncome(sessionId: string, message: string) {
   const incomeInCents = parseMoneyToCents(message);
   if (!incomeInCents) return null;
-  const period = parseTargetMonth(message);
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const period = parseTargetMonth(message, timeZone);
   const fields = { ...period, incomeInCents };
   const action = await createPendingAction({
     sessionId,
@@ -1500,8 +1979,9 @@ async function prepareSettingsUpdate(sessionId: string, message: string) {
 async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|paga|pago|paguei)/.test(normalized)) return null;
-  const completedAt = parseCompletedAtInput(message);
-  const rankedCandidates = await rankExpenseCompletionCandidates(message, await listAllMonthlyExpenses());
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const completedAt = parseCompletedAtInput(message, timeZone);
+  const rankedCandidates = await rankExpenseCompletionCandidates(message, await listAllMonthlyExpenses(), timeZone);
   const resolved = pickResolvedCandidate(rankedCandidates);
 
   if (!resolved && rankedCandidates.length === 0) {
@@ -1521,6 +2001,7 @@ async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
       extractedFields: {
         expenseId: null,
         candidateExpenseIds: rankedCandidates.map((candidate) => candidate.expense.id).filter(Boolean),
+        candidateExpenses: rankedCandidates.map(buildPendingExpenseCandidate),
         completedAt
       },
       missingFields: [buildExpenseSelectionMissingField(rankedCandidates)],
@@ -1554,8 +2035,9 @@ async function prepareMarkExpenseCompleted(sessionId: string, message: string) {
 async function prepareMarkIncomeEntryReceived(sessionId: string, message: string) {
   const normalized = normalizeText(message);
   if (!/(marque|recebi|recebida|recebido|entrada)/.test(normalized)) return null;
-  const receivedAt = parseCompletedAtInput(message);
-  const rankedCandidates = rankIncomeEntryCandidates(message, await listAllMonthlyIncomeEntries());
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const receivedAt = parseCompletedAtInput(message, timeZone);
+  const rankedCandidates = rankIncomeEntryCandidates(message, await listAllMonthlyIncomeEntries(), timeZone);
   const resolved = pickResolvedCandidate(rankedCandidates);
 
   if (!resolved && rankedCandidates.length === 0) {
@@ -1575,6 +2057,7 @@ async function prepareMarkIncomeEntryReceived(sessionId: string, message: string
       extractedFields: {
         incomeEntryId: null,
         candidateIncomeEntryIds: rankedCandidates.map((candidate) => candidate.entry.id).filter(Boolean),
+        candidateIncomeEntries: rankedCandidates.map(buildPendingIncomeCandidate),
         receivedAt
       },
       missingFields: [buildIncomeEntrySelectionMissingField(rankedCandidates)],
@@ -1617,14 +2100,20 @@ function expenseCollectingMessage(missingFields: MissingField[]) {
   return "Confirme o registro deste gasto.";
 }
 
-async function refreshExpenseCollectingAction(action: AiPendingActionRecord, extractedFields: ExtractedFields, categoryName?: string) {
-  const customMissing = await expenseCustomMissingFields(extractedFields);
+async function refreshExpenseCollectingAction(
+  action: AiPendingActionRecord,
+  extractedFields: ExtractedFields,
+  categoryName?: string,
+  timeZone = DEFAULT_APP_TIME_ZONE
+) {
+  const customMissing = await expenseCustomMissingFields(extractedFields, timeZone);
   const missingFields = getMissingRequiredFields(action.toolName, extractedFields, customMissing);
   if (missingFields.length === 0) validateToolFieldsForPreview(action.toolName, extractedFields);
   const status = missingFields.length ? "collecting" : "awaiting_confirmation";
   const updated = await updateAiPendingAction(action.id ?? "", { extractedFields, missingFields, status });
   if (!updated) return null;
-  const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
+  const currentPeriod = nowFields(timeZone);
+  const plan = await getOrCreateMonthlyPlan(currentPeriod.year, currentPeriod.month);
   const resolvedCategoryName = categoryName ?? plan.categories.find((item) => item.id === extractedFields.categoryId)?.name ?? "Pendente";
   const preview = buildPreview(updated, [
     ...(isPresent(extractedFields.description) ? [{ label: "Descricao", value: String(extractedFields.description) }] : []),
@@ -1645,8 +2134,9 @@ async function refreshExpenseCollectingAction(action: AiPendingActionRecord, ext
 }
 
 async function prepareInvestmentOperation(sessionId: string, message: string, operationType: "COMPRA" | "VENDA" | "BONIFICACAO" | "DESDOBRAMENTO" | "GRUPAMENTO") {
-  const now = nowFields();
-  const date = parseDateInput(message) ?? now.date;
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const now = nowFields(timeZone);
+  const date = parseDateInput(message, timeZone) ?? now.date;
   const ticker = extractTicker(message);
   const quantity = parseQuantity(message);
   const price = operationType === "BONIFICACAO" || operationType === "DESDOBRAMENTO" || operationType === "GRUPAMENTO" ? 0 : parseInvestmentPrice(message);
@@ -1707,8 +2197,9 @@ async function prepareInvestmentOperation(sessionId: string, message: string, op
 }
 
 async function prepareDividendIncome(sessionId: string, message: string, type: "dividendo" | "jcp") {
-  const now = nowFields();
-  const explicitPaymentDate = parseDateInput(message);
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const now = nowFields(timeZone);
+  const explicitPaymentDate = parseDateInput(message, timeZone);
   const paymentDate = explicitPaymentDate ?? now.date;
   const ticker = extractTicker(message);
   const amountInCents = parseMoneyToCents(message);
@@ -1767,35 +2258,31 @@ function unsupportedInvestmentAction(message: string) {
   });
 }
 
-function parseDateInput(message: string) {
+function parseDateInput(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
   const normalized = normalizeText(message);
-  if (/\b(hoje|agora)\b/.test(normalized)) return nowFields().date;
+  const current = nowFields(timeZone);
+  if (/\b(hoje|agora)\b/.test(normalized)) return current.date;
   if (/\bontem\b/.test(normalized)) {
-    const date = new Date();
-    date.setDate(date.getDate() - 1);
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return shiftDateKey(current.date, -1);
   }
   const iso = message.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   if (iso) return iso[1];
   const br = message.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
   if (!br) return null;
-  const now = nowFields();
-  const year = br[3] ? Number(br[3].length === 2 ? `20${br[3]}` : br[3]) : now.year;
+  const year = br[3] ? Number(br[3].length === 2 ? `20${br[3]}` : br[3]) : current.year;
   return `${year}-${pad(Number(br[2]))}-${pad(Number(br[1]))}`;
 }
 
-function parseCompletedAtInput(message: string) {
+function parseCompletedAtInput(message: string, timeZone = DEFAULT_APP_TIME_ZONE) {
   const normalized = normalizeText(message);
-  if (!/\b(agora|hoje|ontem)\b/.test(normalized) && !parseDateInput(message)) return undefined;
-  if (/\bagora\b/.test(normalized)) return getLocalTimestampWithOffset();
+  if (!/\b(agora|hoje|ontem)\b/.test(normalized) && !parseDateInput(message, timeZone)) return undefined;
+  if (/\bagora\b/.test(normalized)) return getLocalTimestampWithOffset(new Date(), timeZone);
 
-  const paymentDate = parseDateInput(message);
+  const paymentDate = parseDateInput(message, timeZone);
   if (!paymentDate) return undefined;
 
-  const now = nowFields();
-  const [year, month, day] = paymentDate.split("-").map(Number);
-  const [hour, minute] = now.time.split(":").map(Number);
-  return getLocalTimestampWithOffset(new Date(year, month - 1, day, hour, minute, 0, 0));
+  const current = nowFields(timeZone);
+  return getLocalTimestampWithOffset(parseLocalExpenseDate(paymentDate, current.time, timeZone), timeZone);
 }
 
 function parseLooseNumber(message: string) {
@@ -1883,6 +2370,7 @@ async function resolveCashBoxFromMessage(message: string) {
 async function updateInvestmentCollectingAction(action: AiPendingActionRecord, message: string) {
   const field = action.missingFields[0];
   if (!field) return actionResponse(action, "Confirme a operacao.");
+  const timeZone = await resolveCurrentAssistantTimeZone();
   const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>) };
 
   if (field.name === "assetTicker") {
@@ -1902,7 +2390,7 @@ async function updateInvestmentCollectingAction(action: AiPendingActionRecord, m
     if (!amountInCents) return actionResponse(action, "Informe um valor recebido maior que zero.");
     extractedFields.amountInCents = amountInCents;
   } else if (field.name === "date" || field.name === "paymentDate") {
-    const date = parseDateInput(message);
+    const date = parseDateInput(message, timeZone);
     if (!date) return actionResponse(action, "Informe uma data valida, por exemplo hoje ou 28/07/2026.");
     extractedFields[field.name] = date;
   }
@@ -2067,30 +2555,154 @@ async function executeTool(action: AiPendingActionRecord, messageId?: string) {
   return successResponse(getAiToolCatalogEntry(action.toolName).successMessage, executed ?? action, result, route);
 }
 
+async function discardPendingAction(
+  action: AiPendingActionRecord,
+  status: "cancelled" | "failed",
+  reason: string,
+  messageId?: string
+) {
+  if (!action.id) return;
+
+  await updateAiPendingAction(action.id, { status });
+  await appendAiActionAudit({
+    sessionId: action.sessionId,
+    messageId,
+    pendingActionId: action.id,
+    actionType: action.actionType,
+    toolName: action.toolName,
+    sanitizedInput: action.extractedFields,
+    status,
+    errorCode: reason
+  });
+  logAssistantDiagnostic("pending-action-discarded", {
+    pendingActionId: action.id,
+    toolName: action.toolName,
+    status,
+    reason
+  });
+}
+
+function extractPendingExpenseIds(action: AiPendingActionRecord) {
+  const storedCandidates = Array.isArray(action.extractedFields.candidateExpenses)
+    ? action.extractedFields.candidateExpenses
+        .filter((candidate): candidate is PendingExpenseCandidate => typeof candidate === "object" && candidate !== null && typeof (candidate as PendingExpenseCandidate).id === "string")
+        .map((candidate) => candidate.id)
+    : [];
+
+  if (storedCandidates.length > 0) return storedCandidates;
+
+  return Array.isArray(action.extractedFields.candidateExpenseIds)
+    ? action.extractedFields.candidateExpenseIds.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
+function extractPendingIncomeIds(action: AiPendingActionRecord) {
+  const storedCandidates = Array.isArray(action.extractedFields.candidateIncomeEntries)
+    ? action.extractedFields.candidateIncomeEntries
+        .filter((candidate): candidate is PendingIncomeCandidate => typeof candidate === "object" && candidate !== null && typeof (candidate as PendingIncomeCandidate).id === "string")
+        .map((candidate) => candidate.id)
+    : [];
+
+  if (storedCandidates.length > 0) return storedCandidates;
+
+  return Array.isArray(action.extractedFields.candidateIncomeEntryIds)
+    ? action.extractedFields.candidateIncomeEntryIds.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
+}
+
+async function loadPendingExpenseCandidates(action: AiPendingActionRecord) {
+  const orderedIds = extractPendingExpenseIds(action);
+  if (orderedIds.length === 0) return [];
+
+  const liveExpenses = (await listAllMonthlyExpenses()).filter(
+    (expense) => expense.id && orderedIds.includes(expense.id) && expense.status !== "completed" && !expense.recurrenceCancelled
+  );
+  const categoryNames = await buildExpenseCategoryNameMap(liveExpenses);
+  const byId = new Map<string, RankedExpenseCandidate>(
+    liveExpenses.map((expense): [string, RankedExpenseCandidate] => [
+      expense.id ?? "",
+      {
+        expense,
+        score: 0,
+        samePeriod: false,
+        directMatch: false,
+        matchedTokens: 0,
+        categoryName: categoryNames.get(expense.id ?? "") ?? ""
+      }
+    ])
+  );
+
+  return orderedIds.map((id) => byId.get(id)).filter((candidate): candidate is RankedExpenseCandidate => candidate !== undefined);
+}
+
+async function loadPendingIncomeCandidates(action: AiPendingActionRecord) {
+  const orderedIds = extractPendingIncomeIds(action);
+  if (orderedIds.length === 0) return [];
+
+  const liveEntries = (await listAllMonthlyIncomeEntries()).filter(
+    (entry) => entry.id && orderedIds.includes(entry.id) && entry.status === "planned" && !entry.recurrenceCancelled
+  );
+  const byId = new Map<string, RankedIncomeEntryCandidate>(
+    liveEntries.map((entry): [string, RankedIncomeEntryCandidate] => [
+      entry.id ?? "",
+      {
+        entry,
+        score: 0,
+        samePeriod: false,
+        directMatch: false,
+        matchedTokens: 0
+      }
+    ])
+  );
+
+  return orderedIds.map((id) => byId.get(id)).filter((candidate): candidate is RankedIncomeEntryCandidate => candidate !== undefined);
+}
+
+function isExplicitIntentSwitchDuringCollection(message: string) {
+  const normalized = normalizeText(message.trim());
+  if (!normalized) return false;
+  if (shortSelectionReplyPattern.test(normalized)) return false;
+  if (explicitReadIntentPattern.test(normalized)) return true;
+  if (spendingReadPattern.test(normalized) || availableBudgetReadPattern.test(normalized)) return true;
+  return explicitWriteSwitchPattern.test(normalized);
+}
+
 async function updateCollectingAction(action: AiPendingActionRecord, message: string) {
   if (!action.id) return createErrorResponse("Acao pendente invalida.");
+  const timeZone = await resolveCurrentAssistantTimeZone();
 
   if (isInvestmentTool(action.toolName)) {
     return updateInvestmentCollectingAction(action, message);
   }
 
   if (action.toolName === "markExpenseAsCompleted" && action.missingFields.some((field) => field.name === "expenseId")) {
-    const candidateIds = Array.isArray(action.extractedFields.candidateExpenseIds)
-      ? action.extractedFields.candidateExpenseIds.filter((value): value is string => typeof value === "string" && value.length > 0)
-      : [];
-    const allCandidates = await rankExpenseCompletionCandidates(
-      message,
-      (await listAllMonthlyExpenses()).filter((expense) => expense.id && candidateIds.includes(expense.id) && expense.status !== "completed" && !expense.recurrenceCancelled)
-    );
-    if (allCandidates.length === 0) {
+    const orderedCandidates = await loadPendingExpenseCandidates(action);
+    logAssistantDiagnostic("pending-action-consume-expense", {
+      pendingActionId: action.id,
+      candidateIds: extractPendingExpenseIds(action),
+      candidateCount: orderedCandidates.length
+    });
+    if (orderedCandidates.length === 0) {
+      await discardPendingAction(action, "failed", "expense_candidates_missing");
       return createErrorResponse("Nao encontrei mais esse gasto pendente. Envie o pedido novamente.");
     }
 
-    const selectionIndex = message.match(/\b([1-8])\b/)?.[1];
-    const completedAt = parseCompletedAtInput(message) ?? (typeof action.extractedFields.completedAt === "string" ? action.extractedFields.completedAt : undefined);
-    const selectedByIndex = selectionIndex ? allCandidates[Number(selectionIndex) - 1] : null;
+    const selectionIndex = parseSelectionIndex(message, orderedCandidates.length);
+    const completedAt =
+      parseCompletedAtInput(message, timeZone) ?? (typeof action.extractedFields.completedAt === "string" ? action.extractedFields.completedAt : undefined);
+    const selectedByIndex = selectionIndex !== null ? orderedCandidates[selectionIndex] : null;
     if (selectedByIndex) {
       return finalizeExpenseCompletionSelection(action, selectedByIndex, completedAt);
+    }
+
+    const allCandidates = await rankExpenseCompletionCandidates(
+      message,
+      orderedCandidates.map((candidate) => candidate.expense),
+      timeZone
+    );
+    if (allCandidates.length === 0) {
+      await discardPendingAction(action, "failed", "expense_candidate_unresolved");
+      return createErrorResponse("Nao consegui mais identificar esse gasto pendente. Envie o pedido novamente.");
     }
 
     const resolved = pickResolvedCandidate(allCandidates);
@@ -2102,22 +2714,33 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
   }
 
   if (action.toolName === "markIncomeEntryAsReceived" && action.missingFields.some((field) => field.name === "incomeEntryId")) {
-    const candidateIds = Array.isArray(action.extractedFields.candidateIncomeEntryIds)
-      ? action.extractedFields.candidateIncomeEntryIds.filter((value): value is string => typeof value === "string" && value.length > 0)
-      : [];
-    const allCandidates = rankIncomeEntryCandidates(
-      message,
-      (await listAllMonthlyIncomeEntries()).filter((entry) => entry.id && candidateIds.includes(entry.id) && entry.status === "planned" && !entry.recurrenceCancelled)
-    );
-    if (allCandidates.length === 0) {
+    const orderedCandidates = await loadPendingIncomeCandidates(action);
+    logAssistantDiagnostic("pending-action-consume-income", {
+      pendingActionId: action.id,
+      candidateIds: extractPendingIncomeIds(action),
+      candidateCount: orderedCandidates.length
+    });
+    if (orderedCandidates.length === 0) {
+      await discardPendingAction(action, "failed", "income_candidates_missing");
       return createErrorResponse("Nao encontrei mais essa entrada prevista. Envie o pedido novamente.");
     }
 
-    const selectionIndex = message.match(/\b([1-8])\b/)?.[1];
-    const receivedAt = parseCompletedAtInput(message) ?? (typeof action.extractedFields.receivedAt === "string" ? action.extractedFields.receivedAt : undefined);
-    const selectedByIndex = selectionIndex ? allCandidates[Number(selectionIndex) - 1] : null;
+    const selectionIndex = parseSelectionIndex(message, orderedCandidates.length);
+    const receivedAt =
+      parseCompletedAtInput(message, timeZone) ?? (typeof action.extractedFields.receivedAt === "string" ? action.extractedFields.receivedAt : undefined);
+    const selectedByIndex = selectionIndex !== null ? orderedCandidates[selectionIndex] : null;
     if (selectedByIndex) {
       return finalizeIncomeEntrySelection(action, selectedByIndex, receivedAt);
+    }
+
+    const allCandidates = rankIncomeEntryCandidates(
+      message,
+      orderedCandidates.map((candidate) => candidate.entry),
+      timeZone
+    );
+    if (allCandidates.length === 0) {
+      await discardPendingAction(action, "failed", "income_candidate_unresolved");
+      return createErrorResponse("Nao consegui mais identificar essa entrada pendente. Envie o pedido novamente.");
     }
 
     const resolved = pickResolvedCandidate(allCandidates);
@@ -2130,12 +2753,13 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
 
   if (action.toolName === "createMonthlyExpense" && action.missingFields.some((field) => field.name === "categoryId")) {
     const planId = String(action.extractedFields.planId ?? "");
-    const plan = await getOrCreateMonthlyPlan(nowFields().year, nowFields().month);
+    const currentPeriod = nowFields(timeZone);
+    const plan = await getOrCreateMonthlyPlan(currentPeriod.year, currentPeriod.month);
     const normalized = normalizeText(message);
     const selected = plan.categories.find((category) => normalizeText(category.name) === normalized || normalized.includes(normalizeText(category.name)));
     if (!selected) return actionResponse(action, "Nao encontrei esse setor. Escolha uma das opcoes exibidas.");
     const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>), planId: planId || plan.id, categoryId: selected.id };
-    const refreshed = await refreshExpenseCollectingAction(action, extractedFields, selected.name);
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields, selected.name, timeZone);
     if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
     return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
   }
@@ -2144,7 +2768,7 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
     const description = sanitizeExtractedDescription(message);
     if (!description) return actionResponse(action, "Informe uma descricao curta e clara para este gasto.");
     const extractedFields: ExtractedFields = { ...(action.extractedFields as Record<string, unknown>), description };
-    const refreshed = await refreshExpenseCollectingAction(action, extractedFields);
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields, undefined, timeZone);
     if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
     return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
   }
@@ -2186,7 +2810,7 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
       extractedFields.price = price;
     }
 
-    const refreshed = await refreshExpenseCollectingAction(action, extractedFields);
+    const refreshed = await refreshExpenseCollectingAction(action, extractedFields, undefined, timeZone);
     if (!refreshed) return createErrorResponse("Nao consegui atualizar a acao pendente.");
     return actionResponse(refreshed.action, expenseCollectingMessage(refreshed.missingFields));
   }
@@ -2212,8 +2836,186 @@ async function updateCollectingAction(action: AiPendingActionRecord, message: st
   return actionResponse(action, "Ainda preciso de mais informacoes para continuar.");
 }
 
+function isCryptoReadMessage(message: string) {
+  const normalized = normalizeText(message);
+  const priceQuestion = /(quanto|preco|preço|cotacao|cotação|valor|vale|esta|est[aá]|posição|posicao|tenho|carteira)/.test(normalized);
+  if (!priceQuestion) return false;
+
+  const hasCryptoSignal = Boolean(findKnownCryptoByQuery(message)) || /\b(cripto|criptomoeda|bitcoin|btc|ethereum|eth|solana|sol)\b/.test(normalized);
+  const hasUnknownCryptoSymbol = /\b[A-Z]{2,10}\b/.test(message) && !/\b[A-Z]{4}\d{1,2}F?\b/.test(message);
+  return hasCryptoSignal || hasUnknownCryptoSymbol;
+}
+
+function isCryptoPortfolioQuestion(message: string) {
+  const normalized = normalizeText(message);
+  return /(quanto\s+(?:tenho|meus|minha)|carteira\s+de\s+cripto|criptos?\s+(?:valem|vale)|posicao|posição)/.test(normalized);
+}
+
+function cryptoAssetMatchesQuestion(asset: Awaited<ReturnType<typeof getPortfolio>>["assets"][number], message: string) {
+  const normalized = normalizeText(message);
+  return [asset.ticker, asset.name, asset.coingeckoId]
+    .filter(Boolean)
+    .some((value) => normalized.includes(normalizeText(String(value))));
+}
+
+function extractCryptoQuoteQuery(message: string) {
+  const known = findKnownCryptoByQuery(message);
+  if (known) return known.coingeckoId;
+
+  const explicitSymbol = message.match(/\b([A-Z]{2,10})\b/);
+  if (explicitSymbol && !/^[A-Z]{4}\d{1,2}F?$/.test(explicitSymbol[1])) return explicitSymbol[1];
+
+  return message;
+}
+
+function buildCryptoQuoteSections(quote: Extract<Awaited<ReturnType<typeof getCryptoMarketQuoteByQuery>>, { status: "resolved" }>["quote"]) {
+  return [
+    {
+      type: "metrics" as const,
+      title: "Cotacao",
+      metrics: [
+        { label: "Preco", value: formatMarketCurrency(quote.price, quote.currency), status: quote.stale ? "warning" as const : "neutral" as const },
+        { label: "24h", value: formatSignedPercent(quote.change24h), status: (quote.change24h ?? 0) >= 0 ? "positive" as const : "warning" as const },
+        { label: "Atualizado", value: new Date(quote.lastUpdatedAt).toLocaleString("pt-BR"), status: quote.stale ? "warning" as const : "neutral" as const }
+      ]
+    }
+  ];
+}
+
+async function buildSingleCryptoReadResponse(message: string) {
+  const lookup = await getCryptoMarketQuoteByQuery(extractCryptoQuoteQuery(message));
+
+  if (lookup.status === "not_found") {
+    return createStructuredResponse({
+      responseType: "error",
+      title: "Criptomoeda nao encontrada",
+      message: lookup.message,
+      suggestions: ["Pergunte: quanto esta o bitcoin?", "Pergunte: preco do ethereum"]
+    });
+  }
+
+  if (lookup.status === "ambiguous") {
+    return createStructuredResponse({
+      responseType: "summary",
+      title: "Escolha a criptomoeda",
+      message: lookup.message,
+      sections: [
+        {
+          type: "list",
+          title: "Possibilidades",
+          items: lookup.results.slice(0, 5).map((result) => ({
+            title: `${result.name} (${result.symbol})`,
+            description: result.coingeckoId,
+            severity: "info"
+          }))
+        }
+      ],
+      suggestions: lookup.results.slice(0, 3).map((result) => `quanto esta ${result.coingeckoId}?`)
+    });
+  }
+
+  if (lookup.status === "unavailable") {
+    return createStructuredResponse({
+      responseType: "error",
+      title: "Cotacao indisponivel",
+      message: `Nao consegui obter uma cotacao real de ${lookup.asset.name} agora. ${lookup.message}`,
+      metadata: { provider: "coingecko" }
+    });
+  }
+
+  const { quote } = lookup;
+  const portfolio = await getPortfolio();
+  const position = portfolio.assets.find((asset) => cryptoAssetMatchesQuestion(asset, message));
+  const quantity = position?.quantity ?? 0;
+  const currentValue = quantity > 0 ? quantity * quote.price : null;
+  const wantsPosition = isCryptoPortfolioQuestion(message);
+  const stalePrefix = quote.stale ? "Ultima cotacao disponivel" : "Cotacao atual";
+  const messageText = wantsPosition && position?.hasPosition
+    ? `${stalePrefix}: ${quote.name} esta em ${formatMarketCurrency(quote.price, quote.currency)}. Voce possui ${formatQuantity(quantity)} ${quote.symbol}, avaliados em ${formatMarketCurrency(currentValue ?? 0, quote.currency)}.`
+    : `${stalePrefix}: ${quote.name} esta em ${formatMarketCurrency(quote.price, quote.currency)}.`;
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title: `${quote.symbol} ${quote.name}`,
+    message: messageText,
+    sections: [
+      ...buildCryptoQuoteSections(quote),
+      ...(wantsPosition
+        ? [
+            {
+              type: "metrics" as const,
+              title: "Sua posicao",
+              metrics: position?.hasPosition
+                ? [
+                    { label: "Quantidade", value: formatQuantity(quantity), status: "neutral" as const },
+                    { label: "Valor atual", value: formatMarketCurrency(currentValue ?? 0, quote.currency), status: "neutral" as const },
+                    { label: "Preco medio", value: formatMarketCurrency(position.averagePrice ?? 0, quote.currency), status: "neutral" as const }
+                  ]
+                : [{ label: "Posicao", value: "Voce ainda nao possui essa cripto cadastrada na carteira.", status: "warning" as const }]
+            }
+          ]
+        : [])
+    ],
+    suggestions: ["quanto tenho em bitcoin?", "quanto minha carteira de cripto vale hoje?"],
+    metadata: { provider: "coingecko", model: "deterministic", affectedDomains: ["market", "portfolio"] }
+  });
+}
+
+async function buildCryptoPortfolioReadResponse() {
+  const portfolio = await getPortfolio();
+  const cryptoPositions = portfolio.assets.filter((asset) => asset.categoryId === "CRIPTO" && (asset.hasPosition || asset.quantity > 0));
+  const totalCurrentValue = cryptoPositions.reduce((total, asset) => total + (typeof asset.currentValue === "number" ? asset.currentValue : 0), 0);
+  const totalInvested = cryptoPositions.reduce((total, asset) => total + (asset.investedValue ?? 0), 0);
+  const profit = totalCurrentValue - totalInvested;
+
+  return createStructuredResponse({
+    responseType: "summary",
+    title: "Carteira de cripto",
+    message:
+      cryptoPositions.length > 0
+        ? `Sua carteira de cripto vale ${formatMarketCurrency(totalCurrentValue)} hoje, considerando as cotações reais disponíveis.`
+        : "Voce ainda nao possui posicoes de cripto cadastradas na carteira.",
+    sections: [
+      {
+        type: "metrics",
+        title: "Resumo",
+        metrics: [
+          { label: "Valor atual", value: formatMarketCurrency(totalCurrentValue), status: totalCurrentValue > 0 ? "neutral" : "warning" },
+          { label: "Valor investido", value: formatMarketCurrency(totalInvested), status: "neutral" },
+          { label: "Lucro/prejuizo", value: formatMarketCurrency(profit), status: profit >= 0 ? "positive" : "warning" }
+        ]
+      },
+      ...(cryptoPositions.length > 0
+        ? [
+            {
+              type: "list" as const,
+              title: "Posicoes",
+              items: cryptoPositions.slice(0, 8).map((asset) => ({
+                title: `${asset.ticker} - ${formatQuantity(asset.quantity)}`,
+                description: `${formatMarketCurrency(asset.currentValue ?? 0)} · preco atual ${asset.currentPrice ? formatMarketCurrency(asset.currentPrice) : "indisponivel"}`,
+                severity: asset.priceStatus === "stale" ? "warning" as const : "info" as const
+              }))
+            }
+          ]
+        : [])
+    ],
+    suggestions: ["quanto esta o bitcoin?", "quanto esta o ethereum?", "quanto esta o solana?"],
+    metadata: { provider: "market-service", model: "deterministic", affectedDomains: ["portfolio", "market"] }
+  });
+}
+
+async function handleCryptoReadMessage(message: string) {
+  if (!isCryptoReadMessage(message)) return null;
+  if (/(carteira\s+de\s+cripto|criptos?\s+(?:valem|vale)|quanto\s+tenho\s+de\s+cripto)/.test(normalizeText(message))) {
+    return buildCryptoPortfolioReadResponse();
+  }
+
+  return buildSingleCryptoReadResponse(message);
+}
+
 export async function handleOperationalChatMessage(input: ToolInput): Promise<PreparedAction | NoAction> {
   const activeAction = await findActiveAiPendingAction(input.sessionId);
+  const normalized = normalizeText(input.message);
 
   if (!activeAction && confirmationPattern.test(input.message)) {
     return { handled: true, response: createErrorResponse("Nao ha uma acao pendente ativa para confirmar. Envie o pedido novamente.") };
@@ -2242,9 +3044,29 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
   }
 
   if (activeAction?.status === "collecting") {
-    return { handled: true, response: await updateCollectingAction(activeAction, input.message) };
+    if (isExplicitIntentSwitchDuringCollection(input.message)) {
+      await discardPendingAction(activeAction, "cancelled", "replaced_by_new_intent", input.messageId);
+      logAssistantDiagnostic("pending-action-bypassed", {
+        pendingActionId: activeAction.id ?? null,
+        toolName: activeAction.toolName
+      });
+    } else {
+      return { handled: true, response: await updateCollectingAction(activeAction, input.message) };
+    }
   }
 
+  const timeZone = await resolveCurrentAssistantTimeZone();
+  const planningReadResponse = await handlePlanningReadMessage(input.message, timeZone);
+  if (planningReadResponse) {
+    return { handled: true, response: planningReadResponse };
+  }
+
+  const cryptoReadResponse = await handleCryptoReadMessage(input.message);
+  if (cryptoReadResponse) {
+    return { handled: true, response: cryptoReadResponse };
+  }
+
+  if (explicitReadIntentPattern.test(normalized)) return { handled: false };
   if (!writeIntentPattern.test(input.message) && !settingsWriteIntentPattern.test(input.message)) return { handled: false };
 
   if (activeAction && activeAction.status === "awaiting_confirmation") {
@@ -2257,8 +3079,6 @@ export async function handleOperationalChatMessage(input: ToolInput): Promise<Pr
     };
   }
 
-  const normalized = normalizeText(input.message);
-  if (/^(quanto|como|quais|qual|analise|mostre|liste|listar|ver)\b/.test(normalized)) return { handled: false };
   let response: AiChatStructuredResponse | null = null;
 
   if (/(transferir|transferencia|mover).*(carteira|ativo)|(?:preco|preco medio|preço medio|quantidade).*(manual|editar|alterar|atualizar)|(?:editar|alterar|atualizar).*(preco medio|preço medio|quantidade)/.test(normalized)) {

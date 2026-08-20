@@ -285,7 +285,7 @@ export function GoalsPage() {
         {form.type === "shares" ? (
           <>
             <ManagementField label="Quantidade objetivo" required helperText="Use casas decimais apenas se este ativo permitir fracao.">
-              <input type="number" min="0" step="0.000001" value={form.targetQuantity} onChange={(event) => setForm((current) => ({ ...current, targetQuantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 100" />
+              <input type="number" min="0" step="0.00000001" value={form.targetQuantity} onChange={(event) => setForm((current) => ({ ...current, targetQuantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 100" />
             </ManagementField>
             <ManagementField label="Ticker do ativo" required helperText="Informe o ativo que sera acompanhado por quantidade acumulada.">
               <input value={form.assetTicker} onChange={(event) => setForm((current) => ({ ...current, assetTicker: event.target.value.toUpperCase() }))} className={fieldClass} placeholder="Ex.: ITSA4" />

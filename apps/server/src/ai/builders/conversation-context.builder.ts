@@ -1,5 +1,6 @@
 import { buildInvestmentContext } from "./investment-context.builder";
 import { buildPlanningContext } from "./planning-context.builder";
+import { DEFAULT_APP_TIME_ZONE, getTimeZoneNowFields } from "../../utils/timezone";
 
 export type AiConversationIntent =
   | "monthly_planning"
@@ -21,8 +22,8 @@ export type AiConversationIntent =
   | "general";
 
 function nowPeriod() {
-  const now = new Date();
-  return { year: now.getFullYear(), month: now.getMonth() + 1 };
+  const now = getTimeZoneNowFields(new Date(), DEFAULT_APP_TIME_ZONE);
+  return { year: now.year, month: now.month };
 }
 
 function normalizeIntentText(message: string) {
@@ -40,7 +41,7 @@ export function detectConversationIntent(message: string): AiConversationIntent 
   if (isShortGreeting && !hasInvestmentSignal) return "general";
   if (/(recorrent|assinatura|parcel|fixo)/.test(text)) return "recurring";
   if (/(cartao|pix|debito|credito|pagamento)/.test(text)) return "payment_methods";
-  if (/(gasto|despesa|orcamento|planejamento|categoria|setor)/.test(text)) return "expenses";
+  if (/(gastei|gasto|despesa|orcamento|planejamento|categoria|setor|livre pra gastar|livre para gastar)/.test(text)) return "expenses";
   if (/(dados atualizados|ver dados atualizados|ficaram meus aportes|meus aportes)/.test(text)) return "contributions";
   if (/(aporte|deposit)/.test(text)) return "contributions";
   if (/(dividendo|rendimento|jcp|dy)/.test(text)) return "dividends";

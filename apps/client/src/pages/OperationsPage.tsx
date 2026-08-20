@@ -6,7 +6,7 @@ import { MoneyValue } from "../components/ui/ValueDisplay";
 import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { assetRecordsApi, operationRecordsApi } from "../services/api";
 import type { AssetRecord, OperationRecord, OperationType } from "../types/management";
-import { formatCurrency } from "../utils/formatters";
+import { formatCurrency, formatQuantity } from "../utils/formatters";
 
 type OperationFormState = {
   assetTicker: string;
@@ -97,7 +97,7 @@ export function OperationsPage() {
     setForm({
       assetTicker: operation.assetTicker ?? "",
       type: operation.type,
-      quantity: formatOperationNumber(operation.quantity, 6),
+      quantity: formatOperationNumber(operation.quantity, 8),
       price: formatOperationNumber(operation.price, 2),
       fees: formatOperationNumber(operation.fees, 2),
       date: String(operation.date).slice(0, 10),
@@ -189,7 +189,7 @@ export function OperationsPage() {
             <div className="mobile-metric-grid text-sm">
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Quantidade</p>
-                <p className="font-medium text-ink">{operation.quantity}</p>
+                <p className="font-medium text-ink">{formatQuantity(operation.quantity)}</p>
               </div>
               <div className="rounded-lg bg-elevated px-3 py-2">
                 <p className="text-xs text-muted">Preco</p>
@@ -226,7 +226,7 @@ export function OperationsPage() {
             <td className="py-3">{new Date(operation.date).toLocaleDateString("pt-BR")}</td>
             <td className="py-3">{operation.type}</td>
             <td className="py-3 font-medium text-ink">{operation.assetTicker}</td>
-            <td className="py-3">{operation.quantity}</td>
+            <td className="py-3">{formatQuantity(operation.quantity)}</td>
             <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.price)} size="table" /></td>
             <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.fees)} size="table" /></td>
             <td className="py-3 text-right"><MoneyValue value={formatCurrency(operation.totalValue)} size="table" /></td>
@@ -261,7 +261,7 @@ export function OperationsPage() {
         </ManagementField>
         <div className="grid gap-3 sm:grid-cols-2">
           <ManagementField label="Quantidade" required helperText="Use casas decimais quando a operacao permitir fracoes.">
-            <input type="number" min="0" step="0.000001" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 10" />
+            <input type="number" min="0" step="0.00000001" value={form.quantity} onChange={(event) => setForm((current) => ({ ...current, quantity: event.target.value }))} className={fieldClass} placeholder="Ex.: 10" />
           </ManagementField>
           <ManagementField label="Preco unitario" required helperText="Informe o preco pago ou recebido por unidade.">
             <input type="number" min="0" step="0.01" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} className={fieldClass} placeholder="Ex.: 12,50" />

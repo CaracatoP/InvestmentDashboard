@@ -157,6 +157,7 @@ async function processAssistantMessage(message: { id: string; from: string; text
         responseType: result.assistantMessage?.structuredResponse?.responseType ?? null,
         intent: result.intent ?? null,
         responseRendered: Boolean(rendered),
+        renderedLength: rendered.length,
         providerSent: providerResult.sent
       }));
     }

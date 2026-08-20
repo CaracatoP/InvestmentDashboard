@@ -10,7 +10,7 @@ import { MoneyValue } from "../components/ui/ValueDisplay";
 import { refreshMarketData } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Asset } from "../types/investments";
-import { formatCurrency, formatPercentage } from "../utils/formatters";
+import { formatCurrency, formatPercentage, formatQuantity } from "../utils/formatters";
 
 const allocationColors = ["#22c55e", "#38bdf8", "#a78bfa", "#f59e0b", "#fb7185", "#14b8a6"];
 const positionFilters = ["Com posicao", "Todos", "Sem posicao", "Com erro de cotacao"];
@@ -255,7 +255,7 @@ export function PortfolioPage() {
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Quantidade</p>
-                          <p className="font-medium text-ink">{asset.quantity}</p>
+                          <p className="font-medium text-ink">{formatQuantity(asset.quantity)}</p>
                         </div>
                         <div className="rounded-lg bg-elevated px-3 py-2">
                           <p className="text-xs text-muted">Preco medio</p>
@@ -359,7 +359,7 @@ export function PortfolioPage() {
                         <p className="text-xs text-muted">{asset.name}</p>
                       </td>
                       <td className="border-b border-line/70 px-4 py-5">{asset.categoryLabel ?? asset.category}</td>
-                      <td className="border-b border-line/70 px-4 py-5 text-center tabular-nums">{asset.quantity}</td>
+                      <td className="border-b border-line/70 px-4 py-5 text-center tabular-nums">{formatQuantity(asset.quantity)}</td>
                       <td className="border-b border-line/70 px-4 py-5 text-right font-medium text-ink">
                         <MoneyValue value={formatCurrency(asset.averagePrice)} size="table" />
                       </td>

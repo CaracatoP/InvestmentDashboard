@@ -8,6 +8,7 @@ import { runWithAuthContext } from "../auth/auth-context";
 import { listDividends } from "../repositories/investment.repository";
 import { listAllMonthlyExpenses } from "../repositories/monthly-planning.repository";
 import { createBootstrapAdmin, getUserForAuthContext } from "../services/auth.service";
+import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { createWhatsAppConnectionCode, disconnectWhatsAppIntegration } from "../services/whatsapp-link.service";
 
 const originalFetch = globalThis.fetch;
@@ -33,6 +34,66 @@ async function closeServer(server: ReturnType<typeof app.listen>) {
 
 function asUser<T>(userId: string, callback: () => Promise<T>) {
   return runWithAuthContext({ userId, role: "user", channel: "web" }, callback);
+}
+
+function monthlyPlanCategories() {
+  return [
+    { id: "moradia", name: "Moradia", icon: "home", color: "#34d399", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "alimentacao", name: "Alimentacao", icon: "utensils", color: "#f97316", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "transporte", name: "Transporte", icon: "car", color: "#38bdf8", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "lazer", name: "Lazer", icon: "gamepad-2", color: "#a78bfa", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "investimentos", name: "Investimentos", icon: "trending-up", color: "#22c55e", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "saude", name: "Saude", icon: "heart-pulse", color: "#fb7185", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "assinaturas", name: "Assinaturas", icon: "repeat", color: "#facc15", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "educacao", name: "Educacao", icon: "book-open", color: "#60a5fa", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 },
+    { id: "outros", name: "Outros", icon: "circle", color: "#94a3b8", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 }
+  ];
+}
+
+async function withMockedDate<T>(isoDate: string, callback: () => Promise<T>) {
+  const RealDate = Date;
+
+  class MockDate extends RealDate {
+    constructor(...args: any[]) {
+      switch (args.length) {
+        case 0:
+          super(isoDate);
+          break;
+        case 1:
+          super(args[0]);
+          break;
+        case 2:
+          super(args[0], args[1]);
+          break;
+        case 3:
+          super(args[0], args[1], args[2]);
+          break;
+        case 4:
+          super(args[0], args[1], args[2], args[3]);
+          break;
+        case 5:
+          super(args[0], args[1], args[2], args[3], args[4]);
+          break;
+        case 6:
+          super(args[0], args[1], args[2], args[3], args[4], args[5]);
+          break;
+        default:
+          super(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+          break;
+      }
+    }
+
+    static now() {
+      return new RealDate(isoDate).getTime();
+    }
+  }
+
+  globalThis.Date = MockDate as DateConstructor;
+  try {
+    return await callback();
+  } finally {
+    globalThis.Date = RealDate;
+  }
 }
 
 function configureWhatsApp() {
@@ -273,6 +334,111 @@ test("whatsapp webhook keeps expense creation idempotent and sends rendered text
     assert.equal(lunchExpenses.length, 1);
     assert.equal(payloadBodies.some((body) => /"message"|responseType|pendingAction|metadata/.test(body)), false);
     assert.equal(payloadBodies.some((body) => body.includes("Responda com *confirmo* ou *cancelar*.")), true);
+  } finally {
+    restore();
+    await closeServer(server);
+  }
+});
+
+test("whatsapp webhook infers lunch expense details with the local Sao Paulo time", async () => {
+  const restore = configureWhatsApp();
+  const sentMessages: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    sentMessages.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ messages: [{ id: `sent-${randomUUID()}` }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const user = (await createBootstrapAdmin({
+      email: `whatsapp-lunch-${randomUUID()}@example.com`,
+      password: "SenhaForte123!"
+    })).user;
+    const phone = uniqueBrazilianPhone();
+    const link = await asUser(user.id, () => createWhatsAppConnectionCode());
+    await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, link.code));
+
+    await withMockedDate("2026-08-20T19:06:00.000Z", async () => {
+      const first = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "gastei 100 reais no almoco hoje"));
+      const confirmed = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "confirmo"));
+      const expenses = await asUser(user.id, () => listAllMonthlyExpenses());
+      const lunchExpense = expenses.find((expense) => expense.description === "Almoco" && expense.amountInCents === 10000);
+      const payloadBodies = sentMessages.map((message) => JSON.stringify(message));
+
+      assert.equal(first.status, 200);
+      assert.equal(confirmed.status, 200);
+      assert.equal(lunchExpense?.categoryId, "alimentacao");
+      assert.equal(payloadBodies.some((body) => body.includes("16:06")), true);
+      assert.equal(payloadBodies.some((body) => body.includes("19:06")), false);
+      assert.equal(payloadBodies.some((body) => /Campo pendente|Informe: Descricao/.test(body)), false);
+    });
+  } finally {
+    restore();
+    await closeServer(server);
+  }
+});
+
+test("whatsapp webhook answers planning reads with real August 2026 data", async () => {
+  const restore = configureWhatsApp();
+  const sentMessages: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    sentMessages.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ messages: [{ id: `sent-${randomUUID()}` }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const user = (await createBootstrapAdmin({
+      email: `whatsapp-planning-read-${randomUUID()}@example.com`,
+      password: "SenhaForte123!"
+    })).user;
+    const phone = uniqueBrazilianPhone();
+    const link = await asUser(user.id, () => createWhatsAppConnectionCode());
+    await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, link.code));
+
+    await asUser(user.id, async () => {
+      const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+      assert.ok(plan.id);
+      await addMonthlyExpense(plan.id, {
+        categoryId: "alimentacao",
+        description: "Almoco",
+        amountInCents: 10000,
+        date: "2026-08-20",
+        time: "12:00",
+        expenseType: "single",
+        recurring: false,
+        status: "completed"
+      });
+      await addMonthlyExpense(plan.id, {
+        categoryId: "assinaturas",
+        description: "Spotify",
+        amountInCents: 1290,
+        date: "2026-08-22",
+        time: "09:00",
+        expenseType: "single",
+        recurring: false,
+        status: "planned"
+      });
+    });
+
+    const spent = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "quanto gastei esse mes?"));
+    const available = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, phone, "quanto tenho livre pra gastar ainda?"));
+    const payloadBodies = sentMessages.map((message) => JSON.stringify(message));
+
+    assert.equal(spent.status, 200);
+    assert.equal(available.status, 200);
+    assert.equal(payloadBodies.some((body) => body.includes("Voce ja gastou R$ 100,00")), true);
+    assert.equal(payloadBodies.some((body) => body.includes("Ainda nao encontrei dados")), false);
   } finally {
     restore();
     await closeServer(server);

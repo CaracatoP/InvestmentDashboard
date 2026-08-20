@@ -19,6 +19,7 @@ import { handleAssistantCommand } from "../services/assistant-command.service";
 import { createDividendRecord } from "../services/dividend.service";
 import { addMonthlyExpense, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { getSettings } from "../services/portfolio.service";
+import { clearCoinGeckoCachesForTests } from "../services/coingecko-client";
 
 beforeEach(async () => {
   await resetSettingsRecord();
@@ -40,6 +41,58 @@ function monthlyPlanCategories() {
     { id: "educacao", name: "Educacao", icon: "book-open", color: "#60a5fa", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 50000 },
     { id: "outros", name: "Outros", icon: "circle", color: "#94a3b8", budgetType: "fixed" as const, percentage: 0, fixedAmountInCents: 0 }
   ];
+}
+
+async function withMockedDate<T>(isoDate: string, callback: () => Promise<T>) {
+  const RealDate = Date;
+
+  class MockDate extends RealDate {
+    constructor(...args: any[]) {
+      switch (args.length) {
+        case 0:
+          super(isoDate);
+          break;
+        case 1:
+          super(args[0]);
+          break;
+        case 2:
+          super(args[0], args[1]);
+          break;
+        case 3:
+          super(args[0], args[1], args[2]);
+          break;
+        case 4:
+          super(args[0], args[1], args[2], args[3]);
+          break;
+        case 5:
+          super(args[0], args[1], args[2], args[3], args[4]);
+          break;
+        case 6:
+          super(args[0], args[1], args[2], args[3], args[4], args[5]);
+          break;
+        default:
+          super(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+          break;
+      }
+    }
+
+    static now() {
+      return new RealDate(isoDate).getTime();
+    }
+  }
+
+  globalThis.Date = MockDate as DateConstructor;
+  try {
+    return await callback();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
+function expectHandled(result: Awaited<ReturnType<typeof handleOperationalChatMessage>>) {
+  assert.equal(result.handled, true);
+  if (!result.handled) throw new Error("Expected handled response.");
+  return result;
 }
 
 test("disabled AI provider reports safe disabled health", async () => {
@@ -110,6 +163,7 @@ test("AI intent classifier routes common requests to specific contexts", () => {
   assert.equal(detectConversationIntent("quanto recebi de dividendos?"), "dividends");
   assert.equal(detectConversationIntent("como estao meus aportes?"), "contributions");
   assert.equal(detectConversationIntent("como estao meus investimentos?"), "investments");
+  assert.equal(detectConversationIntent("quanto gastei esse mes?"), "expenses");
   assert.equal(detectConversationIntent("analise minha carteira"), "investments");
   assert.equal(detectConversationIntent("como esta minha rentabilidade?"), "investments");
   assert.equal(detectConversationIntent("quanto tenho investido?"), "investments");
@@ -157,32 +211,116 @@ test("asset performance context includes CoinGecko spotlight for bitcoin questio
   const previousCoinGeckoKey = env.coingeckoApiKey;
   const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
   const previousFetch = globalThis.fetch;
+  clearCoinGeckoCachesForTests();
   env.coingeckoApiKey = "demo-key";
   env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
   globalThis.fetch = (async () =>
     new Response(
-      JSON.stringify([
-        {
-          id: "bitcoin",
-          symbol: "btc",
-          name: "Bitcoin",
-          current_price: 620000,
-          price_change_percentage_24h: 2.5,
-          last_updated: "2026-08-20T12:00:00.000Z"
+      JSON.stringify({
+        bitcoin: {
+          brl: 620000,
+          brl_24h_change: 2.5,
+          last_updated_at: 1787227200
+        },
+        dogecoin: {
+          brl: 1.23,
+          brl_24h_change: 4.2,
+          last_updated_at: 1787227200
         }
-      ]),
+      }),
       { status: 200 }
     )) as typeof fetch;
 
   try {
     const { intent, context } = await buildConversationContext("Quanto esta o bitcoin hoje?");
     const serialized = stringifyContextForAi(context, 1400);
+    const marketSpotlight = (context as { overview?: { marketSpotlight?: { currentPrice?: number | null; status?: string | null } } }).overview?.marketSpotlight;
 
     assert.equal(intent, "asset_performance");
+    assert.equal(marketSpotlight?.currentPrice, 620000);
+    assert.equal(marketSpotlight?.status, "updated");
     assert.match(serialized, /marketSpotlight/);
     assert.match(serialized, /bitcoin/i);
-    assert.match(serialized, /620000/);
   } finally {
+    clearCoinGeckoCachesForTests();
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("assistant answers direct crypto price through MarketService without Groq", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousFetch = globalThis.fetch;
+  let fetchCount = 0;
+
+  clearCoinGeckoCachesForTests();
+  env.coingeckoApiKey = "demo-key";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    return new Response(
+      JSON.stringify({
+        bitcoin: {
+          brl: 620000,
+          brl_24h_change: 2.5,
+          last_updated_at: 1787227200
+        },
+        dogecoin: {
+          brl: 1.23,
+          brl_24h_change: 2.5,
+          last_updated_at: 1787227200
+        }
+      }),
+      { status: 200 }
+    );
+  }) as typeof fetch;
+
+  try {
+    const userId = `assistant-crypto-price-${randomUUID()}`;
+    const result = await asUser(userId, async () => {
+      const session = await createChatSession("Crypto");
+      return sendChatMessage(String(session.id), "quanto esta dogecoin?");
+    });
+
+    assert.equal(result.assistantMessage.provider, "internal-tools");
+    assert.equal(result.assistantMessage.model, "deterministic");
+    assert.equal(result.assistantMessage.structuredResponse?.metadata.provider, "coingecko");
+    assert.match(result.assistantMessage.content, /R\$\s*1,23/);
+    assert.equal(fetchCount, 1);
+  } finally {
+    clearCoinGeckoCachesForTests();
+    env.coingeckoApiKey = previousCoinGeckoKey;
+    env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("assistant does not invent crypto price when CoinGecko has no fallback", async () => {
+  const previousCoinGeckoKey = env.coingeckoApiKey;
+  const previousCoinGeckoBaseUrl = env.coingeckoApiBaseUrl;
+  const previousFetch = globalThis.fetch;
+
+  clearCoinGeckoCachesForTests();
+  env.coingeckoApiKey = "";
+  env.coingeckoApiBaseUrl = "https://api.coingecko.com/api/v3";
+  globalThis.fetch = (async () => {
+    throw new Error("fetch should not be called without API key");
+  }) as typeof fetch;
+
+  try {
+    const userId = `assistant-crypto-no-provider-${randomUUID()}`;
+    const result = await asUser(userId, async () => {
+      const session = await createChatSession("Crypto sem provider");
+      return sendChatMessage(String(session.id), "quanto esta litecoin?");
+    });
+
+    assert.equal(result.assistantMessage.provider, "internal-tools");
+    assert.equal(result.assistantMessage.structuredResponse?.responseType, "error");
+    assert.doesNotMatch(result.assistantMessage.content, /R\$\s*\d/);
+  } finally {
+    clearCoinGeckoCachesForTests();
     env.coingeckoApiKey = previousCoinGeckoKey;
     env.coingeckoApiBaseUrl = previousCoinGeckoBaseUrl;
     globalThis.fetch = previousFetch;
@@ -343,6 +481,110 @@ test("expense category inference maps McDonalds to food and unknown merchants to
   assert.equal(unknownResult.response.responseType, "confirmation");
   assert.equal(unknownAction?.extractedFields.description, "Lugar XYZ");
   assert.equal(unknownAction?.extractedFields.categoryId, "outros");
+});
+
+test("expense command infers lunch description, category and Sao Paulo local time", async () => {
+  await withMockedDate("2026-08-20T19:06:00.000Z", async () => {
+    const sessionId = `ai-action-expense-lunch-${randomUUID()}`;
+    const result = expectHandled(await handleOperationalChatMessage({ sessionId, message: "Gastei 100 reais no almoco hoje" }));
+    const action = await findActiveAiPendingAction(sessionId);
+    const dataField = result.response.pendingAction?.fields?.find((field) => field.label === "Data");
+
+    assert.equal(result.response.responseType, "confirmation");
+    assert.equal(action?.extractedFields.description, "Almoco");
+    assert.equal(action?.extractedFields.categoryId, "alimentacao");
+    assert.doesNotMatch(result.response.message, /descricao/i);
+    assert.equal(String(dataField?.value).includes("16:06"), true);
+  });
+});
+
+test("planning read queries use authoritative monthly overview data", async () => {
+  const userId = `assistant-planning-read-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+    await addMonthlyExpense(plan.id, {
+      categoryId: "alimentacao",
+      description: "Almoco",
+      amountInCents: 10000,
+      date: "2026-08-20",
+      time: "12:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+    await addMonthlyExpense(plan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: false,
+      status: "planned"
+    });
+
+    const spent = await handleOperationalChatMessage({ sessionId: `planning-read-spent-${randomUUID()}`, message: "quanto gastei esse mes?" });
+    const available = await handleOperationalChatMessage({ sessionId: `planning-read-available-${randomUUID()}`, message: "quanto tenho livre pra gastar ainda?" });
+
+    assert.equal(spent.handled, true);
+    assert.equal(spent.response.responseType, "summary");
+    assert.match(spent.response.message, /R\$\s?100,00/);
+    assert.doesNotMatch(spent.response.message, /nao encontrei dados|ainda nao/i);
+
+    assert.equal(available.handled, true);
+    assert.equal(available.response.responseType, "summary");
+    assert.match(available.response.message, /R\$/);
+    assert.doesNotMatch(available.response.message, /nao encontrei dados|ainda nao/i);
+  });
+});
+
+test("planning read queries stay isolated per user", async () => {
+  const userA = `assistant-planning-user-a-${randomUUID()}`;
+  const userB = `assistant-planning-user-b-${randomUUID()}`;
+
+  await asUser(userA, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 300000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+    await addMonthlyExpense(plan.id, {
+      categoryId: "alimentacao",
+      description: "Almoco A",
+      amountInCents: 10000,
+      date: "2026-08-20",
+      time: "12:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+  });
+
+  await asUser(userB, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 300000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+    await addMonthlyExpense(plan.id, {
+      categoryId: "alimentacao",
+      description: "Almoco B",
+      amountInCents: 30000,
+      date: "2026-08-20",
+      time: "12:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+  });
+
+  const userAResponse = expectHandled(
+    await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-a-${randomUUID()}`, message: "quanto gastei esse mes?" }))
+  );
+  const userBResponse = expectHandled(
+    await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-b-${randomUUID()}`, message: "quanto gastei esse mes?" }))
+  );
+
+  assert.match(userAResponse.response.message, /R\$\s?100,00/);
+  assert.doesNotMatch(userAResponse.response.message, /R\$\s?300,00/);
+  assert.match(userBResponse.response.message, /R\$\s?300,00/);
+  assert.doesNotMatch(userBResponse.response.message, /R\$\s?100,00/);
 });
 
 test("paying a planned matching expense asks to mark it paid instead of duplicating it", async () => {
@@ -508,6 +750,300 @@ test("whatsapp clarification persists pending action and resolves the correct su
     assert.equal(confirmed.assistantMessage?.structuredResponse?.responseType, "success");
     assert.equal(expenses.find((expense) => expense.id === spotify.id)?.status, "completed");
     assert.equal(expenses.find((expense) => expense.id === netflix.id)?.status, "planned");
+  });
+});
+
+test("whatsapp clarification resolves a stored candidate by number", async () => {
+  const userId = `assistant-spotify-number-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    const spotify = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Netflix",
+      amountInCents: 2190,
+      date: "2026-08-25",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const externalConversationId = `wa-number-${randomUUID()}`;
+    const first = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "paguei a assinatura"
+    });
+    const second = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "1"
+    });
+    const secondAction = await findActiveAiPendingAction(second.sessionId);
+
+    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
+    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(secondAction?.status, "awaiting_confirmation");
+    assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
+  });
+});
+
+test("whatsapp clarification resolves a stored candidate by name", async () => {
+  const userId = `assistant-spotify-name-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    const spotify = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Netflix",
+      amountInCents: 2190,
+      date: "2026-08-25",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const externalConversationId = `wa-name-${randomUUID()}`;
+    await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "paguei a assinatura"
+    });
+    const second = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "spotify"
+    });
+    const secondAction = await findActiveAiPendingAction(second.sessionId);
+
+    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(secondAction?.status, "awaiting_confirmation");
+    assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
+  });
+});
+
+test("new read intent cancels a broken pending selection instead of trapping the user", async () => {
+  const userId = `assistant-pending-read-switch-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "alimentacao",
+      description: "Almoco",
+      amountInCents: 10000,
+      date: "2026-08-20",
+      time: "12:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Netflix",
+      amountInCents: 2190,
+      date: "2026-08-25",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const externalConversationId = `wa-read-switch-${randomUUID()}`;
+    const first = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "paguei a assinatura"
+    });
+    const second = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "quanto gastei esse mes?"
+    });
+    const pendingAfter = await findActiveAiPendingAction(first.sessionId);
+
+    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
+    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "summary");
+    assert.match(second.assistantMessage?.structuredResponse?.message ?? "", /R\$\s?100,00/);
+    assert.doesNotMatch(second.assistantMessage?.structuredResponse?.message ?? "", /gasto pendente/i);
+    assert.equal(pendingAfter, null);
+  });
+});
+
+test("invalid pending candidates fail once and then clear the stuck action", async () => {
+  const userId = `assistant-invalid-candidate-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "alimentacao",
+      description: "Almoco",
+      amountInCents: 10000,
+      date: "2026-08-20",
+      time: "12:00",
+      expenseType: "single",
+      recurring: false,
+      status: "completed"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+    await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Netflix",
+      amountInCents: 2190,
+      date: "2026-08-25",
+      time: "09:00",
+      expenseType: "single",
+      recurring: true,
+      status: "planned"
+    });
+
+    const externalConversationId = `wa-invalid-${randomUUID()}`;
+    const first = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "paguei a assinatura"
+    });
+    const active = await findActiveAiPendingAction(first.sessionId);
+    assert.ok(active?.id);
+
+    await updateAiPendingAction(active.id, {
+      extractedFields: {
+        ...active.extractedFields,
+        candidateExpenseIds: ["missing-expense-id"],
+        candidateExpenses: [{
+          id: "missing-expense-id",
+          label: "Spotify - R$ 12,90 - 22/08 - Assinaturas",
+          description: "Spotify",
+          amountInCents: 1290,
+          date: "2026-08-22",
+          categoryName: "Assinaturas"
+        }]
+      }
+    });
+
+    const invalid = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "1"
+    });
+    const followUp = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "quanto gastei esse mes?"
+    });
+    const pendingAfter = await findActiveAiPendingAction(first.sessionId);
+
+    assert.equal(invalid.assistantMessage?.structuredResponse?.responseType, "error");
+    assert.doesNotMatch(invalid.assistantMessage?.structuredResponse?.message ?? "", /mesma resposta repetida/i);
+    assert.equal(followUp.assistantMessage?.structuredResponse?.responseType, "summary");
+    assert.match(followUp.assistantMessage?.structuredResponse?.message ?? "", /R\$\s?100,00/);
+    assert.equal(pendingAfter, null);
+  });
+});
+
+test("duplicate recurring spotify candidates collapse to the canonical occurrence", async () => {
+  const userId = `assistant-spotify-duplicate-${randomUUID()}`;
+
+  await asUser(userId, async () => {
+    const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(augustPlan.id);
+    const recurrenceId = `spotify-series-${randomUUID()}`;
+    const template = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "recurring",
+      recurring: true,
+      status: "planned",
+      recurrenceId,
+      recurrenceOriginalDate: "2026-08-22"
+    });
+    const occurrence = await addMonthlyExpense(augustPlan.id, {
+      categoryId: "assinaturas",
+      description: "Spotify",
+      amountInCents: 1290,
+      date: "2026-08-22",
+      time: "09:00",
+      expenseType: "recurring",
+      recurring: true,
+      status: "planned",
+      recurrenceId,
+      recurrenceOriginalDate: "2026-08-22",
+      recurrenceSourceId: template.id ?? null
+    });
+
+    const sessionId = `ai-action-spotify-duplicate-${randomUUID()}`;
+    const result = await handleOperationalChatMessage({ sessionId, message: "paguei o spotify" });
+    const action = await findActiveAiPendingAction(sessionId);
+
+    assert.equal(result.handled, true);
+    assert.equal(result.response.responseType, "confirmation");
+    assert.equal(action?.extractedFields.expenseId, occurrence.id);
+    assert.doesNotMatch(result.response.message, /qual deles/i);
   });
 });
 

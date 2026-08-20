@@ -392,7 +392,7 @@ function expenseFormFromRecord(expense?: MonthlyExpenseRecord, categoryId = ""):
     investmentDestination: integration?.destination ?? "",
     assetId: integration?.assetId ?? "",
     assetSearch: integration?.assetTicker ?? "",
-    quantity: formatNumberInput(integration?.quantity, 6),
+    quantity: formatNumberInput(integration?.quantity, 8),
     price: formatNumberInput(integration?.price, 2),
     fees: expense ? formatNumberInput(integration?.fees ?? 0, 2) : "",
     cashBoxId: integration?.cashBoxId ?? "",

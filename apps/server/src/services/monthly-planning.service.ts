@@ -59,6 +59,7 @@ import type {
   OperationRecord
 } from "../types/investment";
 import { badRequest, notFound } from "../utils/http-error";
+import { DEFAULT_APP_TIME_ZONE, formatTimeZoneTimestamp, getTimeZoneNowFields, parseTimeZoneLocalDateTime } from "../utils/timezone";
 import {
   addCashBoxMovement,
   findCashBoxMovementByPlanningExpenseId,
@@ -235,21 +236,12 @@ const monthlyIncomeEntryCompletionLocks = new Map<string, Promise<MonthlyIncomeE
 const monthlyIncomeEntryMutationLocks = new Map<string, Promise<MonthlyIncomeEntryRecord>>();
 const integratedExpenseMutationLocks = new Map<string, Promise<MonthlyExpenseRecord>>();
 
-export function getLocalTimestampWithOffset(date = new Date()) {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absoluteOffset = Math.abs(offsetMinutes);
-  const offsetHours = Math.floor(absoluteOffset / 60);
-  const minutes = absoluteOffset % 60;
-
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${sign}${pad(offsetHours)}:${pad(minutes)}`;
+export function getLocalTimestampWithOffset(date = new Date(), timeZone = DEFAULT_APP_TIME_ZONE) {
+  return formatTimeZoneTimestamp(date, timeZone);
 }
 
-export function parseLocalExpenseDate(date: string, time: string) {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hour, minute] = time.split(":").map(Number);
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
+export function parseLocalExpenseDate(date: string, time: string, timeZone = DEFAULT_APP_TIME_ZONE) {
+  return parseTimeZoneLocalDateTime(date, time, timeZone);
 }
 
 function pad(value: number) {
@@ -1596,10 +1588,10 @@ export function calculateMonthlyPlanning(plan: MonthlyPlanRecord, expenses: Mont
   }
   const remainingIncomeAfterPlannedInCents = projectedTotalIncomeInCents - completedInCents - plannedExpensesInCents;
   const availableToInvestInCents = Math.max(remainingIncomeAfterPlannedInCents - goalsReserveInCents, 0);
-  const now = new Date();
+  const now = getTimeZoneNowFields(new Date(), DEFAULT_APP_TIME_ZONE);
   const selectedMonthDays = daysInMonth(year, month);
-  const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
-  const remainingDays = isCurrentMonth ? Math.max(selectedMonthDays - now.getDate(), 0) : selectedMonthDays;
+  const isCurrentMonth = now.year === year && now.month === month;
+  const remainingDays = isCurrentMonth ? Math.max(selectedMonthDays - now.day, 0) : selectedMonthDays;
   const plannedSimulationAmountInCents = plan.investmentSimulationAmountInCents ?? 0;
   const baseOverview: MonthlyPlanningOverview = {
     plan: enrichedPlan,

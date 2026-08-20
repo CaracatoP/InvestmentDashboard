@@ -12,10 +12,11 @@ import type { AssetRecord, MarketQuoteRecord } from "../types/investment";
 import {
   fetchCoinGeckoMarketChart,
   fetchCoinGeckoMarkets,
+  resolveCoinGeckoAsset,
   searchCoinGeckoAssets,
   type CoinGeckoSearchResult
 } from "./coingecko-client";
-import { buildAssetMarketKey, buildStoredMarketDataKey, getTickerProfile, normalizeTicker, type TickerProfile } from "./ticker.service";
+import { buildAssetMarketKey, buildStoredMarketDataKey, getTickerProfile, normalizeCoinGeckoId, normalizeTicker, type TickerProfile } from "./ticker.service";
 
 type QuoteStatus = MarketQuoteRecord["status"];
 type PriceHistoryStatus = "updated" | "cached" | "stale" | "unavailable" | "unsupported" | "error";
@@ -105,6 +106,7 @@ interface MarketQuoteInput {
   marketCap?: number;
   volume24h?: number;
   displayName?: string;
+  stale?: boolean;
 }
 
 interface ProviderRequestAsset {
@@ -552,7 +554,9 @@ class CoinGeckoMarketDataProvider implements MarketDataProvider {
           displayName: market.name,
           change24h: market.priceChange24h,
           marketCap: market.marketCap,
-          volume24h: market.volume24h
+          volume24h: market.volume24h,
+          stale: market.stale,
+          errorMessage: market.errorMessage
         };
       });
     } catch (error) {
@@ -657,8 +661,27 @@ export function isValidMarketPrice(price: unknown): price is number {
   return typeof price === "number" && Number.isFinite(price) && price > 0;
 }
 
-export function isValidStoredQuote(quote?: MarketQuoteRecord | null) {
+export function isValidStoredQuote(
+  quote?: MarketQuoteRecord | null
+): quote is MarketQuoteRecord & { price: number; status: "success" | "updated" | "stale" } {
   return Boolean(quote && isValidMarketPrice(quote.price) && ["success", "updated", "stale"].includes(quote.status));
+}
+
+function quoteAgeMs(quote: Pick<MarketQuoteRecord, "quotedAt">, now = new Date()) {
+  const quotedAt = new Date(quote.quotedAt).getTime();
+  if (!Number.isFinite(quotedAt)) return Number.POSITIVE_INFINITY;
+  return now.getTime() - quotedAt;
+}
+
+function currentQuoteTtlMs(profile: TickerProfile) {
+  if (profile.market !== "crypto") return Number.POSITIVE_INFINITY;
+  return Math.max(0, env.coingeckoPriceCacheTtlSeconds * 1000);
+}
+
+export function isMarketQuoteFreshForAsset(asset: AssetRecord, quote?: MarketQuoteRecord | null, now = new Date()) {
+  const profile = getTickerProfile(asset);
+  if (!isValidStoredQuote(quote)) return false;
+  return quoteAgeMs(quote, now) <= currentQuoteTtlMs(profile);
 }
 
 export function buildRejectedQuote(
@@ -699,8 +722,8 @@ function buildUpdatedQuote(quote: MarketQuoteInput): Omit<MarketQuoteRecord, "id
     quotedAt: quote.quotedAt,
     source: quote.source,
     currency: quote.currency,
-    status: "updated",
-    errorMessage: "",
+    status: quote.stale ? "stale" : "updated",
+    errorMessage: quote.stale ? (quote.errorMessage ?? "Using last valid market price") : "",
     market: quote.market,
     assetKind: quote.assetKind,
     change24h: quote.change24h,
@@ -783,9 +806,13 @@ async function refreshMarketQuotesForAssets(assets: AssetRecord[]) {
       continue;
     }
 
-    updated += 1;
     const savedQuote = await upsertMarketQuote(buildUpdatedQuote(fetched));
-    await persistQuoteSnapshot(item, fetched);
+    if (fetched.stale) {
+      stale += 1;
+    } else {
+      updated += 1;
+      await persistQuoteSnapshot(item, fetched);
+    }
     quotes.push(savedQuote);
   }
 
@@ -814,11 +841,112 @@ export async function searchCryptoAssets(query: string, limit = 10): Promise<Coi
   return searchCoinGeckoAssets(query, limit);
 }
 
-export async function getMarketQuoteSnapshot(asset: AssetRecord, options: { refreshIfMissing?: boolean } = {}) {
+export type CryptoMarketQuoteLookup =
+  | {
+      status: "resolved";
+      quote: {
+        coingeckoId: string;
+        symbol: string;
+        name: string;
+        currency: string;
+        price: number;
+        change24h?: number | null;
+        marketCap?: number | null;
+        volume24h?: number | null;
+        lastUpdatedAt: string | Date;
+        source: "coingecko" | string;
+        stale: boolean;
+      };
+    }
+  | { status: "ambiguous"; results: CoinGeckoSearchResult[]; message: string }
+  | { status: "not_found"; results: []; message: string }
+  | {
+      status: "unavailable";
+      asset: { coingeckoId: string; symbol: string; name: string };
+      message: string;
+    };
+
+export async function getCryptoMarketQuoteByQuery(query: string, options: { vsCurrency?: string; forceRefresh?: boolean } = {}): Promise<CryptoMarketQuoteLookup> {
+  let resolution: Awaited<ReturnType<typeof resolveCoinGeckoAsset>>;
+
+  try {
+    resolution = await resolveCoinGeckoAsset(query);
+  } catch (error) {
+    return {
+      status: "unavailable",
+      asset: {
+        coingeckoId: normalizeCoinGeckoId(query),
+        symbol: normalizeTicker(query),
+        name: query.trim()
+      },
+      message: error instanceof Error ? error.message : "Nao foi possivel resolver a criptomoeda na CoinGecko."
+    };
+  }
+
+  if (resolution.status === "not_found") {
+    return {
+      status: "not_found",
+      results: [],
+      message: "Nao encontrei uma criptomoeda compativel na CoinGecko."
+    };
+  }
+
+  if (resolution.status === "ambiguous") {
+    return {
+      status: "ambiguous",
+      results: resolution.results,
+      message: "Encontrei mais de uma criptomoeda possivel. Escolha uma delas para consultar a cotacao."
+    };
+  }
+
+  const asset: AssetRecord = {
+    name: resolution.result.name,
+    ticker: resolution.result.symbol,
+    category: "CRIPTO",
+    coingeckoId: resolution.result.coingeckoId,
+    currency: (options.vsCurrency ?? "BRL").toUpperCase(),
+    active: true
+  };
+  const quote = await getMarketQuoteSnapshot(asset, {
+    refreshIfMissing: true,
+    forceRefresh: options.forceRefresh
+  });
+
+  if (!isValidMarketPrice(quote?.price)) {
+    return {
+      status: "unavailable",
+      asset: {
+        coingeckoId: resolution.result.coingeckoId,
+        symbol: resolution.result.symbol,
+        name: resolution.result.name
+      },
+      message: quote?.errorMessage || "Nao foi possivel obter uma cotacao real da CoinGecko agora."
+    };
+  }
+
+  return {
+    status: "resolved",
+    quote: {
+      coingeckoId: resolution.result.coingeckoId,
+      symbol: resolution.result.symbol,
+      name: resolution.result.name,
+      currency: quote.currency || asset.currency,
+      price: quote.price,
+      change24h: quote.change24h ?? null,
+      marketCap: quote.marketCap ?? null,
+      volume24h: quote.volume24h ?? null,
+      lastUpdatedAt: quote.quotedAt,
+      source: quote.source,
+      stale: quote.status === "stale"
+    }
+  };
+}
+
+export async function getMarketQuoteSnapshot(asset: AssetRecord, options: { refreshIfMissing?: boolean; forceRefresh?: boolean } = {}) {
   const profile = getTickerProfile(asset);
   const previous = await findMarketQuoteByAssetKey(profile.marketKey);
 
-  if (isValidStoredQuote(previous)) return previous;
+  if (!options.forceRefresh && isMarketQuoteFreshForAsset(asset, previous)) return previous;
   if (options.refreshIfMissing === false) return previous;
   if (!profile.supported) return buildRejectedQuote(asset, profile, previous, "unsupported", "Asset is missing provider identity");
 
@@ -834,6 +962,18 @@ export async function getMarketQuoteSnapshot(asset: AssetRecord, options: { refr
 
   const rejected = buildRejectedQuote(asset, profile, previous, previous ? "stale" : "unavailable", quote?.errorMessage ?? "Provider did not return a valid quote", provider.name);
   return upsertMarketQuote(rejected);
+}
+
+export async function refreshStaleCryptoQuotesForAssets(assets: AssetRecord[], quotes?: MarketQuoteRecord[]) {
+  const cryptoAssets = dedupeAssetsForMarketData(assets).filter((asset) => {
+    const profile = getTickerProfile(asset);
+    if (profile.market !== "crypto" || !profile.supported) return false;
+    const quote = quotes?.find((item) => storedQuoteKey(item) === profile.marketKey);
+    return !isMarketQuoteFreshForAsset(asset, quote);
+  });
+
+  if (cryptoAssets.length === 0) return null;
+  return refreshMarketQuotesForAssets(cryptoAssets);
 }
 
 export async function getMarketStatus() {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getTickerProfile, normalizeTicker } from "../services/ticker.service";
+import { getTickerProfile, normalizeTicker, resolveKnownCryptoIdentity } from "../services/ticker.service";
 
 test("normalizeTicker keeps canonical Brazilian stock ticker", () => {
   assert.equal(normalizeTicker("BBSE3"), "BBSE3");
@@ -29,4 +29,11 @@ test("getTickerProfile identifies BTC as crypto", () => {
   assert.equal(profile.market, "crypto");
   assert.equal(profile.providerSymbol, "bitcoin");
   assert.equal(profile.marketKey, "crypto:bitcoin");
+});
+
+test("known crypto identity resolves by symbol or display name without destructive migration", () => {
+  assert.equal(resolveKnownCryptoIdentity({ ticker: "BTC", name: "BTC" })?.coingeckoId, "bitcoin");
+  assert.equal(resolveKnownCryptoIdentity({ ticker: "ETH", name: "Ethereum" })?.coingeckoId, "ethereum");
+  assert.equal(resolveKnownCryptoIdentity({ ticker: "SOL", name: "Solana" })?.coingeckoId, "solana");
+  assert.equal(getTickerProfile({ ticker: "SOL", category: "CRIPTO" }).providerSymbol, "solana");
 });

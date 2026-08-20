@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ConfirmDelete } from "../components/ui/Management";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
+import { INVEST_HUB_WHATSAPP_URL } from "../constants/external-links";
 import { useWorkspaceInvalidation } from "../hooks/useWorkspaceInvalidation";
 import { adminUsersApi, fetchAiHealth, integrationsApi, updateAllocations, updateSettingsProfile } from "../services/api";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
@@ -51,6 +52,11 @@ function formatDateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function shouldOpenExternalLinkInSameTab() {
+  if (typeof navigator === "undefined") return false;
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 }
 
 export function SettingsPage() {
@@ -144,6 +150,7 @@ export function SettingsPage() {
   );
   const pendingWhatsAppLink = whatsAppLink?.link ?? (whatsAppStatus?.link?.status === "pending" ? whatsAppStatus.link : null);
   const isWhatsAppConnected = Boolean(whatsAppStatus?.connected && whatsAppStatus.link?.status === "verified");
+  const openWhatsAppInSameTab = useMemo(() => shouldOpenExternalLinkInSameTab(), []);
   const whatsappStatusLabel = !whatsAppStatus?.configured
     ? "Configuração pendente"
     : isWhatsAppConnected
@@ -524,9 +531,17 @@ export function SettingsPage() {
                     Numero oficial: <span className="font-medium text-ink">{whatsAppStatus.officialNumber}</span>
                   </p>
                 ) : null}
+                <a
+                  href={INVEST_HUB_WHATSAPP_URL}
+                  target={openWhatsAppInSameTab ? undefined : "_blank"}
+                  rel="noreferrer"
+                  className="inline-flex h-10 w-full items-center justify-center rounded-lg border border-accent/30 bg-accent/10 px-3 text-sm font-medium text-accent transition hover:border-accent hover:bg-accent/15"
+                >
+                  Abrir WhatsApp do Invest Hub
+                </a>
                 {isWhatsAppConnected ? (
                   <div className="rounded-lg bg-accent/10 px-3 py-2 text-xs text-accent">
-                    <p>Telefone conectado {whatsAppStatus?.link?.phoneNormalized ? `(${whatsAppStatus.link.phoneNormalized})` : ""}.</p>
+                    <p>Seu numero esta vinculado ao Invest Hub {whatsAppStatus?.link?.phoneNormalized ? `(${whatsAppStatus.link.phoneNormalized})` : ""}.</p>
                     <button
                       type="button"
                       onClick={() => setIsDisconnectWhatsAppConfirmOpen(true)}

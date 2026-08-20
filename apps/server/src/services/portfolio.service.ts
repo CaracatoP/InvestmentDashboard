@@ -34,6 +34,7 @@ import type {
 import { buildAllocationSummary, type AllocationSummary } from "./allocation.service";
 import { calculateCashBoxTotals, getCashBoxMovementLabel, isCashBoxContribution, isCashBoxWithdrawal, isCashBoxYield, toCashBoxContributionType } from "./cash-box.service";
 import { calculateProjection } from "./projection.service";
+import { refreshStaleCryptoQuotesForAssets } from "./market-data.service";
 import { buildAssetMarketKey, buildStoredMarketDataKey, normalizeTicker } from "./ticker.service";
 
 const monthLabels = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -303,13 +304,18 @@ interface PortfolioCalculationInputs {
 }
 
 async function loadPortfolioCalculationInputs(): Promise<PortfolioCalculationInputs> {
-  const [assets, operations, dividends, quotes, priceHistory] = await Promise.all([
+  const [assets, operations, dividends, initialQuotes, initialPriceHistory] = await Promise.all([
     listAssets(),
     listOperations(),
     listDividends(),
     listMarketQuotes(),
     listPriceHistory()
   ]);
+
+  const refreshed = await refreshStaleCryptoQuotesForAssets(assets, initialQuotes);
+  if (!refreshed) return { assets, operations, dividends, quotes: initialQuotes, priceHistory: initialPriceHistory };
+
+  const [quotes, priceHistory] = await Promise.all([listMarketQuotes(), listPriceHistory()]);
   return { assets, operations, dividends, quotes, priceHistory };
 }
 
