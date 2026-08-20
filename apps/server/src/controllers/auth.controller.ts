@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import { clearSessionCookie, readSessionCookie, setCsrfCookie, setSessionCookie } from "../auth/cookie.service";
+import { clearSessionCookie, readCsrfCookie, readSessionCookie, setCsrfCookie, setCsrfResponseHeader, setSessionCookie } from "../auth/cookie.service";
 import { createSecureToken } from "../auth/token.service";
 import { requireCurrentRequestAuth } from "../utils/request-auth";
 import {
@@ -81,22 +81,24 @@ export const login = asyncHandler(async (request, response) => {
     ipAddress: getClientIp(request),
     userAgent: request.headers["user-agent"] ?? ""
   });
-  setSessionCookie(response, result.token);
-  setCsrfCookie(response, createSecureToken(24));
+  const csrfToken = createSecureToken(24);
+  setSessionCookie(response, request, result.token);
+  setCsrfCookie(response, request, csrfToken);
+  setCsrfResponseHeader(response, csrfToken);
   ok(response, { user: result.user });
 });
 
 export const logout = asyncHandler(async (request, response) => {
   await logoutSession(readSessionCookie(request.headers.cookie));
-  clearSessionCookie(response);
+  clearSessionCookie(response, request);
   ok(response, { loggedOut: true });
 });
 
 export const me = asyncHandler(async (request, response) => {
   const auth = requireCurrentRequestAuth(request);
-  if (!request.headers.cookie?.includes("invest_hub_csrf=")) {
-    setCsrfCookie(response, createSecureToken(24));
-  }
+  const csrfToken = readCsrfCookie(request.headers.cookie) || createSecureToken(24);
+  if (!readCsrfCookie(request.headers.cookie)) setCsrfCookie(response, request, csrfToken);
+  setCsrfResponseHeader(response, csrfToken);
   ok(response, { user: await getUserForAuthContext(auth.userId) });
 });
 

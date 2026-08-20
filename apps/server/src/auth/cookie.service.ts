@@ -1,4 +1,4 @@
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { env } from "../config/env";
 
 export const sessionCookieName = "invest_hub_session";
@@ -27,37 +27,80 @@ export function readCsrfCookie(header: string | undefined) {
   return parseCookieHeader(header).get(csrfCookieName) ?? null;
 }
 
-export function setSessionCookie(response: Response, token: string) {
+function readHeaderValue(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] ?? "";
+  return value ?? "";
+}
+
+function normalizeOrigin(origin: string) {
+  return origin.trim().replace(/\/+$/, "");
+}
+
+function resolveRequestOrigin(request: Request) {
+  const protocol = readHeaderValue(request.headers["x-forwarded-proto"]) || request.protocol || "http";
+  const host = readHeaderValue(request.headers["x-forwarded-host"]) || readHeaderValue(request.headers.host);
+  if (!host) return "";
+  return normalizeOrigin(`${protocol}://${host}`);
+}
+
+function shouldUseCrossSiteCookiePolicy(request: Request) {
+  const requestOrigin = resolveRequestOrigin(request);
+  const browserOrigin = normalizeOrigin(readHeaderValue(request.headers.origin));
+  return Boolean(requestOrigin && browserOrigin && requestOrigin !== browserOrigin);
+}
+
+function resolveCookiePolicy(request: Request) {
+  if (shouldUseCrossSiteCookiePolicy(request)) {
+    return {
+      secure: true,
+      sameSite: "none" as const
+    };
+  }
+
+  return {
+    secure: env.authCookieSecure,
+    sameSite: env.authCookieSameSite
+  };
+}
+
+export function setSessionCookie(response: Response, request: Request, token: string) {
+  const policy = resolveCookiePolicy(request);
   response.cookie(sessionCookieName, token, {
     httpOnly: true,
-    secure: env.authCookieSecure,
-    sameSite: env.authCookieSameSite,
+    secure: policy.secure,
+    sameSite: policy.sameSite,
     maxAge: env.authSessionTtlDays * 24 * 60 * 60 * 1000,
     path: "/"
   });
 }
 
-export function setCsrfCookie(response: Response, token: string) {
+export function setCsrfCookie(response: Response, request: Request, token: string) {
+  const policy = resolveCookiePolicy(request);
   response.cookie(csrfCookieName, token, {
     httpOnly: false,
-    secure: env.authCookieSecure,
-    sameSite: env.authCookieSameSite,
+    secure: policy.secure,
+    sameSite: policy.sameSite,
     maxAge: env.authSessionTtlDays * 24 * 60 * 60 * 1000,
     path: "/"
   });
 }
 
-export function clearSessionCookie(response: Response) {
+export function setCsrfResponseHeader(response: Response, token: string) {
+  response.setHeader("X-CSRF-Token", token);
+}
+
+export function clearSessionCookie(response: Response, request: Request) {
+  const policy = resolveCookiePolicy(request);
   response.clearCookie(sessionCookieName, {
     httpOnly: true,
-    secure: env.authCookieSecure,
-    sameSite: env.authCookieSameSite,
+    secure: policy.secure,
+    sameSite: policy.sameSite,
     path: "/"
   });
   response.clearCookie(csrfCookieName, {
     httpOnly: false,
-    secure: env.authCookieSecure,
-    sameSite: env.authCookieSameSite,
+    secure: policy.secure,
+    sameSite: policy.sameSite,
     path: "/"
   });
 }

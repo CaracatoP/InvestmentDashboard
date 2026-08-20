@@ -71,6 +71,16 @@ export const api = axios.create({
   withCredentials: true
 });
 
+let csrfTokenMemory = "";
+
+function setCsrfToken(token: string) {
+  csrfTokenMemory = token.trim();
+}
+
+export function clearCsrfToken() {
+  csrfTokenMemory = "";
+}
+
 function readCookie(name: string) {
   if (typeof document === "undefined") return "";
   const prefix = `${name}=`;
@@ -81,10 +91,22 @@ function readCookie(name: string) {
     ?.slice(prefix.length) ?? "";
 }
 
+function readCsrfToken() {
+  return csrfTokenMemory || readCookie("invest_hub_csrf");
+}
+
+function readCsrfHeader(headers: unknown) {
+  if (!headers || typeof headers !== "object") return "";
+  const candidate = (headers as Record<string, unknown>)["x-csrf-token"] ?? (headers as Record<string, unknown>)["X-CSRF-Token"];
+  if (typeof candidate === "string") return candidate;
+  if (Array.isArray(candidate)) return typeof candidate[0] === "string" ? candidate[0] : "";
+  return "";
+}
+
 api.interceptors.request.use((config) => {
   const method = (config.method ?? "get").toUpperCase();
   if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
-    const csrfToken = readCookie("invest_hub_csrf");
+    const csrfToken = readCsrfToken();
     if (csrfToken) config.headers.set("X-CSRF-Token", csrfToken);
   }
   return config;
@@ -97,9 +119,15 @@ function extractApiErrorMessage(payload: unknown) {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const csrfToken = readCsrfHeader(response.headers);
+    if (csrfToken) setCsrfToken(csrfToken);
+    return response;
+  },
   (error) => {
     if (axios.isAxiosError(error)) {
+      const csrfToken = readCsrfHeader(error.response?.headers);
+      if (csrfToken) setCsrfToken(csrfToken);
       const message = extractApiErrorMessage(error.response?.data);
       if (message) error.message = message;
     }
@@ -232,6 +260,7 @@ export function clearApiCacheForLogout() {
   apiResponseCache.clearForLogout();
   assetPriceHistoryCache.clear();
   assetPriceHistoryInflight.clear();
+  clearCsrfToken();
   invalidateWorkspaceCache({ domains: ["all"], source: "manual", reason: "logout" });
 }
 

@@ -10,6 +10,7 @@ import { healthRoutes } from "./routes/health.routes";
 import { webhooksRoutes } from "./routes/webhooks.routes";
 
 export const app = express();
+app.set("trust proxy", 1);
 
 function redactUrl(url?: string) {
   return (url ?? "")

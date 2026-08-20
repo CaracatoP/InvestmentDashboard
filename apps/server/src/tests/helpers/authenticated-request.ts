@@ -27,7 +27,8 @@ export async function loginForTest(baseUrl: string, email: string, inputPassword
   assert.match(cookieHeader, /invest_hub_session=/);
   assert.match(cookieHeader, /invest_hub_csrf=/);
 
-  const csrfToken = cookieHeader.split(";").map((part) => part.trim()).find((part) => part.startsWith("invest_hub_csrf="))?.split("=")[1];
+  const csrfToken = loginResponse.headers.get("x-csrf-token") ??
+    cookieHeader.split(";").map((part) => part.trim()).find((part) => part.startsWith("invest_hub_csrf="))?.split("=")[1];
   assert.ok(csrfToken);
 
   return {

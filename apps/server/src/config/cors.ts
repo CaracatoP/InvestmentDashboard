@@ -20,6 +20,7 @@ export function isOriginAllowed(origin: string | undefined, allowedOrigins = bui
 export function createCorsOptions(allowedOrigins = buildAllowedOrigins()): CorsOptions {
   return {
     credentials: true,
+    exposedHeaders: ["X-CSRF-Token"],
     origin(origin, callback) {
       if (isOriginAllowed(origin, allowedOrigins)) {
         callback(null, true);

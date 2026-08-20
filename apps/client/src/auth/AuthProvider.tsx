@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   authApi,
+  clearCsrfToken,
   clearApiCacheForLogout,
   setApiCacheScope
 } from "../services/api";
@@ -34,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    clearCsrfToken();
     clearApiCacheForLogout();
     resetWorkspace();
   }, [resetWorkspace]);

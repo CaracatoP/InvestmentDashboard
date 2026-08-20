@@ -178,6 +178,9 @@ Required variables:
 - `MONGODB_URI`
 - `FRONTEND_URL`
 - `FRONTEND_URLS` optional for explicit preview URLs
+- `API_PUBLIC_URL=https://YOUR-RAILWAY-DOMAIN`
+- `AUTH_COOKIE_SECURE=true`
+- `AUTH_COOKIE_SAMESITE=none`
 - `MARKET_DATA_PROVIDER=brapi`
 - `MARKET_DATA_API_KEY`
 - `MARKET_TIMEZONE=America/Sao_Paulo`
@@ -238,6 +241,8 @@ Required variable:
 - `VITE_API_URL=https://YOUR-RAILWAY-DOMAIN`
 
 Do not add backend secrets to Vercel. After Vercel deploys, copy the Vercel domain and update `FRONTEND_URL` in Railway. If you use explicit preview URLs, add them to `FRONTEND_URLS` as a comma-separated list.
+
+When the frontend is hosted on a different site than the API, such as Vercel calling Railway, keep backend authentication cookies on `SameSite=None` with `Secure=true`. The backend also exposes `X-CSRF-Token` for the SPA so authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests keep CSRF protection without exposing the session cookie.
 
 `apps/client/vercel.json` rewrites every route to `index.html`, so direct refreshes on `/carteira`, `/dividendos`, `/alocacao`, `/projecoes`, and `/caixinhas` work with React Router.
 

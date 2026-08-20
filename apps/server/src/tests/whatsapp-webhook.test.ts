@@ -125,6 +125,22 @@ test("whatsapp webhook verifies challenge and rejects invalid signatures", async
   }
 });
 
+test("whatsapp webhook remains accessible without a user session or CSRF header", async () => {
+  const restore = configureWhatsApp();
+  const server = await listenForTest();
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const response = await postWebhook(baseUrl, buildMessagePayload(`wamid.${randomUUID()}`, "5511999990000", "ola"));
+
+    assert.equal(response.status, 200);
+  } finally {
+    restore();
+    await closeServer(server);
+  }
+});
+
 test("whatsapp webhook links code, processes a dividend command once and blocks after disconnect", async () => {
   const restore = configureWhatsApp();
   const sentMessages: Array<{ url: string; payload: Record<string, unknown> }> = [];
