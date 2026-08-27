@@ -435,11 +435,71 @@ test("assistant command service deduplicates WhatsApp messages by external id", 
 
   assert.equal(first.status, "processed");
   assert.equal(first.userMessage?.externalMessageId, externalMessageId);
+  assert.equal(first.assistantMessage?.externalMessageId, undefined);
   assert.equal(first.assistantMessage?.structuredResponse?.responseType, "confirmation");
   assert.equal(duplicate.status, "duplicate");
   assert.equal(duplicate.sessionId, first.sessionId);
   assert.equal(confirmation.sessionId, first.sessionId);
   assert.equal(confirmation.assistantMessage?.structuredResponse?.responseType, "success");
+});
+
+test("assistant command service handles a WhatsApp greeting without security fallback", async () => {
+  const result = await handleAssistantCommand({
+    userId: `assistant-whatsapp-greeting-${randomUUID()}`,
+    channel: "whatsapp",
+    externalConversationId: `wa-greeting-${randomUUID()}`,
+    externalMessageId: `wamid.${randomUUID()}`,
+    message: "oi"
+  });
+
+  assert.equal(result.status, "processed");
+  assert.equal(result.assistantMessage?.structuredResponse?.responseType, "text");
+  assert.equal(result.assistantMessage?.provider, "internal-tools");
+  assert.match(result.assistantMessage?.content ?? "", /posso consultar seu planejamento/i);
+  assert.doesNotMatch(result.assistantMessage?.content ?? "", /processar sua mensagem com seguranca/i);
+});
+
+test("assistant command service rotates saturated WhatsApp sessions before blocking benign messages", async () => {
+  const previousLimit = env.aiChatMaxMessages;
+  env.aiChatMaxMessages = 1;
+
+  try {
+    const userId = `assistant-whatsapp-saturated-${randomUUID()}`;
+    const externalConversationId = `wa-saturated-${randomUUID()}`;
+    const first = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "oi"
+    });
+    const balance = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "Consultar saldo"
+    });
+    const greeting = await handleAssistantCommand({
+      userId,
+      channel: "whatsapp",
+      externalConversationId,
+      externalMessageId: `wamid.${randomUUID()}`,
+      message: "oi"
+    });
+
+    assert.equal(first.status, "processed");
+    assert.equal(balance.status, "processed");
+    assert.equal(greeting.status, "processed");
+    assert.notEqual(balance.sessionId, first.sessionId);
+    assert.notEqual(greeting.sessionId, balance.sessionId);
+    assert.equal(balance.assistantMessage?.structuredResponse?.responseType, "summary");
+    assert.equal(greeting.assistantMessage?.structuredResponse?.responseType, "text");
+    assert.doesNotMatch(balance.assistantMessage?.content ?? "", /limite|processar sua mensagem com seguranca/i);
+    assert.doesNotMatch(greeting.assistantMessage?.content ?? "", /limite|processar sua mensagem com seguranca/i);
+  } finally {
+    env.aiChatMaxMessages = previousLimit;
+  }
 });
 
 test("operational chat falls back to Outros when expense category is unclear", async () => {
@@ -541,6 +601,7 @@ test("planning read queries use authoritative monthly overview data for spending
     const available = await handleOperationalChatMessage({ sessionId: `planning-read-available-${randomUUID()}`, message: "quanto tenho livre pra gastar ainda?" });
     const earned = await handleOperationalChatMessage({ sessionId: `planning-read-earned-${randomUUID()}`, message: "quanto ganhei esse mes?" });
     const balance = await handleOperationalChatMessage({ sessionId: `planning-read-balance-${randomUUID()}`, message: "qual meu saldo?" });
+    const consultedBalance = await handleOperationalChatMessage({ sessionId: `planning-read-consult-balance-${randomUUID()}`, message: "Consultar saldo" });
 
     assert.equal(spent.handled, true);
     assert.equal(spent.response.responseType, "summary");
@@ -561,7 +622,26 @@ test("planning read queries use authoritative monthly overview data for spending
     assert.equal(balance.response.responseType, "summary");
     assert.match(balance.response.message, /saldo atual/i);
     assert.match(JSON.stringify(balance.response.sections), /Saldo apos previstos/);
+
+    assert.equal(consultedBalance.handled, true);
+    assert.equal(consultedBalance.response.responseType, "summary");
+    assert.match(consultedBalance.response.message, /saldo atual/i);
+    assert.doesNotMatch(consultedBalance.response.message, /processar sua mensagem com seguranca/i);
   });
+});
+
+test("assistant command service rejects malformed WhatsApp commands before processing", async () => {
+  await assert.rejects(
+    () =>
+      handleAssistantCommand({
+        userId: `assistant-whatsapp-invalid-${randomUUID()}`,
+        channel: "whatsapp",
+        externalConversationId: `wa-invalid-${randomUUID()}`,
+        externalMessageId: `wamid.${randomUUID()}`,
+        message: "   "
+      }),
+    /Mensagem vazia/
+  );
 });
 
 test("planning read queries stay isolated per user", async () => {
@@ -842,7 +922,7 @@ test("whatsapp clarification persists pending action and resolves the correct su
 test("whatsapp clarification resolves a stored candidate by number", async () => {
   const userId = `assistant-spotify-number-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
     assert.ok(augustPlan.id);
     const spotify = await addMonthlyExpense(augustPlan.id, {
@@ -887,7 +967,7 @@ test("whatsapp clarification resolves a stored candidate by number", async () =>
     assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
     assert.equal(secondAction?.status, "awaiting_confirmation");
     assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
-  });
+  }));
 });
 
 test("whatsapp clarification resolves a stored candidate by name", async () => {

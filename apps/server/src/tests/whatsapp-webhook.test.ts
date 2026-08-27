@@ -4,12 +4,14 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { app } from "../app";
 import { env } from "../config/env";
+import { assistantFailureMessageFor, classifyAssistantProcessingError } from "../controllers/webhooks.controller";
 import { runWithAuthContext } from "../auth/auth-context";
 import { listDividends } from "../repositories/investment.repository";
 import { listAllMonthlyExpenses } from "../repositories/monthly-planning.repository";
 import { createBootstrapAdmin, getUserForAuthContext } from "../services/auth.service";
 import { addMonthlyExpense, addMonthlyIncomeEntry, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { createWhatsAppConnectionCode, disconnectWhatsAppIntegration } from "../services/whatsapp-link.service";
+import { HttpError } from "../utils/http-error";
 
 const originalFetch = globalThis.fetch;
 
@@ -201,6 +203,20 @@ test("whatsapp webhook remains accessible without a user session or CSRF header"
     restore();
     await closeServer(server);
   }
+});
+
+test("whatsapp processing failure copy keeps security wording only for auth failures", () => {
+  const duplicateKey = new Error("E11000 duplicate key");
+  (duplicateKey as Error & { code?: number }).code = 11000;
+
+  assert.equal(classifyAssistantProcessingError(new HttpError(403, "Assinatura invalida")), "security");
+  assert.match(assistantFailureMessageFor("security"), /processar sua mensagem com seguranca/i);
+  assert.equal(classifyAssistantProcessingError(new HttpError(400, "Mensagem vazia.")), "validation");
+  assert.doesNotMatch(assistantFailureMessageFor("validation"), /processar sua mensagem com seguranca/i);
+  assert.equal(classifyAssistantProcessingError(duplicateKey), "duplicate_key");
+  assert.doesNotMatch(assistantFailureMessageFor("duplicate_key"), /processar sua mensagem com seguranca/i);
+  assert.equal(classifyAssistantProcessingError(new Error("provider timeout")), "internal");
+  assert.doesNotMatch(assistantFailureMessageFor("internal"), /processar sua mensagem com seguranca/i);
 });
 
 test("whatsapp webhook links code, processes a dividend command once and blocks after disconnect", async () => {

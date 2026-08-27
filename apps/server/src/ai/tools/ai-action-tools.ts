@@ -206,7 +206,8 @@ const selectionSearchStopWords = new Set([
   "agora", "hoje", "ontem"
 ]);
 
-const explicitReadIntentPattern = /^(quanto|quantos|quantas|como|quais|qual|analise|mostre|liste|listar|ver)\b/i;
+const explicitReadIntentPattern = /^(quanto|quantos|quantas|como|quais|qual|analise|mostre|liste|listar|ver|consultar|consulte)\b/i;
+const shortGreetingPattern = /^(oi|ola|ol[aá]|bom dia|boa tarde|boa noite|hey|e ai|e aí)\b[!.?\s]*$/i;
 const explicitWriteSwitchPattern = /^(gastei|gasto|despesa|recebi|vou receber|receber|registre|registrar|cadastre|cadastrar|adicione|adicionar|crie|criar|marque|paguei|pagar|comprei|compre|vendi|venda|mude|troque|altere|atualize|minha renda|renda mensal)\b/i;
 const shortSelectionReplyPattern = /^(?:\d+|o\s+primeiro|o\s+segundo|o\s+terceiro|o\s+quarto|o\s+quinto|o\s+sexto|o\s+setimo|o\s+oitavo|primeiro|segundo|terceiro|quarto|quinto|sexto|setimo|s[eé]timo|oitavo|esse|esse\s+mes|desse\s+mes|o\s+desse\s+mes)$/i;
 const spendingReadPattern = /\b(quanto\s+(?:ja\s+)?gastei|gastei\s+quanto|total\s+gasto|gastos?\s+deste?\s+mes)\b/i;
@@ -3133,6 +3134,19 @@ async function handleCryptoReadMessage(message: string) {
 export async function handleOperationalChatMessage(input: ToolInput): Promise<PreparedAction | NoAction> {
   const activeAction = await findActiveAiPendingAction(input.sessionId);
   const normalized = normalizeText(input.message);
+
+  if (!activeAction && shortGreetingPattern.test(normalized)) {
+    return {
+      handled: true,
+      response: createStructuredResponse({
+        responseType: "text",
+        title: "Assistente Financeiro",
+        message: "Oi! Posso consultar seu planejamento, resumir gastos e receitas ou preparar uma acao financeira para voce confirmar.",
+        suggestions: ["Consultar saldo", "Quanto gastei esse mes?", "Registrar um gasto"]
+      }),
+      sessionContext: null
+    };
+  }
 
   if (!activeAction && confirmationPattern.test(input.message)) {
     return { handled: true, response: createErrorResponse("Nao ha uma acao pendente ativa para confirmar. Envie o pedido novamente."), sessionContext: null };

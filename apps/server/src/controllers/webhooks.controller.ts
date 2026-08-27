@@ -119,6 +119,41 @@ async function processConnectionCode(message: { id: string; from: string; text: 
   }
 }
 
+export type AssistantProcessingFailureKind =
+  | "security"
+  | "validation"
+  | "rate_limit"
+  | "duplicate_key"
+  | "http_error"
+  | "internal";
+
+export function classifyAssistantProcessingError(error: unknown): AssistantProcessingFailureKind {
+  if (error instanceof HttpError) {
+    if (error.statusCode === 401 || error.statusCode === 403) return "security";
+    if (error.statusCode === 400) return "validation";
+    if (error.statusCode === 429) return "rate_limit";
+    return "http_error";
+  }
+
+  const maybeMongoError = error as { code?: unknown; name?: unknown };
+  if (maybeMongoError?.code === 11000) return "duplicate_key";
+  if (maybeMongoError?.name === "ValidationError" || maybeMongoError?.name === "ZodError") return "validation";
+  return "internal";
+}
+
+export function assistantFailureMessageFor(kind: AssistantProcessingFailureKind) {
+  if (kind === "security") {
+    return "⚠️ *Nao consegui processar sua mensagem com seguranca*\n\nTente novamente com mais detalhes.";
+  }
+  if (kind === "validation") {
+    return "⚠️ *Nao consegui entender essa mensagem*\n\nRevise o texto e tente novamente com uma instrucao mais clara.";
+  }
+  if (kind === "rate_limit") {
+    return "⚠️ *Estou recebendo muitas mensagens agora*\n\nAguarde um instante e tente novamente.";
+  }
+  return "⚠️ *Nao consegui concluir o processamento agora*\n\nTente novamente em alguns instantes.";
+}
+
 async function processAssistantMessage(message: { id: string; from: string; text: string }) {
   const event = await beginWhatsAppWebhookEvent({ externalMessageId: message.id });
   if (event.duplicate) {
@@ -163,13 +198,15 @@ async function processAssistantMessage(message: { id: string; from: string; text
     }
     return { processed: result.status === "duplicate" ? 0 : 1, ignored: result.status === "duplicate" ? 1 : 0 };
   } catch (error) {
+    const failureKind = classifyAssistantProcessingError(error);
     await completeWhatsAppWebhookEvent({ externalMessageId: message.id, status: "failed", userId: user.id });
-    await safeSendText(message.from, "⚠️ *Nao consegui processar sua mensagem com seguranca*\n\nTente novamente com mais detalhes.");
+    await safeSendText(message.from, assistantFailureMessageFor(failureKind));
     console.warn(JSON.stringify({
       operation: "whatsapp-message-failed",
       externalMessageId: message.id,
       userResolved: true,
       userId: user.id,
+      failureKind,
       statusCode: error instanceof HttpError ? error.statusCode : undefined,
       message: error instanceof Error ? error.message : "Falha ao processar webhook do WhatsApp"
     }));
