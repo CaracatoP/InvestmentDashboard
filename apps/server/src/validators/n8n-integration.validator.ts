@@ -9,6 +9,10 @@ import {
 const phoneNumberSchema = z.string().trim().min(6).max(32);
 const monthSchema = z.coerce.number().int().min(1).max(12);
 const yearSchema = z.coerce.number().int().min(1970).max(2200);
+const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must use HH:mm");
+const n8nMonthlyExpenseSchema = monthlyExpenseSchema.omit({ planId: true }).extend({
+  time: timeSchema.default("00:00")
+});
 
 export const n8nPhoneLookupQuerySchema = z.object({
   phoneNumber: phoneNumberSchema
@@ -34,7 +38,7 @@ export const n8nMonthlyExpenseCreateSchema = z.object({
   phoneNumber: phoneNumberSchema,
   month: monthSchema,
   year: yearSchema,
-  expense: monthlyExpenseSchema.omit({ planId: true })
+  expense: n8nMonthlyExpenseSchema
 });
 
 export const n8nMonthlyIncomeEntryCreateSchema = z.object({

@@ -290,6 +290,52 @@ test("n8n summary uses the phone owner scope and does not leak another user's pl
   }
 });
 
+test("n8n expense creation accepts the documented payload without time", async () => {
+  const restore = configureN8n();
+  const phoneNumber = "+554497370903";
+  const { user } = await createLinkedUser("n8n-expense-contract", phoneNumber);
+
+  await asUser(user.id, async () => {
+    const plan = await saveMonthlyPlan({ year: 2026, month: 9, incomeInCents: 500000, categories: monthlyPlanCategories() });
+    assert.ok(plan.id);
+  });
+
+  try {
+    await withTestServer(async (baseUrl) => {
+      const result = await n8nRequest<{ expense: { id: string; description: string; time: string } }>(
+        baseUrl,
+        "POST",
+        "/api/integrations/n8n/monthly-planning/expenses",
+        {
+          idempotencyKey: `whatsapp:wamid.${randomUUID()}`,
+          body: {
+            phoneNumber,
+            year: 2026,
+            month: 9,
+            expense: {
+              categoryId: "transporte",
+              description: "Gasolina",
+              amountInCents: 4000,
+              date: "2026-09-01",
+              expenseType: "single",
+              recurring: false,
+              status: "completed"
+            }
+          }
+        }
+      );
+      const expenses = await asUser(user.id, () => listAllMonthlyExpenses());
+
+      assert.equal(result.response.status, 201);
+      assert.equal(result.json.data?.expense.description, "Gasolina");
+      assert.equal(result.json.data?.expense.time, "00:00");
+      assert.equal(expenses.filter((expense) => expense.description === "Gasolina").length, 1);
+    });
+  } finally {
+    restore();
+  }
+});
+
 test("n8n expense writes are persisted-idempotent for retries, concurrency and duplicate WhatsApp messages", async () => {
   const restore = configureN8n();
   const { user, phoneNumber } = await createLinkedUser("n8n-expense");
