@@ -51,30 +51,21 @@ test("whatsapp connection code is temporary, hashed and user-scoped", async () =
   );
 });
 
-test("whatsapp verification is idempotent by external message id and can cancel pending links", async () => {
-  const user = await createTestUser("whatsapp-idempotent");
-  const externalMessageId = `msg-${randomUUID()}`;
+test("whatsapp verification links a phone once and can cancel pending links", async () => {
+  const user = await createTestUser("whatsapp-verified");
 
   const pending = await asUser(user.id, () => createWhatsAppConnectionCode());
   const verified = await verifyWhatsAppConnectionCode({
     phoneNumber: "+55 (11) 98888-7777",
-    code: pending.code,
-    externalMessageId
+    code: pending.code
   });
 
-  assert.equal(verified.duplicated, false);
   assert.equal(verified.linked, true);
   assert.equal(verified.link?.status, "verified");
   assert.equal(verified.link?.phoneNormalized, "+5511988887777");
   assert.equal((await getUserForAuthContext(user.id))?.phoneNormalized, "+5511988887777");
   assert.ok((await getUserForAuthContext(user.id))?.whatsappLinkedAt);
 
-  const duplicated = await verifyWhatsAppConnectionCode({
-    phoneNumber: "+55 (11) 98888-7777",
-    code: pending.code,
-    externalMessageId
-  });
-  assert.deepEqual(duplicated, { duplicated: true, linked: false });
   await assert.rejects(
     () => verifyWhatsAppConnectionCode({ phoneNumber: "+55 (11) 98888-7777", code: pending.code }),
     expectHttpStatus(400)

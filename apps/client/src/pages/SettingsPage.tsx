@@ -507,7 +507,7 @@ export function SettingsPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-ink">Integracoes</h2>
-                <p className="mt-1 text-sm text-muted">Preparado para canais externos sem ativar Meta ainda.</p>
+                <p className="mt-1 text-sm text-muted">Vinculo seguro para canais externos orquestrados pelo n8n.</p>
               </div>
               <Smartphone size={18} className="text-accent" />
             </div>
@@ -518,7 +518,7 @@ export function SettingsPage() {
                   <p className="text-xs text-muted">
                     {whatsAppStatus?.configured
                       ? "Vincule seu telefone por codigo temporario."
-                      : "Defina WHATSAPP_ENABLED e o numero oficial para liberar o vinculo."}
+                      : "Defina N8N_INTEGRATION_SECRET no backend para liberar o vinculo."}
                   </p>
                 </div>
                 <span className={`rounded-full px-2 py-1 text-xs ${isWhatsAppConnected ? "bg-accent/10 text-accent" : "bg-muted/10 text-muted"}`}>
@@ -698,7 +698,7 @@ export function SettingsPage() {
         description="Voce esta prestes a remover o telefone vinculado ao Invest Hub neste usuario."
         details={[
           whatsAppStatus?.link?.phoneNormalized ? `Telefone conectado: ${whatsAppStatus.link.phoneNormalized}` : "Telefone conectado neste usuario",
-          "A integracao deixara de receber ou enviar mensagens ate um novo vinculo ser concluido."
+          "O n8n deixara de associar mensagens deste telefone ao seu usuario ate um novo vinculo ser concluido."
         ]}
         confirmLabel="Desconectar WhatsApp"
         onCancel={() => setIsDisconnectWhatsAppConfirmOpen(false)}

@@ -13,6 +13,52 @@ function asUser<T>(userId: string, callback: () => Promise<T>) {
   return runWithAuthContext({ userId, role: "user", channel: "web" }, callback);
 }
 
+async function withMockedDate<T>(isoDate: string, callback: () => Promise<T>) {
+  const RealDate = Date;
+
+  class MockDate extends RealDate {
+    constructor(...args: any[]) {
+      switch (args.length) {
+        case 0:
+          super(isoDate);
+          break;
+        case 1:
+          super(args[0]);
+          break;
+        case 2:
+          super(args[0], args[1]);
+          break;
+        case 3:
+          super(args[0], args[1], args[2]);
+          break;
+        case 4:
+          super(args[0], args[1], args[2], args[3]);
+          break;
+        case 5:
+          super(args[0], args[1], args[2], args[3], args[4]);
+          break;
+        case 6:
+          super(args[0], args[1], args[2], args[3], args[4], args[5]);
+          break;
+        default:
+          super(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+          break;
+      }
+    }
+
+    static now() {
+      return new RealDate(isoDate).getTime();
+    }
+  }
+
+  globalThis.Date = MockDate as DateConstructor;
+  try {
+    return await callback();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 function expectHttpStatus(statusCode: number) {
   return (error: unknown) => error instanceof HttpError && error.statusCode === statusCode;
 }
@@ -20,7 +66,7 @@ function expectHttpStatus(statusCode: number) {
 test("dividends separate expected and received amounts", async () => {
   const userId = `dividend-status-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     await createDividendRecord({
       assetTicker: "PETR4",
       type: "dividendo",
@@ -48,7 +94,7 @@ test("dividends separate expected and received amounts", async () => {
     assert.equal(overview.totals.year, 40);
     assert.equal(overview.totals.allTime, 40);
     assert.equal(overview.table.some((dividend) => dividend.assetTicker === "PETR4" && dividend.status === "expected"), true);
-  });
+  }));
 });
 
 test("marking expected dividend as received updates the original record", async () => {

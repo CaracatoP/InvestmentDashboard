@@ -15,7 +15,6 @@ import { resetSettingsRecord } from "../repositories/investment.repository";
 import { listDividends, listOperations } from "../repositories/investment.repository";
 import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
 import { createChatSession, sendChatMessage } from "../services/ai-manager.service";
-import { handleAssistantCommand } from "../services/assistant-command.service";
 import { createDividendRecord } from "../services/dividend.service";
 import { addMonthlyExpense, addMonthlyIncomeEntry, saveMonthlyPlan } from "../services/monthly-planning.service";
 import { getSettings } from "../services/portfolio.service";
@@ -404,104 +403,6 @@ test("chat confirmation executes pending contribution once through internal tool
   assert.equal(confirmed.assistantMessage.structuredResponse?.responseType, "success");
 });
 
-test("assistant command service deduplicates WhatsApp messages by external id", async () => {
-  const userId = `assistant-whatsapp-${randomUUID()}`;
-  const externalConversationId = `wa-conversation-${randomUUID()}`;
-  const externalMessageId = `wamid.${randomUUID()}`;
-
-  const first = await handleAssistantCommand({
-    userId,
-    channel: "whatsapp",
-    externalConversationId,
-    externalMessageId,
-    message: "Registre um aporte de R$ 20,00."
-  });
-
-  const duplicate = await handleAssistantCommand({
-    userId,
-    channel: "whatsapp",
-    externalConversationId,
-    externalMessageId,
-    message: "Registre um aporte de R$ 20,00."
-  });
-
-  const confirmation = await handleAssistantCommand({
-    userId,
-    channel: "whatsapp",
-    externalConversationId,
-    externalMessageId: `wamid.${randomUUID()}`,
-    message: "confirmo"
-  });
-
-  assert.equal(first.status, "processed");
-  assert.equal(first.userMessage?.externalMessageId, externalMessageId);
-  assert.equal(first.assistantMessage?.externalMessageId, undefined);
-  assert.equal(first.assistantMessage?.structuredResponse?.responseType, "confirmation");
-  assert.equal(duplicate.status, "duplicate");
-  assert.equal(duplicate.sessionId, first.sessionId);
-  assert.equal(confirmation.sessionId, first.sessionId);
-  assert.equal(confirmation.assistantMessage?.structuredResponse?.responseType, "success");
-});
-
-test("assistant command service handles a WhatsApp greeting without security fallback", async () => {
-  const result = await handleAssistantCommand({
-    userId: `assistant-whatsapp-greeting-${randomUUID()}`,
-    channel: "whatsapp",
-    externalConversationId: `wa-greeting-${randomUUID()}`,
-    externalMessageId: `wamid.${randomUUID()}`,
-    message: "oi"
-  });
-
-  assert.equal(result.status, "processed");
-  assert.equal(result.assistantMessage?.structuredResponse?.responseType, "text");
-  assert.equal(result.assistantMessage?.provider, "internal-tools");
-  assert.match(result.assistantMessage?.content ?? "", /posso consultar seu planejamento/i);
-  assert.doesNotMatch(result.assistantMessage?.content ?? "", /processar sua mensagem com seguranca/i);
-});
-
-test("assistant command service rotates saturated WhatsApp sessions before blocking benign messages", async () => {
-  const previousLimit = env.aiChatMaxMessages;
-  env.aiChatMaxMessages = 1;
-
-  try {
-    const userId = `assistant-whatsapp-saturated-${randomUUID()}`;
-    const externalConversationId = `wa-saturated-${randomUUID()}`;
-    const first = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "oi"
-    });
-    const balance = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "Consultar saldo"
-    });
-    const greeting = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "oi"
-    });
-
-    assert.equal(first.status, "processed");
-    assert.equal(balance.status, "processed");
-    assert.equal(greeting.status, "processed");
-    assert.notEqual(balance.sessionId, first.sessionId);
-    assert.notEqual(greeting.sessionId, balance.sessionId);
-    assert.equal(balance.assistantMessage?.structuredResponse?.responseType, "summary");
-    assert.equal(greeting.assistantMessage?.structuredResponse?.responseType, "text");
-    assert.doesNotMatch(balance.assistantMessage?.content ?? "", /limite|processar sua mensagem com seguranca/i);
-    assert.doesNotMatch(greeting.assistantMessage?.content ?? "", /limite|processar sua mensagem com seguranca/i);
-  } finally {
-    env.aiChatMaxMessages = previousLimit;
-  }
-});
-
 test("operational chat falls back to Outros when expense category is unclear", async () => {
   const result = await handleOperationalChatMessage({ sessionId: "ai-action-expense-test", message: "Gastei R$ 60,00 com item sem categoria agora." });
   const action = await findActiveAiPendingAction("ai-action-expense-test");
@@ -563,7 +464,7 @@ test("expense command infers lunch description, category and Sao Paulo local tim
 test("planning read queries use authoritative monthly overview data for spending, income and balance", async () => {
   const userId = `assistant-planning-read-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
     assert.ok(plan.id);
     await addMonthlyExpense(plan.id, {
@@ -591,7 +492,7 @@ test("planning read queries use authoritative monthly overview data for spending
       amountInCents: 80000,
       category: "Freelance",
       date: "2026-08-20",
-      time: "18:00",
+      time: "10:00",
       status: "received",
       incomeType: "single",
       recurring: false
@@ -627,28 +528,15 @@ test("planning read queries use authoritative monthly overview data for spending
     assert.equal(consultedBalance.response.responseType, "summary");
     assert.match(consultedBalance.response.message, /saldo atual/i);
     assert.doesNotMatch(consultedBalance.response.message, /processar sua mensagem com seguranca/i);
-  });
-});
-
-test("assistant command service rejects malformed WhatsApp commands before processing", async () => {
-  await assert.rejects(
-    () =>
-      handleAssistantCommand({
-        userId: `assistant-whatsapp-invalid-${randomUUID()}`,
-        channel: "whatsapp",
-        externalConversationId: `wa-invalid-${randomUUID()}`,
-        externalMessageId: `wamid.${randomUUID()}`,
-        message: "   "
-      }),
-    /Mensagem vazia/
-  );
+  }));
 });
 
 test("planning read queries stay isolated per user", async () => {
   const userA = `assistant-planning-user-a-${randomUUID()}`;
   const userB = `assistant-planning-user-b-${randomUUID()}`;
 
-  await asUser(userA, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => {
+    await asUser(userA, async () => {
     const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 300000, categories: monthlyPlanCategories() });
     assert.ok(plan.id);
     await addMonthlyExpense(plan.id, {
@@ -663,7 +551,7 @@ test("planning read queries stay isolated per user", async () => {
     });
   });
 
-  await asUser(userB, async () => {
+    await asUser(userB, async () => {
     const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 300000, categories: monthlyPlanCategories() });
     assert.ok(plan.id);
     await addMonthlyExpense(plan.id, {
@@ -678,37 +566,40 @@ test("planning read queries stay isolated per user", async () => {
     });
   });
 
-  const userAResponse = expectHandled(
-    await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-a-${randomUUID()}`, message: "quanto gastei esse mes?" }))
-  );
-  const userBResponse = expectHandled(
-    await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-b-${randomUUID()}`, message: "quanto gastei esse mes?" }))
-  );
+    const userAResponse = expectHandled(
+      await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-a-${randomUUID()}`, message: "quanto gastei esse mes?" }))
+    );
+    const userBResponse = expectHandled(
+      await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-b-${randomUUID()}`, message: "quanto gastei esse mes?" }))
+    );
 
-  assert.match(userAResponse.response.message, /R\$\s?100,00/);
-  assert.doesNotMatch(userAResponse.response.message, /R\$\s?300,00/);
-  assert.match(userBResponse.response.message, /R\$\s?300,00/);
-  assert.doesNotMatch(userBResponse.response.message, /R\$\s?100,00/);
+    assert.match(userAResponse.response.message, /R\$\s?100,00/);
+    assert.doesNotMatch(userAResponse.response.message, /R\$\s?300,00/);
+    assert.match(userBResponse.response.message, /R\$\s?300,00/);
+    assert.doesNotMatch(userBResponse.response.message, /R\$\s?100,00/);
+  });
 });
 
 test("planning read queries return empty only for the user without data", async () => {
   const userA = `assistant-planning-empty-a-${randomUUID()}`;
   const userB = `assistant-planning-empty-b-${randomUUID()}`;
 
-  await asUser(userA, async () => {
-    const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 420000, categories: monthlyPlanCategories() });
-    assert.ok(plan.id);
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => {
+    await asUser(userA, async () => {
+      const plan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 420000, categories: monthlyPlanCategories() });
+      assert.ok(plan.id);
+    });
+
+    const userAResponse = expectHandled(
+      await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-income-a-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
+    );
+    const userBResponse = expectHandled(
+      await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-income-b-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
+    );
+
+    assert.doesNotMatch(userAResponse.response.message, /ainda nao encontrei dados/i);
+    assert.match(userBResponse.response.message, /ainda nao encontrei dados/i);
   });
-
-  const userAResponse = expectHandled(
-    await asUser(userA, () => handleOperationalChatMessage({ sessionId: `planning-read-income-a-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
-  );
-  const userBResponse = expectHandled(
-    await asUser(userB, () => handleOperationalChatMessage({ sessionId: `planning-read-income-b-${randomUUID()}`, message: "quanto ganhei esse mes?" }))
-  );
-
-  assert.doesNotMatch(userAResponse.response.message, /ainda nao encontrei dados/i);
-  assert.match(userBResponse.response.message, /ainda nao encontrei dados/i);
 });
 
 test("planning read queries respect the Sao Paulo month near the UTC month boundary", async () => {
@@ -796,7 +687,7 @@ test("paying a planned matching expense asks to mark it paid instead of duplicat
 test("paying spotify before its due date prefers the current month recurring expense", async () => {
   const userId = `assistant-spotify-future-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     const julyPlan = await saveMonthlyPlan({ year: 2026, month: 7, incomeInCents: 500000, categories: monthlyPlanCategories() });
     const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
     const septemberPlan = await saveMonthlyPlan({ year: 2026, month: 9, incomeInCents: 500000, categories: monthlyPlanCategories() });
@@ -845,10 +736,10 @@ test("paying spotify before its due date prefers the current month recurring exp
     assert.equal(action?.toolName, "markExpenseAsCompleted");
     assert.equal(action?.extractedFields.expenseId, augustSpotify.id);
     assert.equal((await listAllMonthlyExpenses()).filter((expense) => expense.description === "Spotify" && expense.amountInCents === 1290).length, 3);
-  });
+  }));
 });
 
-test("whatsapp clarification persists pending action and resolves the correct subscription", async () => {
+test("operational chat clarification persists pending action and resolves the correct subscription", async () => {
   const userId = `assistant-spotify-clarification-${randomUUID()}`;
 
   await asUser(userId, async () => {
@@ -875,51 +766,32 @@ test("whatsapp clarification persists pending action and resolves the correct su
       status: "planned"
     });
 
-    const externalConversationId = `wa-clarify-${randomUUID()}`;
-    const first = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "paguei a assinatura"
-    });
-    const firstAction = await findActiveAiPendingAction(first.sessionId);
+    const sessionId = `ai-action-clarify-${randomUUID()}`;
+    const first = expectHandled(await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura" }));
+    const firstAction = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
+    assert.equal(first.response.responseType, "form");
     assert.equal(firstAction?.status, "collecting");
     assert.ok(firstAction?.missingFields.some((field) => field.name === "expenseId"));
     assert.ok((firstAction?.missingFields[0]?.options?.length ?? 0) >= 2);
 
-    const second = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "o spotify desse mes"
-    });
-    const secondAction = await findActiveAiPendingAction(second.sessionId);
+    const second = expectHandled(await handleOperationalChatMessage({ sessionId, message: "o spotify desse mes" }));
+    const secondAction = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(second.sessionId, first.sessionId);
-    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(second.response.responseType, "confirmation");
     assert.equal(secondAction?.status, "awaiting_confirmation");
     assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
 
-    const confirmed = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "confirmo"
-    });
+    const confirmed = expectHandled(await handleOperationalChatMessage({ sessionId, message: "confirmo" }));
     const expenses = await listAllMonthlyExpenses();
 
-    assert.equal(confirmed.assistantMessage?.structuredResponse?.responseType, "success");
+    assert.equal(confirmed.response.responseType, "success");
     assert.equal(expenses.find((expense) => expense.id === spotify.id)?.status, "completed");
     assert.equal(expenses.find((expense) => expense.id === netflix.id)?.status, "planned");
   });
 });
 
-test("whatsapp clarification resolves a stored candidate by number", async () => {
+test("operational chat clarification resolves a stored candidate by number", async () => {
   const userId = `assistant-spotify-number-${randomUUID()}`;
 
   await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
@@ -946,31 +818,19 @@ test("whatsapp clarification resolves a stored candidate by number", async () =>
       status: "planned"
     });
 
-    const externalConversationId = `wa-number-${randomUUID()}`;
-    const first = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "paguei a assinatura"
-    });
-    const second = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "1"
-    });
-    const secondAction = await findActiveAiPendingAction(second.sessionId);
+    const sessionId = `ai-action-number-${randomUUID()}`;
+    const first = expectHandled(await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura" }));
+    const second = expectHandled(await handleOperationalChatMessage({ sessionId, message: "1" }));
+    const secondAction = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
-    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(first.response.responseType, "form");
+    assert.equal(second.response.responseType, "confirmation");
     assert.equal(secondAction?.status, "awaiting_confirmation");
     assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
   }));
 });
 
-test("whatsapp clarification resolves a stored candidate by name", async () => {
+test("operational chat clarification resolves a stored candidate by name", async () => {
   const userId = `assistant-spotify-name-${randomUUID()}`;
 
   await asUser(userId, async () => {
@@ -997,24 +857,12 @@ test("whatsapp clarification resolves a stored candidate by name", async () => {
       status: "planned"
     });
 
-    const externalConversationId = `wa-name-${randomUUID()}`;
-    await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "paguei a assinatura"
-    });
-    const second = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "spotify"
-    });
-    const secondAction = await findActiveAiPendingAction(second.sessionId);
+    const sessionId = `ai-action-name-${randomUUID()}`;
+    expectHandled(await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura" }));
+    const second = expectHandled(await handleOperationalChatMessage({ sessionId, message: "spotify" }));
+    const secondAction = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "confirmation");
+    assert.equal(second.response.responseType, "confirmation");
     assert.equal(secondAction?.status, "awaiting_confirmation");
     assert.equal(secondAction?.extractedFields.expenseId, spotify.id);
   });
@@ -1023,7 +871,7 @@ test("whatsapp clarification resolves a stored candidate by name", async () => {
 test("new read intent cancels a broken pending selection instead of trapping the user", async () => {
   const userId = `assistant-pending-read-switch-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
     assert.ok(augustPlan.id);
     await addMonthlyExpense(augustPlan.id, {
@@ -1057,35 +905,23 @@ test("new read intent cancels a broken pending selection instead of trapping the
       status: "planned"
     });
 
-    const externalConversationId = `wa-read-switch-${randomUUID()}`;
-    const first = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "paguei a assinatura"
-    });
-    const second = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "quanto gastei esse mes?"
-    });
-    const pendingAfter = await findActiveAiPendingAction(first.sessionId);
+    const sessionId = `ai-action-read-switch-${randomUUID()}`;
+    const first = expectHandled(await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura" }));
+    const second = expectHandled(await handleOperationalChatMessage({ sessionId, message: "quanto gastei esse mes?" }));
+    const pendingAfter = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(first.assistantMessage?.structuredResponse?.responseType, "form");
-    assert.equal(second.assistantMessage?.structuredResponse?.responseType, "summary");
-    assert.match(second.assistantMessage?.structuredResponse?.message ?? "", /R\$\s?100,00/);
-    assert.doesNotMatch(second.assistantMessage?.structuredResponse?.message ?? "", /gasto pendente/i);
+    assert.equal(first.response.responseType, "form");
+    assert.equal(second.response.responseType, "summary");
+    assert.match(second.response.message, /R\$\s?100,00/);
+    assert.doesNotMatch(second.response.message, /gasto pendente/i);
     assert.equal(pendingAfter, null);
-  });
+  }));
 });
 
 test("invalid pending candidates fail once and then clear the stuck action", async () => {
   const userId = `assistant-invalid-candidate-${randomUUID()}`;
 
-  await asUser(userId, async () => {
+  await withMockedDate("2026-08-20T15:00:00.000Z", async () => asUser(userId, async () => {
     const augustPlan = await saveMonthlyPlan({ year: 2026, month: 8, incomeInCents: 500000, categories: monthlyPlanCategories() });
     assert.ok(augustPlan.id);
     await addMonthlyExpense(augustPlan.id, {
@@ -1119,15 +955,9 @@ test("invalid pending candidates fail once and then clear the stuck action", asy
       status: "planned"
     });
 
-    const externalConversationId = `wa-invalid-${randomUUID()}`;
-    const first = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "paguei a assinatura"
-    });
-    const active = await findActiveAiPendingAction(first.sessionId);
+    const sessionId = `ai-action-invalid-${randomUUID()}`;
+    expectHandled(await handleOperationalChatMessage({ sessionId, message: "paguei a assinatura" }));
+    const active = await findActiveAiPendingAction(sessionId);
     assert.ok(active?.id);
 
     await updateAiPendingAction(active.id, {
@@ -1145,28 +975,16 @@ test("invalid pending candidates fail once and then clear the stuck action", asy
       }
     });
 
-    const invalid = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "1"
-    });
-    const followUp = await handleAssistantCommand({
-      userId,
-      channel: "whatsapp",
-      externalConversationId,
-      externalMessageId: `wamid.${randomUUID()}`,
-      message: "quanto gastei esse mes?"
-    });
-    const pendingAfter = await findActiveAiPendingAction(first.sessionId);
+    const invalid = expectHandled(await handleOperationalChatMessage({ sessionId, message: "1" }));
+    const followUp = expectHandled(await handleOperationalChatMessage({ sessionId, message: "quanto gastei esse mes?" }));
+    const pendingAfter = await findActiveAiPendingAction(sessionId);
 
-    assert.equal(invalid.assistantMessage?.structuredResponse?.responseType, "error");
-    assert.doesNotMatch(invalid.assistantMessage?.structuredResponse?.message ?? "", /mesma resposta repetida/i);
-    assert.equal(followUp.assistantMessage?.structuredResponse?.responseType, "summary");
-    assert.match(followUp.assistantMessage?.structuredResponse?.message ?? "", /R\$\s?100,00/);
+    assert.equal(invalid.response.responseType, "error");
+    assert.doesNotMatch(invalid.response.message, /mesma resposta repetida/i);
+    assert.equal(followUp.response.responseType, "summary");
+    assert.match(followUp.response.message, /R\$\s?100,00/);
     assert.equal(pendingAfter, null);
-  });
+  }));
 });
 
 test("duplicate recurring spotify candidates collapse to the canonical occurrence", async () => {
@@ -1213,7 +1031,7 @@ test("duplicate recurring spotify candidates collapse to the canonical occurrenc
   });
 });
 
-test("whatsapp expense resolution keeps user isolation for equal spotify expenses", async () => {
+test("expense resolution keeps user isolation for equal spotify expenses", async () => {
   const userA = `assistant-spotify-owner-a-${randomUUID()}`;
   const userB = `assistant-spotify-owner-b-${randomUUID()}`;
   let spotifyAId = "";
@@ -1251,17 +1069,12 @@ test("whatsapp expense resolution keeps user isolation for equal spotify expense
     spotifyBId = spotify.id ?? "";
   });
 
-  const first = await handleAssistantCommand({
-    userId: userA,
-    channel: "whatsapp",
-    externalConversationId: `wa-owner-a-${randomUUID()}`,
-    externalMessageId: `wamid.${randomUUID()}`,
-    message: "paguei a assinatura do spotify ja"
-  });
+  const sessionId = `ai-action-owner-a-${randomUUID()}`;
+  await asUser(userA, () => handleOperationalChatMessage({ sessionId, message: "paguei a assinatura do spotify ja" }));
 
   await asUser(userA, async () => {
     const expenses = await listAllMonthlyExpenses();
-    const action = await findActiveAiPendingAction(first.sessionId);
+    const action = await findActiveAiPendingAction(sessionId);
     assert.equal(expenses.find((expense) => expense.id === spotifyAId)?.status, "planned");
     assert.equal(action?.extractedFields.expenseId, spotifyAId);
   });

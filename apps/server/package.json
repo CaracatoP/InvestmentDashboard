@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "diagnose:planning-history": "tsx src/scripts/diagnose-planning-history.ts",
     "test": "npm run build && node --test --test-concurrency=1 dist/tests/*.test.js",

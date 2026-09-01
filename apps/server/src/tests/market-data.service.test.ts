@@ -35,6 +35,52 @@ function asUser<T>(userId: string, callback: () => Promise<T>) {
   return runWithAuthContext({ userId, role: "user", channel: "web" }, callback);
 }
 
+async function withMockedDate<T>(isoDate: string, callback: () => Promise<T>) {
+  const RealDate = Date;
+
+  class MockDate extends RealDate {
+    constructor(...args: any[]) {
+      switch (args.length) {
+        case 0:
+          super(isoDate);
+          break;
+        case 1:
+          super(args[0]);
+          break;
+        case 2:
+          super(args[0], args[1]);
+          break;
+        case 3:
+          super(args[0], args[1], args[2]);
+          break;
+        case 4:
+          super(args[0], args[1], args[2], args[3]);
+          break;
+        case 5:
+          super(args[0], args[1], args[2], args[3], args[4]);
+          break;
+        case 6:
+          super(args[0], args[1], args[2], args[3], args[4], args[5]);
+          break;
+        default:
+          super(args[0], args[1], args[2], args[3], args[4], args[5], args[6]);
+          break;
+      }
+    }
+
+    static now() {
+      return new RealDate(isoDate).getTime();
+    }
+  }
+
+  globalThis.Date = MockDate as DateConstructor;
+  try {
+    return await callback();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 test("MarketQuote with positive price is valid", () => {
   const quote: MarketQuoteRecord = {
     ticker: "BBSE3",
@@ -564,20 +610,23 @@ test("historical service fetches FII prices through BRAPI B3 history first", asy
   }) as typeof fetch;
 
   try {
-    const fiiAsset = await createAsset({
-      name: "FII Stock Endpoint",
-      ticker: "STKF11",
-      category: "FII",
-      currency: "BRL",
-      active: true
-    });
-    const history = await getAssetPriceHistory(fiiAsset, "1mo");
+    await withMockedDate("2026-08-20T15:00:00.000Z", async () => {
+      const fiiAsset = await createAsset({
+        name: "FII Stock Endpoint",
+        ticker: "STKF11",
+        category: "FII",
+        currency: "BRL",
+        active: true
+      });
+      const history = await getAssetPriceHistory(fiiAsset, "1mo");
 
-    assert.equal(requestedUrl.includes("/api/v2/stocks/historical?symbols=STKF11"), true);
-    assert.equal(history.status, "updated");
-    assert.equal(history.points.length, 1);
-    assert.equal(history.points[0].close, 9.35);
+      assert.equal(requestedUrl.includes("/api/v2/stocks/historical?symbols=STKF11"), true);
+      assert.equal(history.status, "updated");
+      assert.equal(history.points.length, 1);
+      assert.equal(history.points[0].close, 9.35);
+    });
   } finally {
+    clearAssetHistoryCacheForTests();
     env.marketDataProvider = previousProvider;
     env.marketDataApiKey = previousKey;
     globalThis.fetch = previousFetch;

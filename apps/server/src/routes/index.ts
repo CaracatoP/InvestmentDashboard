@@ -16,6 +16,7 @@ import { marketRoutes } from "./market.routes";
 import { cdiRoutes } from "./cdi.routes";
 import { healthRoutes } from "./health.routes";
 import { integrationsRoutes } from "./integrations.routes";
+import { n8nIntegrationRoutes } from "./n8n-integration.routes";
 import { monthlyPlanningRoutes } from "./monthly-planning.routes";
 import { aiRoutes } from "./ai.routes";
 import { requireAuth } from "../middlewares/auth.middleware";
@@ -25,6 +26,7 @@ export const apiRoutes = Router();
 
 apiRoutes.use("/health", healthRoutes);
 apiRoutes.use("/auth", authRoutes);
+apiRoutes.use("/integrations/n8n", n8nIntegrationRoutes);
 
 apiRoutes.use(requireAuth);
 apiRoutes.use(csrfProtection);

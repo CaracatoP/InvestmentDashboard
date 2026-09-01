@@ -4,7 +4,6 @@ import { env } from "../config/env";
 import { getCurrentUserId } from "../auth/auth-context";
 import { hashToken, safeTokenEquals } from "../auth/token.service";
 import { WhatsAppLinkModel } from "../models/whatsapp-link.model";
-import { WebhookEventModel } from "../models/webhook-event.model";
 import { appendAuditLog } from "./audit.service";
 import { clearUserWhatsAppLink, findActiveUserByPhoneNumber, markUserWhatsAppLinked } from "./auth.service";
 import { HttpError } from "../utils/http-error";
@@ -27,7 +26,6 @@ interface LocalWhatsAppLink {
 type LeanWhatsAppLink = Record<string, unknown> & { _id: unknown; userId: unknown };
 
 const localWhatsAppLinks: LocalWhatsAppLink[] = [];
-const localWebhookEvents = new Set<string>();
 
 function nowPlusMinutes(minutes: number) {
   return new Date(Date.now() + minutes * 60 * 1000);
@@ -83,47 +81,12 @@ async function findCurrentLink(userId = getCurrentUserId()) {
 export async function getWhatsAppIntegrationStatus(userId = getCurrentUserId()) {
   const link = await findCurrentLink(userId);
   return {
-    enabled: env.whatsappEnabled,
-    configured: Boolean(env.whatsappPhoneNumberId && env.whatsappVerifyToken && env.whatsappAppSecret && env.whatsappAccessToken),
+    enabled: true,
+    configured: Boolean(env.n8nIntegrationSecret.trim()),
     officialNumber: env.whatsappOfficialNumber,
     link,
     connected: link?.status === "verified"
   };
-}
-
-export async function beginWhatsAppWebhookEvent(input: { externalMessageId: string }) {
-  const externalMessageId = input.externalMessageId.trim();
-  if (!externalMessageId) throw new HttpError(400, "Mensagem externa do WhatsApp ausente.");
-  const idempotencyKey = `whatsapp:${externalMessageId}`;
-
-  if (isDatabaseConnected()) {
-    try {
-      await WebhookEventModel.create({ provider: "meta", externalMessageId, channel: "whatsapp", status: "received" });
-      return { duplicate: false };
-    } catch (error) {
-      if ((error as { code?: number }).code === 11000) return { duplicate: true };
-      throw error;
-    }
-  }
-
-  if (localWebhookEvents.has(idempotencyKey)) return { duplicate: true };
-  localWebhookEvents.add(idempotencyKey);
-  return { duplicate: false };
-}
-
-export async function completeWhatsAppWebhookEvent(input: { externalMessageId: string; status: "ignored" | "processed" | "failed"; userId?: string | null }) {
-  if (!input.externalMessageId.trim()) return;
-
-  if (isDatabaseConnected()) {
-    await WebhookEventModel.findOneAndUpdate(
-      { provider: "meta", externalMessageId: input.externalMessageId },
-      {
-        status: input.status,
-        userId: input.userId ?? null,
-        processedAt: new Date()
-      }
-    );
-  }
 }
 
 export async function createWhatsAppConnectionCode(userId = getCurrentUserId()) {
@@ -193,14 +156,9 @@ export async function cancelWhatsAppPendingLink(userId = getCurrentUserId()) {
   return { cancelled };
 }
 
-export async function verifyWhatsAppConnectionCode(input: { phoneNumber: string; code: string; externalMessageId?: string }) {
+export async function verifyWhatsAppConnectionCode(input: { phoneNumber: string; code: string }) {
   const phoneNormalized = normalizeWhatsAppPhone(input.phoneNumber);
   if (!phoneNormalized) throw new HttpError(400, "Telefone invalido.");
-
-  if (input.externalMessageId) {
-    const event = await beginWhatsAppWebhookEvent({ externalMessageId: input.externalMessageId });
-    if (event.duplicate) return { duplicated: true, linked: false };
-  }
 
   const codeHash = hashToken(input.code.trim().toUpperCase());
   const now = new Date();
@@ -220,8 +178,7 @@ export async function verifyWhatsAppConnectionCode(input: { phoneNumber: string;
       verifiedAt: now
     }, { new: true }).lean();
     await appendAuditLog({ userId: String(candidate.userId), actorType: "whatsapp", channel: "whatsapp", action: "WHATSAPP_LINK_VERIFIED", entityType: "WhatsAppLink", entityId: String(candidate._id) });
-    if (input.externalMessageId) await completeWhatsAppWebhookEvent({ externalMessageId: input.externalMessageId, status: "processed", userId: String(candidate.userId) });
-    return { duplicated: false, linked: true, link: sanitizeLink(updated) };
+    return { linked: true, link: sanitizeLink(updated) };
   }
 
   const link = localWhatsAppLinks.find((item) => item.status === "pending" && !item.revokedAt && item.expiresAt > now && safeTokenEquals(item.verificationCodeHash, codeHash));
@@ -232,8 +189,7 @@ export async function verifyWhatsAppConnectionCode(input: { phoneNumber: string;
   link.verifiedAt = now;
   link.updatedAt = now;
   await appendAuditLog({ userId: link.userId, actorType: "whatsapp", channel: "whatsapp", action: "WHATSAPP_LINK_VERIFIED", entityType: "WhatsAppLink", entityId: link.id });
-  if (input.externalMessageId) await completeWhatsAppWebhookEvent({ externalMessageId: input.externalMessageId, status: "processed", userId: link.userId });
-  return { duplicated: false, linked: true, link: sanitizeLink(link) };
+  return { linked: true, link: sanitizeLink(link) };
 }
 
 export async function findVerifiedWhatsAppUserByPhoneNumber(phoneNumber: string) {

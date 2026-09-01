@@ -97,13 +97,7 @@ export const env = {
   smtpSecure: parseBoolean(process.env.SMTP_SECURE, false),
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPassword: process.env.SMTP_PASSWORD ?? "",
-  whatsappEnabled: parseBoolean(process.env.WHATSAPP_ENABLED, false),
-  whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? "",
-  whatsappBusinessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID ?? "",
-  whatsappAccessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? "",
-  whatsappGraphApiVersion: process.env.WHATSAPP_GRAPH_API_VERSION ?? "v23.0",
-  whatsappVerifyToken: process.env.WHATSAPP_VERIFY_TOKEN ?? "",
-  whatsappAppSecret: process.env.WHATSAPP_APP_SECRET ?? "",
+  n8nIntegrationSecret: process.env.N8N_INTEGRATION_SECRET ?? "",
   whatsappOfficialNumber: process.env.WHATSAPP_OFFICIAL_NUMBER ?? "",
   whatsappLinkTtlMinutes: parseNumber(process.env.WHATSAPP_LINK_TTL_MINUTES, 10)
 };
