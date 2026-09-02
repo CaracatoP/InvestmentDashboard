@@ -39,6 +39,7 @@ interface N8nIncomeEntryCreateInput extends PeriodInput {
 function integrationUser(user: SafeUser, fallbackPhoneNumber: string) {
   return {
     id: user.id,
+    name: user.name,
     phoneNormalized: user.phoneNormalized || normalizeWhatsAppPhone(fallbackPhoneNumber),
     whatsappLinkedAt: user.whatsappLinkedAt ?? null,
     timezone: user.timezone ?? "America/Sao_Paulo"

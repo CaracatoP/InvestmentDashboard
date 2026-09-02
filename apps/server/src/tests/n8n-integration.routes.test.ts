@@ -174,12 +174,12 @@ test("n8n accepts both supported secret headers without requiring a user session
 
   try {
     await withTestServer(async (baseUrl) => {
-      const bearer = await n8nRequest<{ user: { id: string } }>(
+      const bearer = await n8nRequest<{ user: { id: string; name: string } }>(
         baseUrl,
         "GET",
         `/api/integrations/n8n/users/by-phone?phoneNumber=${encodeURIComponent(phoneNumber)}`
       );
-      const explicitHeader = await n8nRequest<{ user: { id: string } }>(
+      const explicitHeader = await n8nRequest<{ user: { id: string; name: string } }>(
         baseUrl,
         "GET",
         `/api/integrations/n8n/users/by-phone?phoneNumber=${encodeURIComponent(phoneNumber)}`,
@@ -194,8 +194,10 @@ test("n8n accepts both supported secret headers without requiring a user session
 
       assert.equal(bearer.response.status, 200);
       assert.equal(bearer.json.data?.user.id, user.id);
+      assert.equal(bearer.json.data?.user.name, user.name);
       assert.equal(explicitHeader.response.status, 200);
       assert.equal(explicitHeader.json.data?.user.id, user.id);
+      assert.equal(explicitHeader.json.data?.user.name, user.name);
       assert.equal(unknownPhone.response.status, 404);
       assert.notEqual(unknownPhone.json.error?.message, "Autenticacao obrigatoria.");
     });
@@ -233,13 +235,13 @@ test("n8n can verify a WhatsApp link and resolve only the linked active user by 
 
   try {
     await withTestServer(async (baseUrl) => {
-      const verified = await n8nRequest<{ linked: boolean; user: { id: string; phoneNormalized: string } | null }>(
+      const verified = await n8nRequest<{ linked: boolean; user: { id: string; name: string; phoneNormalized: string } | null }>(
         baseUrl,
         "POST",
         "/api/integrations/n8n/whatsapp/link/verify",
         { body: { phoneNumber, code: pending.code } }
       );
-      const resolved = await n8nRequest<{ user: { id: string; phoneNormalized: string } }>(
+      const resolved = await n8nRequest<{ user: { id: string; name: string; phoneNormalized: string } }>(
         baseUrl,
         "GET",
         `/api/integrations/n8n/users/by-phone?phoneNumber=${encodeURIComponent(phoneNumber)}`
@@ -249,8 +251,10 @@ test("n8n can verify a WhatsApp link and resolve only the linked active user by 
       assert.equal(verified.response.status, 200);
       assert.equal(verified.json.data?.linked, true);
       assert.equal(verified.json.data?.user?.id, user.id);
+      assert.equal(verified.json.data?.user?.name, user.name);
       assert.equal(resolved.response.status, 200);
       assert.equal(resolved.json.data?.user.id, user.id);
+      assert.equal(resolved.json.data?.user.name, user.name);
       assert.equal(unknown.response.status, 404);
     });
   } finally {
@@ -274,7 +278,7 @@ test("n8n summary uses the phone owner scope and does not leak another user's pl
 
   try {
     await withTestServer(async (baseUrl) => {
-      const summary = await n8nRequest<{ user: { id: string }; financialSummary: { income: { baseIncomeInCents: number } } }>(
+      const summary = await n8nRequest<{ user: { id: string; name: string }; financialSummary: { income: { baseIncomeInCents: number } } }>(
         baseUrl,
         "GET",
         `/api/integrations/n8n/monthly-planning/summary?phoneNumber=${encodeURIComponent(userA.phoneNumber)}&year=2026&month=8`
@@ -282,6 +286,7 @@ test("n8n summary uses the phone owner scope and does not leak another user's pl
 
       assert.equal(summary.response.status, 200);
       assert.equal(summary.json.data?.user.id, userA.user.id);
+      assert.equal(summary.json.data?.user.name, userA.user.name);
       assert.equal(summary.json.data?.financialSummary.income.baseIncomeInCents, 500000);
       assert.notEqual(summary.json.data?.financialSummary.income.baseIncomeInCents, 900000);
     });
