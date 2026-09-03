@@ -9,6 +9,7 @@ import {
   getOrCreateMonthlyPlan,
   type MonthlyPlanningOverview
 } from "./monthly-planning.service";
+import { getSettingsRecord } from "../repositories/investment.repository";
 import {
   findVerifiedWhatsAppUserByPhoneNumber,
   normalizeWhatsAppPhone,
@@ -36,10 +37,25 @@ interface N8nIncomeEntryCreateInput extends PeriodInput {
   incomeEntry: MonthlyIncomeEntryCreatePayload;
 }
 
-function integrationUser(user: SafeUser, fallbackPhoneNumber: string) {
+function resolveIntegrationDisplayName(userName: string, profileName: string) {
+  const normalizedUserName = userName.trim();
+  const normalizedProfileName = profileName.trim();
+  const defaultProfileName = normalizedProfileName.toLowerCase() === "investidor";
+
+  return normalizedProfileName && !defaultProfileName
+    ? normalizedProfileName
+    : normalizedUserName || normalizedProfileName || "Usuario";
+}
+
+async function integrationUser(user: SafeUser, fallbackPhoneNumber: string) {
+  const settings = await getSettingsRecord();
+  const profileName = settings.profileName?.trim() || "";
+
   return {
     id: user.id,
-    name: user.name,
+    name: resolveIntegrationDisplayName(user.name, profileName),
+    accountName: user.name,
+    profileName: profileName || null,
     phoneNormalized: user.phoneNormalized || normalizeWhatsAppPhone(fallbackPhoneNumber),
     whatsappLinkedAt: user.whatsappLinkedAt ?? null,
     timezone: user.timezone ?? "America/Sao_Paulo"
@@ -93,9 +109,9 @@ function planningSummary(overview: MonthlyPlanningOverview) {
   };
 }
 
-function n8nPlanningPayload(user: SafeUser, phoneNumber: string, overview: MonthlyPlanningOverview) {
+async function n8nPlanningPayload(user: SafeUser, phoneNumber: string, overview: MonthlyPlanningOverview) {
   return {
-    user: integrationUser(user, phoneNumber),
+    user: await integrationUser(user, phoneNumber),
     plan: overview.plan,
     financialSummary: planningSummary(overview),
     categories: overview.categories,
@@ -124,15 +140,27 @@ function ensurePlanId(plan: { id?: string }) {
 export async function verifyN8nWhatsAppLink(input: { phoneNumber: string; code: string }) {
   const result = await verifyWhatsAppConnectionCode(input);
   const user = result.link?.phoneNormalized ? await resolveLinkedUser(result.link.phoneNormalized) : null;
+  const integrationUserResult = user
+    ? await runWithAuthContext(
+      { userId: user.id, role: user.role, email: user.email, channel: "whatsapp" },
+      () => integrationUser(user, input.phoneNumber)
+    )
+    : null;
+
   return {
     ...result,
-    user: user ? integrationUser(user, input.phoneNumber) : null
+    user: integrationUserResult
   };
 }
 
 export async function resolveN8nUserByPhone(input: { phoneNumber: string }) {
   const user = await resolveLinkedUser(input.phoneNumber);
-  return { user: integrationUser(user, input.phoneNumber) };
+  return {
+    user: await runWithAuthContext(
+      { userId: user.id, role: user.role, email: user.email, channel: "whatsapp" },
+      () => integrationUser(user, input.phoneNumber)
+    )
+  };
 }
 
 export async function getN8nMonthlyPlanningSummary(input: PeriodInput & { comparisonRange: number }) {
@@ -146,7 +174,7 @@ export async function listN8nRecentMonthlyExpenses(input: PeriodInput & { compar
   return withLinkedUserContext(input.phoneNumber, async (user) => {
     const overview = await getMonthlyPlanningOverview(input.year, input.month, input.comparisonRange);
     return {
-      user: integrationUser(user, input.phoneNumber),
+      user: await integrationUser(user, input.phoneNumber),
       plan: overview.plan,
       categories: overview.categories,
       expenses: overview.expenses.slice(0, input.limit)
@@ -173,7 +201,7 @@ export async function createN8nMonthlyExpense(input: N8nExpenseCreateInput, idem
         async () => {
           const plan = await getOrCreateMonthlyPlan(input.year, input.month);
           const created = await addMonthlyExpense(ensurePlanId(plan), expense);
-          return { user: integrationUser(user, input.phoneNumber), plan, expense: created };
+          return { user: await integrationUser(user, input.phoneNumber), plan, expense: created };
         }
       )
   });
@@ -196,7 +224,7 @@ export async function createN8nMonthlyIncomeEntry(input: N8nIncomeEntryCreateInp
         async () => {
           const plan = await getOrCreateMonthlyPlan(input.year, input.month);
           const created = await addMonthlyIncomeEntry(ensurePlanId(plan), incomeEntry);
-          return { user: integrationUser(user, input.phoneNumber), plan, incomeEntry: created };
+          return { user: await integrationUser(user, input.phoneNumber), plan, incomeEntry: created };
         }
       )
   });

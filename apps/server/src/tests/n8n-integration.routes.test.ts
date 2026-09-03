@@ -6,6 +6,7 @@ import { app } from "../app";
 import { env } from "../config/env";
 import { IntegrationIdempotencyKeyModel } from "../models/integration-idempotency-key.model";
 import { runWithAuthContext } from "../auth/auth-context";
+import { updateSettingsRecord } from "../repositories/investment.repository";
 import { listAllMonthlyExpenses, listAllMonthlyIncomeEntries } from "../repositories/monthly-planning.repository";
 import { createBootstrapAdmin } from "../services/auth.service";
 import { saveMonthlyPlan } from "../services/monthly-planning.service";
@@ -200,6 +201,29 @@ test("n8n accepts both supported secret headers without requiring a user session
       assert.equal(explicitHeader.json.data?.user.name, user.name);
       assert.equal(unknownPhone.response.status, 404);
       assert.notEqual(unknownPhone.json.error?.message, "Autenticacao obrigatoria.");
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("n8n user payload prefers the financial profile name for chatbot display", async () => {
+  const restore = configureN8n();
+  const { user, phoneNumber } = await createLinkedUser("n8n-profile-name");
+  await asUser(user.id, () => updateSettingsRecord({ profileName: "Joao G." }));
+
+  try {
+    await withTestServer(async (baseUrl) => {
+      const resolved = await n8nRequest<{ user: { name: string; accountName: string; profileName: string | null } }>(
+        baseUrl,
+        "GET",
+        `/api/integrations/n8n/users/by-phone?phoneNumber=${encodeURIComponent(phoneNumber)}`
+      );
+
+      assert.equal(resolved.response.status, 200);
+      assert.equal(resolved.json.data?.user.name, "Joao G.");
+      assert.equal(resolved.json.data?.user.accountName, "Administrador");
+      assert.equal(resolved.json.data?.user.profileName, "Joao G.");
     });
   } finally {
     restore();
