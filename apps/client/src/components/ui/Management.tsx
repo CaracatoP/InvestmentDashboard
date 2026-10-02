@@ -1,5 +1,7 @@
 import { Edit2, Plus, Search, Trash2, X } from "lucide-react";
 import type { FormEvent, HTMLAttributes, MouseEvent, ReactNode } from "react";
+import { useRef } from "react";
+import { useDialogFocus } from "../../hooks/useDialogFocus";
 
 interface ToolbarProps {
   search: string;
@@ -26,18 +28,22 @@ export function ManagementToolbar({
   filterLabel = "Filtrar registros",
   createLabel = "Novo"
 }: ToolbarProps) {
+  const searchRef = useRef<HTMLInputElement>(null);
   return (
     <div className="mb-4 flex flex-col gap-3 md:flex-row md:flex-wrap">
-      <label className="relative flex-1">
+      <div className="relative flex-1">
         <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
         <input
+          ref={searchRef}
+          type="search"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm"
+          className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-12 text-base text-ink outline-none transition focus:border-accent sm:text-sm"
           placeholder={searchPlaceholder}
           aria-label={searchLabel}
         />
-      </label>
+        {search ? <button type="button" aria-label="Limpar pesquisa" title="Limpar pesquisa" className="absolute right-0 top-0 grid h-11 w-11 place-items-center rounded-lg text-muted hover:text-ink" onClick={() => { onSearchChange(""); searchRef.current?.focus(); }}><X size={16} /></button> : null}
+      </div>
       {filterOptions.length > 0 ? (
         <select
           value={filter}
@@ -189,11 +195,14 @@ interface ModalProps {
 }
 
 export function ManagementModal({ title, isOpen, onClose, onSubmit, children, submitLabel = "Salvar", submitDisabled = false, description }: ModalProps) {
+  const dialogRef = useDialogFocus<HTMLFormElement>(isOpen, onClose);
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
       <form
+        ref={dialogRef}
+        tabIndex={-1}
         onSubmit={onSubmit}
         className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col rounded-lg border border-line bg-panel shadow-soft"
         role="dialog"
@@ -267,11 +276,12 @@ export function ConfirmDelete({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const dialogRef = useDialogFocus<HTMLDivElement>(isOpen, onCancel);
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
-      <div className="w-full max-w-md rounded-lg border border-line bg-panel p-4 shadow-soft" role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={dialogRef} tabIndex={-1} className="w-full max-w-md rounded-lg border border-line bg-panel p-4 shadow-soft" role="dialog" aria-modal="true" aria-label={title}>
         <h2 className="break-words text-base font-semibold text-ink">{title}</h2>
         {description ? <div className="mt-2 text-sm text-muted">{description}</div> : null}
         {details && details.length > 0 ? (

@@ -1,0 +1,69 @@
+[
+  {
+    "viewport": 1440,
+    "name": "no horizontal page overflow",
+    "passed": true
+  },
+  {
+    "viewport": 1440,
+    "name": "search clear restores records and focus",
+    "passed": true
+  },
+  {
+    "viewport": 1440,
+    "name": "dialog traps focus, Escape closes, restores trigger",
+    "passed": true
+  },
+  {
+    "viewport": 1440,
+    "name": "refresh failure communicated and retry succeeds",
+    "passed": true
+  },
+  {
+    "viewport": 1440,
+    "name": "dashboard failure recovery and keyboard disclosure",
+    "passed": true
+  },
+  {
+    "viewport": 1440,
+    "name": "no uncaught page errors",
+    "passed": true,
+    "errors": []
+  },
+  {
+    "viewport": 390,
+    "name": "no horizontal page overflow",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "search clear restores records and focus",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "dialog traps focus, Escape closes, restores trigger",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "mobile menu traps focus and restores trigger",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "refresh failure communicated and retry succeeds",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "dashboard failure recovery and keyboard disclosure",
+    "passed": true
+  },
+  {
+    "viewport": 390,
+    "name": "no uncaught page errors",
+    "passed": true,
+    "errors": []
+  }
+]
