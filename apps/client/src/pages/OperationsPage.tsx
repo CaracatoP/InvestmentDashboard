@@ -163,7 +163,7 @@ export function OperationsPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Operacoes" title="Gerenciar operacoes" description="Compras, vendas, eventos e movimentacoes que alimentam os calculos." />
+      <PageHeader title="Gerenciar operacoes" description="Compras, vendas, eventos e movimentacoes que alimentam os calculos." />
       <ManagementToolbar
         search={search}
         onSearchChange={setSearch}

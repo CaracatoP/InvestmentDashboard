@@ -2,6 +2,7 @@ import { RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { LazyPieChart } from "../components/charts/LazyCharts";
+import { chartSequence } from "../components/charts/chart-theme";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
 import { EmptyState, MobileDataCard } from "../components/ui/Responsive";
@@ -12,7 +13,7 @@ import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { Asset } from "../types/investments";
 import { formatCurrency, formatPercentage, formatQuantity } from "../utils/formatters";
 
-const allocationColors = ["#22c55e", "#38bdf8", "#a78bfa", "#f59e0b", "#fb7185", "#14b8a6"];
+const allocationColors = chartSequence;
 const positionFilters = ["Com posicao", "Todos", "Sem posicao", "Com erro de cotacao"];
 const quoteStatusFilters = ["Todos", "Atualizada", "Fallback", "Indisponivel", "Erro"];
 
@@ -169,7 +170,6 @@ export function PortfolioPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Carteira"
         title="Controle completo dos ativos"
         description="Pesos, rentabilidade, dividend yield, preco medio e exposicao por categoria em uma tabela filtravel."
       />
@@ -332,7 +332,7 @@ export function PortfolioPage() {
               </div>
               <div className="scrollbar-thin portfolio-table-scroll hidden max-h-[680px] overflow-auto md:block">
               <table className="portfolio-table w-full min-w-[1480px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-panel text-xs uppercase tracking-[0.14em] text-muted shadow-[0_1px_0_0_#232728]">
+                <thead className="sticky top-0 z-10 bg-panel text-xs uppercase tracking-[0.14em] text-muted shadow-[0_1px_0_0_rgb(var(--color-line))]">
                   <tr>
                     <th className="sticky left-0 z-20 min-w-[190px] bg-panel px-4 py-4 font-medium">Ativo</th>
                     <th className="min-w-[130px] px-4 py-4 font-medium">Categoria</th>
@@ -352,7 +352,7 @@ export function PortfolioPage() {
                 <tbody>
                   {filteredAssets.map((asset) => (
                     <tr key={asset.ticker} className="text-muted transition hover:bg-elevated/30">
-                      <td className="sticky left-0 border-b border-line/70 bg-panel px-4 py-5 shadow-[1px_0_0_0_#232728]">
+                      <td className="sticky left-0 border-b border-line/70 bg-panel px-4 py-5 shadow-[1px_0_0_0_rgb(var(--color-line))]">
                         <Link to={`/ativos/${asset.ticker}`} className="font-medium text-ink hover:text-accent">
                           {asset.ticker}
                         </Link>

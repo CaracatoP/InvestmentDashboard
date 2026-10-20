@@ -317,7 +317,6 @@ export function SettingsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Configuracoes"
         title="Preferencias, alocacao e portabilidade"
         description="Tema, moeda, carteira ideal, backup local e exportacoes para analise externa."
       />
@@ -376,7 +375,7 @@ export function SettingsPage() {
               <button
                 type="submit"
                 disabled={isSavingProfile || !isProfileDirty}
-                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-50"
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:opacity-50"
               >
                 <Save size={16} />
                 {isSavingProfile ? "Salvando..." : "Salvar alteracoes"}
@@ -460,7 +459,7 @@ export function SettingsPage() {
               {passwordFeedback ? (
                 <p className={`rounded-lg px-3 py-2 text-sm ${passwordFeedback.type === "success" ? "bg-accent/10 text-accent" : "bg-rose/10 text-rose"}`}>{passwordFeedback.message}</p>
               ) : null}
-              <button type="submit" disabled={isChangingPassword} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-50">
+              <button type="submit" disabled={isChangingPassword} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:opacity-50">
                 <Save size={16} />
                 {isChangingPassword ? "Salvando..." : "Alterar senha"}
               </button>
@@ -625,7 +624,7 @@ export function SettingsPage() {
                           <div className="mt-3 flex flex-wrap gap-2">
                             {adminUser.status === "pending_approval" ? (
                               <>
-                                <button type="button" onClick={() => void handleUserAction("approve", adminUser.id)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-xs font-medium text-black"><Check size={14} />Aprovar</button>
+                                <button type="button" onClick={() => void handleUserAction("approve", adminUser.id)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-3 text-xs font-medium text-accent-ink"><Check size={14} />Aprovar</button>
                                 <button type="button" onClick={() => void handleUserAction("reject", adminUser.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose/40 px-3 text-xs text-rose"><XCircle size={14} />Rejeitar</button>
                               </>
                             ) : null}
@@ -655,7 +654,7 @@ export function SettingsPage() {
             <button
               type="button"
               onClick={() => void handleSave()}
-              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-50 md:w-auto"
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:opacity-50 md:w-auto"
               disabled={allocationTotal !== 100}
             >
               <Save size={16} />

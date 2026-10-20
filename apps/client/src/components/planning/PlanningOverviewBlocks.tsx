@@ -65,7 +65,7 @@ export function MissingIncomeState() {
             Configure sua renda mensal para calcular saldo, percentual utilizado e valor disponivel para investir.
           </p>
         </div>
-        <Link to="/planejamento-mensal/orcamento" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <Link to="/planejamento-mensal/orcamento" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <WalletCards size={16} />
           Configurar renda
         </Link>
@@ -184,7 +184,7 @@ export function PlanningQuickActions({ onAddExpense, onAddIncomeEntry }: Plannin
   return (
     <section className="mb-4 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <button type="button" onClick={onAddExpense} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <button type="button" onClick={onAddExpense} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <Plus size={16} />
           Adicionar gasto
         </button>

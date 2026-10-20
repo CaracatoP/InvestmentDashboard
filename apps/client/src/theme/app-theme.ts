@@ -5,32 +5,38 @@ const storageKey = "invest-hub-theme-preference";
 
 const palettes: Record<ResolvedTheme, Record<string, string>> = {
   dark: {
-    canvas: "7 8 9",
-    panel: "13 15 16",
-    elevated: "20 22 23",
-    line: "35 39 40",
-    muted: "139 148 145",
-    ink: "244 247 245",
-    accent: "34 197 94",
-    aqua: "56 189 248",
-    violet: "167 139 250",
-    amber: "245 158 11",
-    rose: "251 113 133"
+    canvas: "15 17 21",
+    panel: "22 25 31",
+    elevated: "30 34 42",
+    line: "44 49 59",
+    muted: "152 160 174",
+    ink: "230 234 240",
+    accent: "62 207 142",
+    "accent-ink": "6 26 17",
+    aqua: "106 168 255",
+    violet: "167 145 250",
+    amber: "236 178 82",
+    rose: "240 122 140",
+    teal: "84 204 196"
   },
   light: {
-    canvas: "247 250 248",
+    canvas: "243 245 248",
     panel: "255 255 255",
-    elevated: "239 246 242",
-    line: "208 219 214",
-    muted: "89 106 98",
-    ink: "9 22 15",
-    accent: "22 163 74",
-    aqua: "2 132 199",
-    violet: "124 58 237",
-    amber: "217 119 6",
-    rose: "225 29 72"
+    elevated: "236 239 244",
+    line: "217 222 230",
+    muted: "88 97 112",
+    ink: "21 25 33",
+    accent: "12 138 84",
+    "accent-ink": "255 255 255",
+    aqua: "37 99 220",
+    violet: "112 66 214",
+    amber: "176 102 8",
+    rose: "200 44 76",
+    teal: "13 128 122"
   }
 };
+
+const canvasHex: Record<ResolvedTheme, string> = { dark: "#0F1115", light: "#F3F5F8" };
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === "undefined" || !window.matchMedia) return "dark";
@@ -64,10 +70,11 @@ export function applyThemePreference(preference: ThemePreference, options: { per
   document.documentElement.dataset.theme = resolvedTheme;
   document.documentElement.dataset.themePreference = normalizedPreference;
   document.documentElement.style.colorScheme = resolvedTheme;
-  document.body.style.background =
-    resolvedTheme === "dark"
-      ? "radial-gradient(circle at top left, rgba(34, 197, 94, 0.08), transparent 28rem), linear-gradient(180deg, #070809 0%, #0a0b0c 100%)"
-      : "radial-gradient(circle at top left, rgba(34, 163, 74, 0.12), transparent 28rem), linear-gradient(180deg, #f7faf8 0%, #eef5f1 100%)";
+  document.documentElement.style.setProperty("--shadow-near", resolvedTheme === "dark" ? "0.18" : "0.05");
+  document.documentElement.style.setProperty("--shadow-far", resolvedTheme === "dark" ? "0.5" : "0.16");
+  document.body.style.background = canvasHex[resolvedTheme];
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", canvasHex[resolvedTheme]);
+  window.dispatchEvent(new CustomEvent("invest-hub:theme-change", { detail: resolvedTheme }));
 
   if (options.persist && typeof window !== "undefined") {
     window.localStorage.setItem(storageKey, normalizedPreference);

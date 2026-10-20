@@ -648,7 +648,7 @@ function ExpenseListItem({
               type="button"
               onClick={() => onComplete(expense)}
               disabled={isCompleting}
-              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
             >
               {isCompleting ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
               Marcar como pago
@@ -762,7 +762,7 @@ function IncomeEntryListItem({
               type="button"
               onClick={() => onReceive(entry)}
               disabled={isReceiving}
-              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 xl:min-w-[11rem]"
             >
               {isReceiving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
               Marcar recebida
@@ -1620,7 +1620,6 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
   return (
     <div>
       <PageHeader
-        eyebrow="Planejamento Mensal"
         title={pageHeader.title}
         description={pageHeader.description}
       />
@@ -1657,7 +1656,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
             Renda mensal disponivel
             <input value={incomeInput} onChange={(event) => setIncomeInput(event.target.value)} className={fieldClass} placeholder="Ex.: 3.500,00" inputMode="decimal" />
           </label>
-          <button type="button" onClick={() => void savePlanChanges()} disabled={isSaving || !overview} className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
+          <button type="button" onClick={() => void savePlanChanges()} disabled={isSaving || !overview} className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
             <WalletCards size={16} />
             Salvar renda
           </button>
@@ -1748,7 +1747,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               Carteira
               <p className="rounded-lg bg-elevated px-3 py-2 text-ink"><MoneyValue value={formatCents(overview.investmentSummary.totalWealthInCents)} /></p>
             </div>
-            <button type="submit" disabled={isSaving} className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
+            <button type="submit" disabled={isSaving} className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
               <TrendingUp size={16} />
               Salvar
             </button>
@@ -1778,7 +1777,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                   Estado: <span className={allocationTone(overview.summary.allocationStatus)}>{overview.summary.allocationStatusLabel}</span> · {budgetDistributionAmountText(overview.summary)}
                 </p>
               </div>
-              <button type="button" onClick={openCreateCategory} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
+              <button type="button" onClick={openCreateCategory} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90">
                 <Plus size={16} />
                 Novo setor
               </button>
@@ -1830,7 +1829,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                   </div>
 
                   <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    <button type="button" onClick={() => openCreateExpense(category.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90">
+                    <button type="button" onClick={() => openCreateExpense(category.id)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-accent-ink transition hover:bg-accent/90">
                       <Plus size={15} />
                       Adicionar gasto
                     </button>
@@ -1990,7 +1989,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                 <h2 className="text-base font-semibold text-ink">Objetivos</h2>
                 <p className="mt-1 text-sm text-muted">Metas financeiras vinculadas ao planejamento, carteira ou caixinhas.</p>
               </div>
-              <button type="button" onClick={openCreateGoal} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
+              <button type="button" onClick={openCreateGoal} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90">
                 <Plus size={16} />
                 Novo objetivo
               </button>
@@ -2043,7 +2042,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
                   <Plus size={16} />
                   Nova entrada
                 </button>
-                <button type="button" onClick={() => openCreateExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90">
+                <button type="button" onClick={() => openCreateExpense()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90">
                   <Plus size={16} />
                   Adicionar gasto
                 </button>
@@ -2741,7 +2740,7 @@ export function PlanningWorkspace({ view, categoryId }: PlanningWorkspaceProps) 
               </div>
               <div className="rounded-lg border border-line bg-elevated p-3">
                 <h3 className="text-sm font-semibold text-ink">Gastos por forma de pagamento</h3>
-                <LazyBarChart data={categoryPaymentChartData} xAxisKey="paymentMethod" name="Gastos" color="#38bdf8" height={180} />
+                <LazyBarChart data={categoryPaymentChartData} xAxisKey="paymentMethod" name="Gastos" color="aqua" height={180} />
               </div>
             </section>
             <section className="grid gap-3">

@@ -1,18 +1,26 @@
+import { useId } from "react";
 import {
+  Area,
   CartesianGrid,
+  ComposedChart,
   Line,
-  LineChart as RechartsLineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
 } from "recharts";
-import { formatCompactCurrency } from "../../utils/formatters";
+import { formatCompactCurrency, formatCurrency } from "../../utils/formatters";
+import { axisProps, ChartLegend, ChartTooltip, chartHeightStyle, resolveChartColor, useChartPalette } from "./chart-theme";
 
 interface Series {
   dataKey: string;
   name: string;
+  /** Theme token (accent, aqua, violet, amber, rose, teal, muted) or any CSS color. */
   color: string;
+  /** Draws the series as a reference line (dashed, no fill). */
+  dashed?: boolean;
+  /** Fills the area under the series with a soft gradient. */
+  area?: boolean;
 }
 
 export interface LineChartProps {
@@ -23,35 +31,59 @@ export interface LineChartProps {
 }
 
 export function LineChart({ data, series, xAxisKey = "month", height = 280 }: LineChartProps) {
-  const minHeight = Math.min(220, height);
+  const palette = useChartPalette();
+  const idPrefix = `line-${useId().replace(/:/g, "")}`;
+  const resolved = series.map((item, index) => ({ ...item, stroke: resolveChartColor(item.color, palette, index) }));
 
   return (
-    <div className="min-w-0" style={{ height: `clamp(${minHeight}px, 58vw, ${height}px)` }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <RechartsLineChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-          <CartesianGrid stroke="#232728" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey={xAxisKey} stroke="#8b9491" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={18} tick={{ fontSize: 12 }} tickMargin={8} />
-          <YAxis stroke="#8b9491" tickLine={false} axisLine={false} tickFormatter={formatCompactCurrency} width={58} tick={{ fontSize: 12 }} />
-          <Tooltip
-            contentStyle={{ background: "#141617", border: "1px solid #232728", borderRadius: 8 }}
-            labelStyle={{ color: "#f4f7f5" }}
-            wrapperStyle={{ maxWidth: "calc(100vw - 2rem)", outline: "none" }}
-            formatter={(value) => formatCompactCurrency(Number(value))}
-          />
-          {series.map((item) => (
-            <Line
-              key={item.dataKey}
-              type="monotone"
-              dataKey={item.dataKey}
-              name={item.name}
-              stroke={item.color}
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 5 }}
-            />
-          ))}
-        </RechartsLineChart>
-      </ResponsiveContainer>
+    <div className="min-w-0">
+      <ChartLegend items={resolved.map((item) => ({ name: item.name, color: item.stroke, dashed: item.dashed }))} />
+      <div className="min-w-0" style={chartHeightStyle(height)}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+            <defs>
+              {resolved.filter((item) => item.area).map((item) => (
+                <linearGradient key={item.dataKey} id={`${idPrefix}-${item.dataKey}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={item.stroke} stopOpacity={0.24} />
+                  <stop offset="100%" stopColor={item.stroke} stopOpacity={0} />
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid vertical={false} />
+            <XAxis dataKey={xAxisKey} interval="preserveStartEnd" {...axisProps} />
+            <YAxis tickFormatter={formatCompactCurrency} width={72} {...axisProps} />
+            <Tooltip cursor={{ strokeDasharray: "4 4" }} content={<ChartTooltip format={formatCurrency} />} wrapperStyle={{ outline: "none" }} />
+            {resolved.map((item) => {
+              const activeDot = { r: 4.5, strokeWidth: 2, stroke: palette.panel, fill: item.stroke };
+
+              return item.area ? (
+                <Area
+                  key={item.dataKey}
+                  type="monotone"
+                  dataKey={item.dataKey}
+                  name={item.name}
+                  stroke={item.stroke}
+                  strokeWidth={2.25}
+                  fill={`url(#${idPrefix}-${item.dataKey})`}
+                  activeDot={activeDot}
+                />
+              ) : (
+                <Line
+                  key={item.dataKey}
+                  type="monotone"
+                  dataKey={item.dataKey}
+                  name={item.name}
+                  stroke={item.stroke}
+                  strokeWidth={item.dashed ? 1.75 : 2.25}
+                  strokeDasharray={item.dashed ? "5 5" : undefined}
+                  dot={false}
+                  activeDot={activeDot}
+                />
+              );
+            })}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

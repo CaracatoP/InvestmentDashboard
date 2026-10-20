@@ -1,6 +1,7 @@
 import { Award, CalendarDays, Coins, TrendingUp } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { LazyBarChart, LazyPieChart } from "../components/charts/LazyCharts";
+import { chartSequence } from "../components/charts/chart-theme";
 import { DividendCard } from "../components/cards/DividendCard";
 import { ChartCard } from "../components/ui/ChartCard";
 import { ManagementField, fieldClass, areaClass, ManagementModal } from "../components/ui/Management";
@@ -13,7 +14,7 @@ import { useInvestmentStore } from "../stores/useInvestmentStore";
 import type { AllocationComparison, DividendListItem } from "../types/investments";
 import { formatCurrency, parseBrazilianMoneyToCents } from "../utils/formatters";
 
-const dividendColors = ["#22c55e", "#38bdf8", "#a78bfa", "#f59e0b", "#fb7185", "#14b8a6"];
+const dividendColors = chartSequence;
 
 type DividendForm = {
   assetTicker: string;
@@ -166,14 +167,13 @@ export function DividendsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Dividendos"
         title="Renda passiva calculada automaticamente"
         description="Recebimentos, media mensal, maior pagamento, calendario, tabela e graficos vindos da API."
         actions={
           <button
             type="button"
             onClick={openCreateModal}
-            className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90"
+            className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90"
           >
             + Registrar dividendo
           </button>
@@ -195,10 +195,10 @@ export function DividendsPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-2">
         <ChartCard title="Grafico mensal">
-          <LazyBarChart data={dividends.monthly} name="Dividendos" color="#22c55e" />
+          <LazyBarChart data={dividends.monthly} name="Dividendos" color="accent" />
         </ChartCard>
         <ChartCard title="Grafico anual">
-          <LazyBarChart data={dividends.annual} xAxisKey="year" name="Dividendos" color="#38bdf8" />
+          <LazyBarChart data={dividends.annual} xAxisKey="year" name="Dividendos" color="aqua" />
         </ChartCard>
       </section>
 

@@ -62,7 +62,7 @@ export function LoginPage() {
           <input className={`${inputClass} mt-1`} type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Digite sua senha" />
         </label>
         {error ? <p className="rounded-lg border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">{error}</p> : null}
-        <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">
+        <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-accent-ink transition hover:bg-accent/90 disabled:opacity-60">
           {isSubmitting ? "Entrando..." : "Entrar"}
         </button>
       </form>

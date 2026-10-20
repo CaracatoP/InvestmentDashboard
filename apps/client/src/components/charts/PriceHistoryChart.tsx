@@ -8,9 +8,10 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import type { AssetPriceHistoryPoint } from "../../types/investments";
 import { formatCompactCurrency, formatCurrency } from "../../utils/formatters";
+import { axisProps, chartHeightStyle, useChartPalette } from "./chart-theme";
 
 const priceChangeFormatter = new Intl.NumberFormat("pt-BR", {
   style: "percent",
@@ -207,92 +208,107 @@ function HistoryTooltip({ active, payload, label }: HistoryTooltipProps) {
   const point = payload[0]?.payload as AssetPriceHistoryPoint | undefined;
   if (!point) return null;
 
+  const rows: Array<[string, string]> = [
+    ["Variacao do dia", formatDailyChange(point)],
+    ["Abertura", typeof point.open === "number" ? formatCurrency(point.open) : "Indisponivel"],
+    ["Maxima", typeof point.high === "number" ? formatCurrency(point.high) : "Indisponivel"],
+    ["Minima", typeof point.low === "number" ? formatCurrency(point.low) : "Indisponivel"],
+    ["Volume", formatVolume(point.volume)]
+  ];
+
   return (
-    <div className="max-w-[calc(100vw_-_2rem)] rounded-lg border border-line bg-panel p-3 text-xs shadow-soft">
-      <p className="font-medium text-ink">{formatTooltipDate(String(label))}</p>
-      <div className="mt-2 grid gap-1 text-muted">
-        <span>Fechamento: {formatCurrency(point.close)}</span>
-        <span>Variacao do dia: {formatDailyChange(point)}</span>
-        <span>Abertura: {typeof point.open === "number" ? formatCurrency(point.open) : "Indisponivel"}</span>
-        <span>Maxima: {typeof point.high === "number" ? formatCurrency(point.high) : "Indisponivel"}</span>
-        <span>Minima: {typeof point.low === "number" ? formatCurrency(point.low) : "Indisponivel"}</span>
-        <span>Volume: {formatVolume(point.volume)}</span>
-      </div>
+    <div className="min-w-48 max-w-[calc(100vw_-_2rem)] rounded-lg border border-line bg-elevated px-3 py-2.5 text-xs shadow-soft">
+      <p className="text-muted">{formatTooltipDate(String(label))}</p>
+      <p className="mt-0.5 text-base font-semibold tabular-nums text-ink">{formatCurrency(point.close)}</p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t border-line pt-2">
+        {rows.map(([term, value]) => (
+          <div key={term} className="contents">
+            <dt className="text-muted">{term}</dt>
+            <dd className="text-right tabular-nums text-ink">{value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
 
 export function PriceHistoryChart({ data, range, height = 280, operations = [] }: PriceHistoryChartProps) {
-  const minHeight = Math.min(220, height);
+  const palette = useChartPalette();
+  const gradientId = `price-history-${useId().replace(/:/g, "")}`;
   const axisTicks = useMemo(() => selectAxisTicks(data, range), [data, range]);
   const priceDomain = useMemo(() => calculatePriceDomain(data), [data]);
   const priceTicks = useMemo(() => buildYAxisTicks(priceDomain), [priceDomain]);
   const operationMarkers = useMemo(() => buildOperationMarkers(data, operations), [data, operations]);
   const shouldAnimate = data.length <= 260;
+  const firstClose = data.find((point) => point.close > 0)?.close ?? 0;
+  const lastClose = [...data].reverse().find((point) => point.close > 0)?.close ?? 0;
+  const stroke = lastClose < firstClose ? palette.rose : palette.accent;
 
   return (
-    <div className="min-w-0" style={{ height: `clamp(${minHeight}px, 58vw, ${height}px)` }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <RechartsAreaChart data={data} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-          <defs>
-            <linearGradient id="asset-price-history" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.34} />
-              <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke="#232728" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="timestamp"
-            stroke="#8b9491"
-            tickLine={false}
-            axisLine={false}
-            interval="preserveStartEnd"
-            minTickGap={36}
-            tick={{ fontSize: 12 }}
-            tickMargin={8}
-            ticks={axisTicks}
-            tickFormatter={(value) => formatAxisDate(String(value), range)}
-          />
-          <YAxis
-            stroke="#8b9491"
-            tickLine={false}
-            axisLine={false}
-            domain={priceDomain}
-            ticks={priceTicks}
-            tickFormatter={formatPriceAxisValue}
-            width={72}
-            tick={{ fontSize: 12 }}
-          />
-          <Tooltip
-            content={({ active, label, payload }) => (
-              <HistoryTooltip active={active} label={label} payload={payload as unknown as HistoryTooltipProps["payload"]} />
-            )}
-            wrapperStyle={{ maxWidth: "calc(100vw - 2rem)", outline: "none" }}
-          />
-          <Area
-            type="monotone"
-            dataKey="close"
-            name="Fechamento"
-            stroke="#38bdf8"
-            fill="url(#asset-price-history)"
-            strokeWidth={2.5}
-            activeDot={{ r: 4, stroke: "#38bdf8", strokeWidth: 2 }}
-            isAnimationActive={shouldAnimate}
-          />
-          {operationMarkers.map((marker, index) => (
-            <ReferenceDot
-              key={`${marker.key}-${index}`}
-              x={marker.timestamp}
-              y={marker.close}
-              r={4}
-              fill={marker.type === "COMPRA" ? "#22c55e" : "#f97316"}
-              stroke="#0B0F0C"
-              strokeWidth={1.5}
-              ifOverflow="visible"
+    <div className="min-w-0">
+      <div className="min-w-0" style={chartHeightStyle(height)}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RechartsAreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={stroke} stopOpacity={0.26} />
+                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid vertical={false} />
+            <XAxis
+              dataKey="timestamp"
+              {...axisProps}
+              interval="preserveStartEnd"
+              minTickGap={36}
+              ticks={axisTicks}
+              tickFormatter={(value) => formatAxisDate(String(value), range)}
             />
-          ))}
-        </RechartsAreaChart>
-      </ResponsiveContainer>
-    </div>
+            <YAxis
+              {...axisProps}
+              domain={priceDomain}
+              ticks={priceTicks}
+              tickFormatter={formatPriceAxisValue}
+              width={76}
+            />
+            <Tooltip
+              cursor={{ strokeDasharray: "4 4" }}
+              content={({ active, label, payload }) => (
+                <HistoryTooltip active={active} label={label} payload={payload as unknown as HistoryTooltipProps["payload"]} />
+              )}
+              wrapperStyle={{ outline: "none" }}
+            />
+            <Area
+              type="monotone"
+              dataKey="close"
+              name="Fechamento"
+              stroke={stroke}
+              fill={`url(#${gradientId})`}
+              strokeWidth={2}
+              activeDot={{ r: 4.5, stroke: palette.panel, strokeWidth: 2, fill: stroke }}
+              isAnimationActive={shouldAnimate}
+            />
+            {operationMarkers.map((marker, index) => (
+              <ReferenceDot
+                key={`${marker.key}-${index}`}
+                x={marker.timestamp}
+                y={marker.close}
+                r={4.5}
+                fill={marker.type === "COMPRA" ? palette.aqua : palette.amber}
+                stroke={palette.panel}
+                strokeWidth={2}
+                ifOverflow="visible"
+              />
+            ))}
+          </RechartsAreaChart>
+        </ResponsiveContainer>
+      </div>
+      {operationMarkers.length > 0 ? (
+        <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+          <li className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: palette.aqua }} />Compra</li>
+          <li className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: palette.amber }} />Venda</li>
+        </ul>
+      ) : null}
+      </div>
   );
 }

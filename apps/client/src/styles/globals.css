@@ -8,10 +8,11 @@
   --breakpoint-lg: 1024px;
   color-scheme: dark;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  background: #070809;
-  color: #f4f7f5;
+  font-feature-settings: "cv11", "ss01";
+  background: #0f1115;
+  color: #e6eaf0;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -28,9 +29,50 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at top left, rgba(34, 197, 94, 0.08), transparent 28rem),
-    linear-gradient(180deg, #070809 0%, #0a0b0c 100%);
+  background: rgb(var(--color-canvas, 15 17 21));
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+input,
+textarea {
+  caret-color: rgb(var(--color-accent, 62 207 142));
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgb(var(--color-muted, 152 160 174) / 0.7);
+}
+
+/* Shared chart chrome: axes and grid follow the active theme tokens. */
+.recharts-cartesian-axis-tick-value {
+  fill: rgb(var(--color-muted, 152 160 174));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recharts-cartesian-grid-horizontal line {
+  stroke: rgb(var(--color-line, 44 49 59) / 0.7);
+}
+
+.recharts-tooltip-cursor {
+  stroke: rgb(var(--color-muted, 152 160 174) / 0.45);
+}
+
+.recharts-rectangle.recharts-tooltip-cursor {
+  fill: rgb(var(--color-ink, 230 234 240) / 0.05);
+  stroke: none;
+}
+
+.recharts-surface:focus,
+.recharts-wrapper:focus,
+.recharts-sector:focus {
+  outline: none;
 }
 
 button,
@@ -69,9 +111,9 @@ button:disabled {
   left: 0.75rem;
   z-index: 100;
   padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
-  background: rgb(var(--color-panel, 13 15 16));
-  color: rgb(var(--color-ink, 244 247 245));
+  border-radius: 0.625rem;
+  background: rgb(var(--color-panel, 22 25 31));
+  color: rgb(var(--color-ink, 230 234 240));
   transform: translateY(-200%);
 }
 
@@ -89,7 +131,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 }
 
 ::selection {
-  background: rgba(34, 197, 94, 0.35);
+  background: rgb(var(--color-accent, 62 207 142) / 0.3);
 }
 
 ::-webkit-scrollbar {
@@ -160,9 +202,28 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   min-width: 0;
 }
 
+/* The currency symbol steps back so the amount reads first. */
+.financial-value--card .financial-value__part:first-child {
+  font-size: 0.62em;
+  font-weight: 500;
+  color: rgb(var(--color-muted, 152 160 174));
+  letter-spacing: 0;
+}
+
 .financial-value--card,
 .responsive-value--card {
-  font-size: clamp(1.02rem, 3.4vw, 1.28rem);
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+/* Stat cards size their figure to the card, so narrow summary grids keep "R$" and the amount together. */
+.stat-card {
+  container-type: inline-size;
+}
+
+.stat-card .financial-value--card,
+.stat-card .responsive-value--card {
+  font-size: clamp(1.05rem, 10.5cqi, 1.5rem);
 }
 
 .financial-value--table,
@@ -173,6 +234,40 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .financial-value--inline,
 .responsive-value--inline {
   font-size: inherit;
+}
+
+/* Donut and legend stack in narrow cards and sit side by side when the card is wide. */
+.pie-layout {
+  container-type: inline-size;
+}
+
+.pie-layout__grid {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.pie-layout__legend {
+  display: grid;
+  column-gap: 1.25rem;
+}
+
+@container (min-width: 26rem) {
+  .pie-layout__legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 40rem) {
+  .pie-layout__grid {
+    grid-template-columns: minmax(0, 1fr) minmax(14rem, 17rem);
+    gap: 2rem;
+  }
+
+  .pie-layout__legend {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .portfolio-table-scroll {
@@ -308,7 +403,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   .financial-value--card,
   .responsive-value--card {
-    font-size: clamp(1rem, 6.2vw, 1.22rem);
+    font-size: 1.3rem;
   }
 }
 

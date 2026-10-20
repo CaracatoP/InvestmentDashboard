@@ -125,7 +125,7 @@ export function ContributionsPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Aportes" title="Gerenciar aportes" description="Cadastre, edite e acompanhe cada aporte registrado." />
+      <PageHeader title="Gerenciar aportes" description="Cadastre, edite e acompanhe cada aporte registrado." />
       <ManagementToolbar
         search={search}
         onSearchChange={setSearch}

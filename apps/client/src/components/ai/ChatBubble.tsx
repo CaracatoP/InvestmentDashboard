@@ -15,12 +15,12 @@ export function ChatBubble({ role, children, timestamp, grouped }: ChatBubblePro
       <div
         className={`max-w-[min(42rem,92%)] rounded-2xl px-3 py-2 text-sm leading-relaxed shadow-sm transition-all duration-200 ${
           isUser
-            ? "rounded-br-md bg-accent text-black"
+            ? "rounded-br-md bg-accent text-accent-ink"
             : "rounded-bl-md border border-line bg-elevated text-muted"
         }`}
       >
         {children}
-        <p className={`mt-1 text-[10px] ${isUser ? "text-black/55" : "text-muted/80"}`}>{timestamp}</p>
+        <p className={`mt-1 text-[10px] ${isUser ? "text-accent-ink/65" : "text-muted/80"}`}>{timestamp}</p>
       </div>
     </div>
   );

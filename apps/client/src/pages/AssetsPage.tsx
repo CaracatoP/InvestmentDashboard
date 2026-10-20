@@ -200,7 +200,7 @@ export function AssetsPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Ativos" title="Gerenciar ativos" description="Cadastre e mantenha os ativos usados nos calculos da carteira." />
+      <PageHeader title="Gerenciar ativos" description="Cadastre e mantenha os ativos usados nos calculos da carteira." />
       <ManagementToolbar
         search={search}
         onSearchChange={setSearch}
