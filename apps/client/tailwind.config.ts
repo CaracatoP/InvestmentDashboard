@@ -24,13 +24,22 @@ export default {
         muted: themeColor("muted"),
         ink: themeColor("ink"),
         accent: themeColor("accent"),
+        "accent-ink": themeColor("accent-ink"),
         aqua: themeColor("aqua"),
         violet: themeColor("violet"),
         amber: themeColor("amber"),
-        rose: themeColor("rose")
+        rose: themeColor("rose"),
+        teal: themeColor("teal")
+      },
+      fontFamily: {
+        sans: ["'Inter Variable'", "Inter", "ui-sans-serif", "system-ui", "-apple-system", "'Segoe UI'", "sans-serif"]
+      },
+      borderRadius: {
+        lg: "0.625rem",
+        xl: "0.875rem"
       },
       boxShadow: {
-        soft: "0 20px 50px rgba(0, 0, 0, 0.24)"
+        soft: "0 1px 2px rgb(0 0 0 / var(--shadow-near, 0.18)), 0 12px 32px -18px rgb(0 0 0 / var(--shadow-far, 0.5))"
       }
     }
   },

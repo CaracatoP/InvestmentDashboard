@@ -67,7 +67,7 @@ export function RegisterPage() {
           <input className={`${inputClass} mt-1`} type="password" required minLength={8} value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} placeholder="Digite novamente a senha" />
         </label>
         {feedback ? <p className={`rounded-lg px-3 py-2 text-sm ${feedback.type === "success" ? "bg-accent/10 text-accent" : "bg-rose/10 text-rose"}`}>{feedback.message}</p> : null}
-        <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-black transition hover:bg-accent/90 disabled:opacity-60">
+        <button type="submit" disabled={isSubmitting} className="h-11 w-full rounded-lg bg-accent px-4 text-sm font-semibold text-accent-ink transition hover:bg-accent/90 disabled:opacity-60">
           {isSubmitting ? "Enviando..." : "Criar conta"}
         </button>
       </form>

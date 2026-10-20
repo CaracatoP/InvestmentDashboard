@@ -217,7 +217,6 @@ export function HistoryPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Historico"
         title="Timeline completa da vida financeira"
         description="Compras, vendas, aportes, dividendos, gastos, recorrencias e eventos futuros em uma narrativa cronologica."
       />
@@ -274,14 +273,14 @@ export function HistoryPage() {
 
       {isLoading ? <p className="rounded-lg border border-line bg-panel p-4 text-sm text-muted">Carregando historico...</p> : null}
       {!isLoading && groupedHistory.length === 0 ? (
-        <Timeline items={[]} emptyMessage="Nenhum evento encontrado para os filtros atuais." />
+        <Timeline items={[]} emptyMessage="Nenhum evento encontrado para os filtros atuais." framed />
       ) : null}
       {!isLoading && groupedHistory.length > 0 ? (
         <div className="space-y-5">
           {groupedHistory.map((group) => (
             <section key={group.date} className="min-w-0">
               <h2 className="mb-2 text-sm font-semibold text-ink">{group.title}</h2>
-              <Timeline items={group.events} showStatus colorByFlow />
+              <Timeline items={group.events} showStatus colorByFlow framed />
             </section>
           ))}
         </div>

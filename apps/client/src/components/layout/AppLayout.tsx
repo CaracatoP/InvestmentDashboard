@@ -1,4 +1,4 @@
-import { Command, LogOut, Menu, RefreshCw, X } from "lucide-react";
+import { ChartNoAxesCombined, LogOut, Menu, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -63,7 +63,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   }
 
   const navigation = (onNavigate?: () => void) => (
-    <nav aria-label="Navegação principal" className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 py-4">
+    <nav aria-label="Navegação principal" className="scrollbar-thin flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
       {navigationItems.map((item) => {
         const Icon = item.icon;
 
@@ -75,8 +75,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             onClick={onNavigate}
             className={({ isActive }) =>
               [
-                "group flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition",
-                isActive ? "bg-accent/10 font-semibold text-ink" : "text-muted hover:bg-elevated/70 hover:text-ink"
+                "group flex min-h-11 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors duration-150",
+                isActive ? "bg-elevated font-semibold text-ink [&>svg]:text-accent" : "text-muted hover:bg-elevated/60 hover:text-ink"
               ].join(" ")
             }
             title={item.label}
@@ -92,10 +92,10 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div className="min-h-screen bg-canvas text-ink">
       <a href="#main-content" className="skip-link">Pular para o conteúdo</a>
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-line bg-panel/95 backdrop-blur lg:flex">
-        <div className="flex h-16 items-center gap-3 border-b border-line px-5">
-          <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent/15 text-accent">
-            <Command size={19} />
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-line bg-panel lg:flex">
+        <div className="flex h-16 items-center gap-3 px-5">
+          <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent text-accent-ink">
+            <ChartNoAxesCombined size={18} strokeWidth={2.25} />
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold">Invest Hub</p>
@@ -107,12 +107,12 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       {isDrawerOpen ? (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <button type="button" tabIndex={-1} className="absolute inset-0 h-full w-full bg-black/60 backdrop-blur-sm" aria-label="Fechar menu" onClick={() => setIsDrawerOpen(false)} />
+          <button type="button" tabIndex={-1} className="absolute inset-0 h-full w-full bg-black/55" aria-label="Fechar menu" onClick={() => setIsDrawerOpen(false)} />
           <aside ref={drawerRef} id="mobile-navigation" tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu de navegação" className="relative z-50 flex h-full w-[80vw] max-w-80 flex-col border-r border-line bg-panel shadow-soft pt-[max(env(safe-area-inset-top),1rem)] pb-[max(env(safe-area-inset-bottom),1rem)]">
             <div className="flex items-center justify-between gap-3 border-b border-line px-4 pb-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">
-                  <Command size={19} />
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-accent text-accent-ink">
+                  <ChartNoAxesCombined size={18} strokeWidth={2.25} />
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">Invest Hub</p>
@@ -134,12 +134,12 @@ export function AppLayout({ children }: AppLayoutProps) {
       ) : null}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between gap-3 border-b border-line bg-canvas/90 px-3 py-2 backdrop-blur sm:px-4 md:px-6 lg:px-8">
+        <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between gap-3 border-b border-line/70 bg-canvas/85 px-3 py-2 backdrop-blur-md sm:px-4 md:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
               onClick={() => setIsDrawerOpen(true)}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-accent/50 hover:text-ink lg:hidden"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition-colors hover:bg-elevated hover:text-ink lg:hidden"
               aria-label="Abrir menu"
               aria-expanded={isDrawerOpen}
               aria-controls={isDrawerOpen ? "mobile-navigation" : undefined}
@@ -155,7 +155,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             <button
               type="button"
               onClick={() => void handleRefresh()}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-accent/50 hover:text-ink"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition-colors hover:bg-elevated hover:text-ink disabled:opacity-70"
               disabled={isRefreshing}
               title="Atualizar cotações"
               aria-label={isRefreshing ? "Atualizando cotações" : "Atualizar cotações"}
@@ -166,7 +166,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition hover:border-rose/50 hover:text-rose"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-panel text-muted transition-colors hover:bg-rose/10 hover:text-rose"
               title="Sair"
               aria-label="Sair"
             >
@@ -175,7 +175,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         </header>
         <div role="status" aria-live="polite" aria-atomic="true">
-          {refreshMessage ? <p className={`mx-3 mt-4 rounded-lg border px-4 py-3 text-sm sm:mx-4 md:mx-6 lg:mx-8 ${refreshFailed ? "border-rose/40 bg-rose/10 text-rose" : "border-line bg-panel text-ink"}`}>{refreshMessage}</p> : null}
+          {refreshMessage ? <p className={`mx-auto mt-4 w-[calc(100%-1.5rem)] max-w-7xl rounded-lg border px-4 py-3 text-sm sm:w-[calc(100%-2rem)] md:w-[calc(100%-3rem)] lg:w-[calc(100%-4rem)] ${refreshFailed ? "border-rose/40 bg-rose/10 text-rose" : "border-line bg-panel text-ink"}`}>{refreshMessage}</p> : null}
         </div>
 
         {error ? (
@@ -184,7 +184,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         ) : null}
 
-        <main id="main-content" tabIndex={-1} className={["mx-auto w-full max-w-7xl px-3 pb-8 pt-5 sm:px-4 md:px-6 lg:px-8 lg:pb-10", isPortfolioPage ? "portfolio-main" : ""].join(" ")}>
+        <main id="main-content" tabIndex={-1} className={["mx-auto w-full max-w-7xl px-3 pb-10 pt-6 outline-none sm:px-4 md:px-6 md:pt-8 lg:px-8 lg:pb-14", isPortfolioPage ? "portfolio-main" : ""].join(" ")}>
           {children}
         </main>
       </div>

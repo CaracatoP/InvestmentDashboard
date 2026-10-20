@@ -139,7 +139,7 @@ export function AssetPage() {
 
   return (
     <div>
-      <PageHeader eyebrow={asset.category} title={`${asset.ticker} - ${asset.name}`} description="Resumo operacional, dividendos, preco e objetivo do ativo." />
+      <PageHeader title={`${asset.ticker} - ${asset.name}`} description={`${asset.category} · Resumo operacional, dividendos, preco e objetivo do ativo.`} />
       <p className="mb-4 text-xs text-muted">
         Ultima cotacao: {asset.lastPriceAt ? new Date(asset.lastPriceAt).toLocaleString("pt-BR") : "indisponivel"}
         {asset.priceSource ? ` via ${asset.priceSource}` : ""}

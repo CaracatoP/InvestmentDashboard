@@ -74,7 +74,7 @@ export function CompactConfirmation({ pendingAction, onSend, isLoading }: Compac
             type="button"
             onClick={() => onSend("confirmo")}
             disabled={isLoading}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isLoading ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
             {isLoading ? "Executando" : "Confirmar"}

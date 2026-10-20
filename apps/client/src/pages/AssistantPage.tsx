@@ -152,7 +152,6 @@ export function AssistantPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Assistente IA"
         title="Assistente financeiro"
         description="Converse com a IA sobre planejamento, carteira, dividendos, metas, caixinhas e historico usando dados reais do backend."
       />
@@ -167,7 +166,7 @@ export function AssistantPage() {
               type="button"
               onClick={() => void createSession()}
               disabled={isLoading}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-black transition hover:bg-accent/90 disabled:opacity-60"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-accent px-3 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:opacity-60"
             >
               <MessageSquarePlus size={16} />
               Nova
@@ -271,7 +270,7 @@ export function AssistantPage() {
             <button
               type="submit"
               disabled={isLoading || !input.trim()}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Send size={16} />
               Enviar

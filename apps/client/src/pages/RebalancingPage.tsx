@@ -1,5 +1,6 @@
 import { ArrowDownCircle, ArrowUpCircle, GitCompareArrows, Target } from "lucide-react";
 import { LazyBarChart, LazyPieChart } from "../components/charts/LazyCharts";
+import { chartSequence } from "../components/charts/chart-theme";
 import { ChartCard } from "../components/ui/ChartCard";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ProgressBar } from "../components/ui/ProgressBar";
@@ -8,7 +9,7 @@ import { MoneyValue } from "../components/ui/ValueDisplay";
 import { useInvestmentStore } from "../stores/useInvestmentStore";
 import { formatCurrency, formatPercentage } from "../utils/formatters";
 
-const allocationColors = ["#22c55e", "#38bdf8", "#a78bfa", "#f59e0b", "#fb7185", "#14b8a6"];
+const allocationColors = chartSequence;
 
 export function RebalancingPage() {
   const portfolio = useInvestmentStore((state) => state.portfolio);
@@ -64,7 +65,6 @@ export function RebalancingPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Rebalanceamento"
         title="Carteira ideal x carteira atual"
         description="Peso atual, peso ideal, diferenca, valor faltante e proximo aporte calculados automaticamente."
       />
@@ -82,10 +82,10 @@ export function RebalancingPage() {
         </ChartCard>
         <ChartCard title="Distribuicao ideal e diferenca">
           <LazyPieChart data={idealData} height={170} />
-          <LazyBarChart data={differenceData} name="Diferenca" color="#38bdf8" height={170} />
+          <LazyBarChart data={differenceData} name="Diferenca" color="aqua" height={170} />
         </ChartCard>
         <ChartCard title="Quanto falta por categoria">
-          <LazyBarChart data={missingData} name="Quanto falta" color="#38bdf8" />
+          <LazyBarChart data={missingData} name="Quanto falta" color="aqua" />
         </ChartCard>
       </section>
 

@@ -268,7 +268,7 @@ export function CashBoxesPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Caixinhas" title="Reserva Nubank" description="Controle saldos, CDI, movimentacoes e evolucao da sua reserva." />
+      <PageHeader title="Reserva Nubank" description="Controle saldos, CDI, movimentacoes e evolucao da sua reserva." />
 
       <section className="stat-card-grid">
         <StatCard label="Saldo atual" value={formatCurrency(overview.totals.currentBalance)} detail="Total nas caixinhas" icon={<Wallet size={18} />} />
@@ -333,7 +333,7 @@ export function CashBoxesPage() {
 
       <section className="mt-6 grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <ChartCard title="Grafico de evolucao">
-          <LazyAreaChart data={overview.evolution} dataKey="value" name="Saldo" color="#38bdf8" />
+          <LazyAreaChart data={overview.evolution} dataKey="value" name="Saldo" color="aqua" />
         </ChartCard>
         <ChartCard title="Historico">
           <div className="space-y-3">

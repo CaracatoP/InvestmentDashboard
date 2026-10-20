@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthProvider";
 import { router } from "./routes/router";
+import "@fontsource-variable/inter";
 import "./styles/globals.css";
 import { applyThemePreference, getStoredThemePreference } from "./theme/app-theme";
 

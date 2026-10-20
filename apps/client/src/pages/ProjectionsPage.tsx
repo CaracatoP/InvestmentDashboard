@@ -162,7 +162,6 @@ export function ProjectionsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Projecoes"
         title="Simulador de independencia financeira"
         description="Projete patrimonio, renda futura, inflacao e reinvestimento de dividendos ate a idade objetivo."
       />
@@ -195,7 +194,7 @@ export function ProjectionsPage() {
                 className="h-4 w-4 accent-accent"
               />
             </label>
-            <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black">
+            <div className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink">
               <Calculator size={16} />
               Calculando em tempo real
             </div>
@@ -218,10 +217,10 @@ export function ProjectionsPage() {
               data={projection?.series ?? []}
               xAxisKey="age"
               series={[
-                { dataKey: "wealth", name: "Nominal", color: "#22c55e" },
-                { dataKey: "realWealth", name: "Real", color: "#38bdf8" },
-                { dataKey: "projectedDividends", name: "Dividendos", color: "#f59e0b" },
-                { dataKey: "accumulatedDividends", name: "Dividendos acumulados", color: "#a78bfa" }
+                { dataKey: "wealth", name: "Nominal", color: "accent", area: true },
+                { dataKey: "realWealth", name: "Real", color: "aqua" },
+                { dataKey: "projectedDividends", name: "Dividendos", color: "amber" },
+                { dataKey: "accumulatedDividends", name: "Dividendos acumulados", color: "violet" }
               ]}
             />
           </ChartCard>

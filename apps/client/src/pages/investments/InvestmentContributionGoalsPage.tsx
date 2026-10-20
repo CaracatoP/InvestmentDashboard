@@ -27,7 +27,7 @@ export default function InvestmentContributionGoalsPage() {
   return (
     <div>
       <InvestmentsSubnav />
-      <PageHeader eyebrow="Metas de aporte" title="Progresso da meta mensal" description="Meta, aportado, restante e percentual atingido vindos do Planejamento Mensal e da aba Aportes." />
+      <PageHeader title="Progresso da meta mensal" description="Meta, aportado, restante e percentual atingido vindos do Planejamento Mensal e da aba Aportes." />
       <InvestmentPlanningBridge />
       {overview ? (
         <>

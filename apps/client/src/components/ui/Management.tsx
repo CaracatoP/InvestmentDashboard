@@ -38,7 +38,7 @@ export function ManagementToolbar({
           type="search"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
-          className="h-11 w-full rounded-lg border border-line bg-elevated pl-9 pr-12 text-base text-ink outline-none transition focus:border-accent sm:text-sm"
+          className="h-11 w-full rounded-lg border border-line bg-panel pl-9 pr-12 text-base text-ink outline-none transition-colors hover:border-muted/40 focus:border-accent sm:text-sm"
           placeholder={searchPlaceholder}
           aria-label={searchLabel}
         />
@@ -48,7 +48,7 @@ export function ManagementToolbar({
         <select
           value={filter}
           onChange={(event) => onFilterChange?.(event.target.value)}
-          className="h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition focus:border-accent sm:text-sm md:w-auto"
+          className="h-11 w-full rounded-lg border border-line bg-panel px-3 text-base text-ink outline-none transition-colors hover:border-muted/40 focus:border-accent sm:text-sm md:w-auto"
           aria-label={filterLabel}
         >
           {filterOptions.map((option) => (
@@ -59,7 +59,7 @@ export function ManagementToolbar({
       <button
         type="button"
         onClick={onCreate}
-        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 sm:w-auto"
+        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 sm:w-auto"
       >
         <Plus size={16} />
         {createLabel}
@@ -80,14 +80,14 @@ interface TableProps<T> {
 export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMobileCard, getRowProps }: TableProps<T>) {
   if (rows.length === 0) {
     return (
-      <section className="min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
-        <div className="rounded-lg border border-line bg-elevated p-6 text-sm text-muted">Nenhum registro encontrado.</div>
+      <section className="min-w-0 rounded-xl border border-dashed border-line bg-panel/60 px-6 py-10 text-center">
+        <p className="text-sm text-muted">Nenhum registro encontrado.</p>
       </section>
     );
   }
 
   return (
-    <section className="min-w-0 rounded-lg border border-line bg-panel p-3 shadow-soft sm:p-4">
+    <section className="min-w-0 rounded-xl border border-line bg-panel p-3 shadow-soft sm:px-5 sm:py-2">
       {renderMobileCard ? (
         <div className="space-y-3 md:hidden">
           {rows.map((row) => (
@@ -97,10 +97,10 @@ export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMob
       ) : null}
       <div className={`scrollbar-thin overflow-x-auto ${renderMobileCard ? "hidden md:block" : ""}`}>
         <table className="w-full min-w-[860px] border-collapse text-left text-sm">
-          <thead className="text-xs uppercase tracking-[0.14em] text-muted">
+          <thead className="text-xs font-medium text-muted">
             <tr className="border-b border-line">
               {columns.map((column) => (
-                <th key={column} className="py-3 font-medium">
+                <th key={column} className="py-3 pr-3 font-medium">
                   {column}
                 </th>
               ))}
@@ -112,7 +112,7 @@ export function ManagementTable<T>({ columns, rows, getKey, renderRow, renderMob
               const rowProps = getRowProps?.(row);
 
               return (
-                <tr {...rowProps} key={getKey(row)} className={["border-b border-line/70 text-muted", rowProps?.className].filter(Boolean).join(" ")}>
+                <tr {...rowProps} key={getKey(row)} className={["border-b border-line/60 text-muted transition-colors last:border-b-0 hover:bg-elevated/40", rowProps?.className].filter(Boolean).join(" ")}>
                   {renderRow(row)}
                 </tr>
               );
@@ -199,31 +199,31 @@ export function ManagementModal({ title, isOpen, onClose, onSubmit, children, su
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/55 px-3 py-4 sm:px-4" role="presentation">
       <form
         ref={dialogRef}
         tabIndex={-1}
         onSubmit={onSubmit}
-        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col rounded-lg border border-line bg-panel shadow-soft"
+        className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col rounded-xl border border-line bg-panel shadow-[0_24px_64px_-24px_rgb(0_0_0/0.6)]"
         role="dialog"
         aria-modal="true"
         aria-label={title}
       >
-        <div className="flex items-center justify-between gap-3 px-4 pt-4">
+        <div className="flex items-center justify-between gap-3 px-5 pt-5">
           <div className="min-w-0">
-            <h2 className="min-w-0 break-words text-base font-semibold text-ink">{title}</h2>
+            <h2 className="min-w-0 break-words text-lg font-semibold text-ink">{title}</h2>
             {description ? <p className="mt-1 text-sm text-muted">{description}</p> : null}
           </div>
-          <button type="button" onClick={onClose} className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-line bg-elevated text-muted hover:text-ink" aria-label="Fechar modal">
+          <button type="button" onClick={onClose} className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-ink" aria-label="Fechar modal">
             <X size={16} />
           </button>
         </div>
-        <div className="grid gap-3 overflow-y-auto px-4 py-4">{children}</div>
-        <div className="flex flex-col-reverse gap-2 border-t border-line px-4 py-4 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className="h-11 rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:text-ink">
+        <div className="grid gap-4 overflow-y-auto px-5 py-5">{children}</div>
+        <div className="flex flex-col-reverse gap-2 border-t border-line px-5 py-4 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className="h-11 rounded-lg border border-line px-4 text-sm font-medium text-ink transition-colors hover:bg-elevated">
             Cancelar
           </button>
-          <button type="submit" disabled={submitDisabled} className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
+          <button type="submit" disabled={submitDisabled} className="h-11 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
             {submitLabel}
           </button>
         </div>
@@ -246,7 +246,7 @@ export function ManagementField({
   optional?: boolean;
 }) {
   return (
-    <label className="grid gap-1 text-sm text-muted">
+    <label className="grid gap-1.5 text-sm text-muted">
       <span className="font-medium text-ink">
         {label}
         {required ? " *" : optional ? " (opcional)" : ""}
@@ -280,9 +280,9 @@ export function ConfirmDelete({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-4" role="presentation">
-      <div ref={dialogRef} tabIndex={-1} className="w-full max-w-md rounded-lg border border-line bg-panel p-4 shadow-soft" role="dialog" aria-modal="true" aria-label={title}>
-        <h2 className="break-words text-base font-semibold text-ink">{title}</h2>
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/55 px-3 py-4 sm:px-4" role="presentation">
+      <div ref={dialogRef} tabIndex={-1} className="w-full max-w-md rounded-xl border border-line bg-panel p-5 shadow-[0_24px_64px_-24px_rgb(0_0_0/0.6)]" role="dialog" aria-modal="true" aria-label={title}>
+        <h2 className="break-words text-lg font-semibold text-ink">{title}</h2>
         {description ? <div className="mt-2 text-sm text-muted">{description}</div> : null}
         {details && details.length > 0 ? (
           <div className="mt-4 space-y-2 rounded-lg border border-line bg-elevated px-3 py-3 text-sm text-muted">
@@ -292,10 +292,10 @@ export function ConfirmDelete({
           </div>
         ) : null}
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-line bg-elevated px-4 text-sm text-muted transition hover:text-ink">
+          <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-line px-4 text-sm font-medium text-ink transition-colors hover:bg-elevated">
             {cancelLabel}
           </button>
-          <button type="button" onClick={onConfirm} className="h-11 rounded-lg bg-rose px-4 text-sm font-medium text-black transition hover:bg-rose/90">
+          <button type="button" onClick={onConfirm} className="h-11 rounded-lg bg-rose px-4 text-sm font-medium text-accent-ink transition hover:bg-rose/90">
             {confirmLabel}
           </button>
         </div>
@@ -304,5 +304,5 @@ export function ConfirmDelete({
   );
 }
 
-export const fieldClass = "min-h-11 w-full rounded-lg border border-line bg-elevated px-3 text-base text-ink outline-none transition placeholder:text-muted/60 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";
-export const areaClass = "min-h-24 w-full rounded-lg border border-line bg-elevated px-3 py-2 text-base text-ink outline-none transition placeholder:text-muted/60 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";
+export const fieldClass = "min-h-11 w-full rounded-lg border border-line bg-canvas/60 px-3 text-base text-ink outline-none transition-colors placeholder:text-muted/60 hover:border-muted/40 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";
+export const areaClass = "min-h-24 w-full rounded-lg border border-line bg-canvas/60 px-3 py-2 text-base text-ink outline-none transition-colors placeholder:text-muted/60 hover:border-muted/40 focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";

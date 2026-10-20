@@ -183,7 +183,7 @@ export function AiAnalysisPanel({
             type="button"
             onClick={() => void handleGenerate(false)}
             disabled={isLoading}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-black transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Bot size={16} />
             {analysis ? "Gerar" : "Gerar analise"}

@@ -174,7 +174,7 @@ export function GoalsPage() {
 
   return (
     <div>
-      <PageHeader eyebrow="Metas" title="Gerenciar metas" description="Cadastre objetivos de patrimonio, dividendos, quantidade de cotas e valor investido." />
+      <PageHeader title="Gerenciar metas" description="Cadastre objetivos de patrimonio, dividendos, quantidade de cotas e valor investido." />
       <ManagementToolbar
         search={search}
         onSearchChange={setSearch}
